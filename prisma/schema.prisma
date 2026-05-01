@@ -1,0 +1,177 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String       @id @default(cuid())
+  email        String       @unique
+  passwordHash String
+  name         String?
+  role         String       @default("USER")
+  assets       Asset[]
+  submissions  Submission[]
+  orders       Order[]
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+}
+
+model Submission {
+  id              String            @id @default(cuid())
+  userId          String
+  user            User              @relation(fields: [userId], references: [id])
+  mode            String            @default("LEGACY_UPLOAD")
+  title           String?
+  status          String            @default("PENDING")
+  pdfS3Key        String?
+  previewS3Key    String?
+  rejectionReason String?
+  editorVersion   Int               @default(1)
+  submittedAt     DateTime?
+
+  // Template system fields
+  templateId      String?           // Self-reference to parent template (set on instances)
+  templateVersion Int?              // Snapshot of template version when instance was created
+  isTemplate      Boolean           @default(false) // True for template submissions
+  version         Int               @default(1) // Template version counter (incremented on publish)
+  publishedAt     DateTime?         // When a template was published
+
+  images          SubmissionImage[]
+  pages           SubmissionPage[]
+  orders          Order[]
+  templateElements TemplateElement[] @relation("TemplateElements")
+  instances       Submission[]      @relation("TemplateInstances")
+  template        Submission?       @relation("TemplateInstances", fields: [templateId], references: [id])
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  @@index([userId])
+  @@index([isTemplate])
+  @@index([templateId])
+}
+
+model SubmissionImage {
+  id               String     @id @default(cuid())
+  submissionId     String
+  submission       Submission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  pageLabel        String
+  s3Key            String
+  order            Int
+  originalFilename String
+  mimeType         String
+  createdAt        DateTime   @default(now())
+
+  @@index([submissionId])
+}
+
+model SubmissionPage {
+  id                String     @id @default(cuid())
+  submissionId      String
+  submission        Submission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  pageLabel         String
+  order             Int
+  sceneJson         String     @default("{}")
+  previewS3Key      String?
+  renderedPageS3Key String?
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
+
+  @@index([submissionId])
+  @@unique([submissionId, pageLabel])
+  @@unique([submissionId, order])
+}
+
+model Asset {
+  id               String   @id @default(cuid())
+  userId           String
+  user             User     @relation(fields: [userId], references: [id])
+  s3Key            String   @unique
+  originalFilename String
+  mimeType         String
+  width            Int?
+  height           Int?
+  fileSize         Int
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([userId])
+}
+
+model Order {
+  id                    String     @id @default(cuid())
+  userId                String
+  user                  User       @relation(fields: [userId], references: [id])
+  submissionId          String
+  submission            Submission @relation(fields: [submissionId], references: [id])
+
+  quantity              Int
+  zone                  String
+  weightGrams           Int
+  shippingBand          Int
+
+  unitPriceHuf          Int
+  printCostHuf          Int
+  handlingCostHuf       Int        @default(0)
+  shippingCostHuf       Int
+  discountHuf           Int        @default(0)
+  totalHuf              Int
+  currency              String     @default("HUF")
+
+  status                String     @default("PENDING_PAYMENT")
+  pricingConfigVersion  Int
+
+  // Shipping address snapshot
+  recipientName         String
+  line1                 String
+  line2                 String?
+  city                  String
+  postalCode            String
+  countryCode           String
+  phone                 String?
+
+  // Future-proofing fields (not used yet)
+  fulfilmentHub         String?
+  couponCode            String?
+  parentBatchId         String?
+
+  notes                 String?
+  createdAt             DateTime   @default(now())
+  updatedAt             DateTime   @updatedAt
+
+  @@index([userId])
+  @@index([submissionId])
+  @@index([status])
+}
+
+model TemplateElement {
+  id          String   @id @default(cuid())
+  templateId  String
+  template    Submission @relation("TemplateElements", fields: [templateId], references: [id], onDelete: Cascade)
+  pageLabel   String
+  order       Int
+  elementJson String   // JSON string of the element, same schema as EditorElement
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([templateId])
+  @@index([templateId, pageLabel])
+}
+
+model PricingConfig {
+  id                  String   @id @default("default")
+  version             Int      @default(1)
+  weightPerBookGrams  Int      @default(6)
+  handlingFixedHuf    Int      @default(0)
+  handlingPercent     Float    @default(0)
+  enabledZones        String   // JSON string
+  weightBands         String   // JSON string
+  shippingTable       String   // JSON string
+  priceTiers          String   // JSON string
+  currencyRates       String   @default("{\"HUF\":1,\"EUR\":0.0026,\"GBP\":0.0022}") // JSON string: HUF→currency factors
+  updatedAt           DateTime @updatedAt
+  updatedByUserId     String?
+}
