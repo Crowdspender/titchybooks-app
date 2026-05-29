@@ -17,7 +17,41 @@
 - [api/submissions/[id]/pdf/route.ts](file://src/app/api/submissions/[id]/pdf/route.ts)
 - [api/register/route.ts](file://src/app/api/register/route.ts)
 - [api/upload/presign/route.ts](file://src/app/api/upload/presign/route.ts)
+- [api/orders/route.ts](file://src/app/api/orders/route.ts)
+- [api/orders/calculate/route.ts](file://src/app/api/orders/calculate/route.ts)
+- [api/submissions/from-template/route.ts](file://src/app/api/submissions/from-template/route.ts)
+- [api/submissions/[id]/detach-from-template/route.ts](file://src/app/api/submissions/[id]/detach-from-template/route.ts)
+- [api/submissions/[id]/pages/[pageLabel]/route.ts](file://src/app/api/submissions/[id]/pages/[pageLabel]/route.ts)
+- [api/assets/route.ts](file://src/app/api/assets/route.ts)
+- [api/assets/[assetId]/route.ts](file://src/app/api/assets/[assetId]/route.ts)
+- [api/assets/[assetId]/image/route.ts](file://src/app/api/assets/[assetId]/image/route.ts)
+- [api/assets/presign/route.ts](file://src/app/api/assets/presign/route.ts)
+- [api/templates/route.ts](file://src/app/api/templates/route.ts)
+- [api/templates/[id]/route.ts](file://src/app/api/templates/[id]/route.ts)
+- [api/templates/[id]/publish/route.ts](file://src/app/api/templates/[id]/publish/route.ts)
+- [api/templates/[id]/elements/route.ts](file://src/app/api/templates/[id]/elements/route.ts)
+- [api/templates/public/route.ts](file://src/app/api/templates/public/route.ts)
+- [api/pricing/public/route.ts](file://src/app/api/pricing/public/route.ts)
+- [api/admin/pricing-config/route.ts](file://src/app/api/admin/pricing-config/route.ts)
+- [api/admin/orders/route.ts](file://src/app/api/admin/orders/route.ts)
+- [api/admin/orders/[id]/route.ts](file://src/app/api/admin/orders/[id]/route.ts)
+- [lib/pricing/config.ts](file://src/lib/pricing/config.ts)
+- [lib/pricing/engine.ts](file://src/lib/pricing/engine.ts)
+- [lib/pricing/schema.ts](file://src/lib/pricing/schema.ts)
+- [lib/pricing/currency.ts](file://src/lib/pricing/currency.ts)
+- [lib/editor/workspace.ts](file://src/lib/editor/workspace.ts)
+- [lib/editor/elements.ts](file://src/lib/editor/elements.ts)
+- [types/index.ts](file://src/types/index.ts)
 </cite>
+
+## Update Summary
+**Changes Made**
+- Added comprehensive documentation for new order processing system with pricing calculation
+- Documented template management system with CRUD operations and publishing workflow
+- Added asset management system for media handling with S3 integration
+- Expanded editor workspace functionality documentation
+- Enhanced admin panel APIs for orders and pricing configuration
+- Updated API route structure to reflect new feature areas
 
 ## Table of Contents
 1. [Introduction](#introduction)
@@ -32,10 +66,10 @@
 10. [Conclusion](#conclusion)
 
 ## Introduction
-This document describes the backend architecture of Titchybook Creator, focusing on the serverless API pattern used by Next.js, the middleware-driven route protection, and the NextAuth integration for authentication and session management. It documents the API route structure organized by feature areas (authentication, submissions, admin), the authentication flow from login to protected route access, and error handling, validation, and response formatting strategies. Security considerations such as CORS, rate limiting, and input sanitization are addressed conceptually, along with integration points among middleware, authentication, and API routes.
+This document describes the backend architecture of Titchybook Creator, focusing on the serverless API pattern used by Next.js, the middleware-driven route protection, and the NextAuth integration for authentication and session management. The system has evolved to support comprehensive editor workspace functionality, asset management, template system, order processing with dynamic pricing calculation, and administrative controls. It documents the API route structure organized by feature areas, the authentication flow from login to protected route access, and error handling, validation, and response formatting strategies.
 
 ## Project Structure
-The backend is implemented as Next.js Serverless Functions under the app directory. Routes are grouped by feature and protected via middleware and per-route authentication checks. Shared infrastructure includes a Prisma client for database access, AWS S3 integration for uploads/downloads, and PDF generation utilities.
+The backend is implemented as Next.js Serverless Functions under the app directory. Routes are grouped by feature areas including authentication, submissions, orders, templates, assets, and administration. The system now includes sophisticated pricing calculation engine, template management with publishing workflows, and comprehensive asset handling capabilities.
 
 ```mermaid
 graph TB
@@ -45,30 +79,60 @@ end
 subgraph "NextAuth"
 NA["auth.ts<br/>JWT session, callbacks, credentials provider"]
 end
+subgraph "Core Systems"
+PRISMA["lib/prisma.ts<br/>PrismaClient"]
+S3["lib/s3.ts<br/>AWS S3 client & presigned URLs"]
+PDF["lib/pdf/generate.ts<br/>PDF composition"]
+CONST["lib/constants.ts<br/>Enums, page labels, types"]
+END
+subgraph "Editor Workspace"
+WORKSPACE["lib/editor/workspace.ts<br/>Canvas state management"]
+ELEMENTS["lib/editor/elements.ts<br/>Element operations"]
+END
+subgraph "Pricing Engine"
+PRICE_CFG["lib/pricing/config.ts<br/>Pricing configuration"]
+PRICE_ENGINE["lib/pricing/engine.ts<br/>Calculation logic"]
+PRICE_SCHEMA["lib/pricing/schema.ts<br/>Validation schemas"]
+PRICE_CUR["lib/pricing/currency.ts<br/>Currency rates"]
+END
 subgraph "API Routes"
 AUTH_API["/api/auth/...nextauth<br/>NextAuth handler"]
 REG_API["/api/register<br/>POST registration"]
 PRESIGN_API["/api/upload/presign<br/>GET pre-signed upload URL"]
 SUBS_API["/api/submissions<br/>GET list, POST create"]
-SUBS_ID_API["/api/submissions/[id]<br/>GET single"]
+SUBS_ID_API["/api/submissions/[id]<br/>GET single, PUT update"]
 SUBS_PDF_API["/api/submissions/[id]/pdf<br/>POST regenerate PDF"]
-ADMIN_SUBS_API["/api/admin/submissions<br/>GET list"]
-ADMIN_SUBS_ID_API["/api/admin/submissions/[id]<br/>PATCH approve/reject"]
-end
-subgraph "Libraries"
-PRISMA["lib/prisma.ts<br/>PrismaClient"]
-S3["lib/s3.ts<br/>AWS S3 client & presigned URLs"]
-PDF["lib/pdf/generate.ts<br/>PDF composition"]
-CONST["lib/constants.ts<br/>Enums, page labels, types"]
+FROM_TEMPLATE["/api/submissions/from-template<br/>POST create from template"]
+DETACH_TEMPLATE["/api/submissions/[id]/detach-from-template<br/>POST detach from template"]
+PAGE_LABEL["/api/submissions/[id]/pages/[pageLabel]<br/>Page operations"]
+ASSETS_API["/api/assets<br/>Asset CRUD operations"]
+ASSET_ID_API["/api/assets/[assetId]<br/>Asset management"]
+ASSET_IMAGE["/api/assets/[assetId]/image<br/>Image operations"]
+ASSET_PRESIGN["/api/assets/presign<br/>Asset upload URLs"]
+TEMPLATES_API["/api/templates<br/>Template CRUD"]
+TEMPLATE_ID_API["/api/templates/[id]<br/>Template operations"]
+TEMPLATE_PUBLISH["/api/templates/[id]/publish<br/>Publish/unpublish"]
+TEMPLATE_ELEMENTS["/api/templates/[id]/elements<br/>Element management"]
+TEMPLATE_PUBLIC["/api/templates/public<br/>Public templates"]
+ORDERS_API["/api/orders<br/>GET list, POST create"]
+ORDERS_CALC["/api/orders/calculate<br/>Pricing calculation"]
+ADMIN_SUBS_API["/api/admin/submissions<br/>Admin submission management"]
+ADMIN_SUBS_ID_API["/api/admin/submissions/[id]<br/>Admin approval/rejection"]
+ADMIN_ORDERS_API["/api/admin/orders<br/>Admin order management"]
+ADMIN_ORDERS_ID_API["/api/admin/orders/[id]<br/>Admin order updates"]
+ADMIN_PRICE_CFG["/api/admin/pricing-config<br/>Admin pricing config"]
+PUBLIC_PRICE["/api/pricing/public<br/>Public pricing info"]
 end
 MW --> AUTH_API
 MW --> REG_API
 MW --> PRESIGN_API
 MW --> SUBS_API
 MW --> SUBS_ID_API
-MW --> SUBS_PDF_API
+MW --> ASSETS_API
+MW --> TEMPLATES_API
+MW --> ORDERS_API
 MW --> ADMIN_SUBS_API
-MW --> ADMIN_SUBS_ID_API
+MW --> ADMIN_ORDERS_API
 AUTH_API --> NA
 REG_API --> PRISMA
 PRESIGN_API --> S3
@@ -77,53 +141,95 @@ SUBS_API --> PDF
 SUBS_ID_API --> PRISMA
 SUBS_ID_API --> S3
 SUBS_PDF_API --> PDF
+FROM_TEMPLATE --> PRISMA
+DETACH_TEMPLATE --> PRISMA
+PAGE_LABEL --> PRISMA
+ASSETS_API --> PRISMA
+ASSETS_API --> S3
+ASSET_ID_API --> PRISMA
+ASSET_ID_API --> S3
+ASSET_IMAGE --> S3
+ASSET_PRESIGN --> S3
+TEMPLATES_API --> PRISMA
+TEMPLATE_ID_API --> PRISMA
+TEMPLATE_PUBLISH --> PRISMA
+TEMPLATE_ELEMENTS --> PRISMA
+TEMPLATE_PUBLIC --> PRISMA
+ORDERS_API --> PRISMA
+ORDERS_API --> PRICE_ENGINE
+ORDERS_API --> PRICE_CFG
+ORDERS_CALC --> PRICE_ENGINE
+ORDERS_CALC --> PRICE_CFG
 ADMIN_SUBS_API --> PRISMA
 ADMIN_SUBS_API --> S3
 ADMIN_SUBS_ID_API --> PRISMA
 ADMIN_SUBS_ID_API --> CONST
+ADMIN_ORDERS_API --> PRISMA
+ADMIN_ORDERS_API --> PRICE_CFG
+ADMIN_ORDERS_ID_API --> PRISMA
+ADMIN_PRICE_CFG --> PRISMA
+PUBLIC_PRICE --> PRICE_CFG
 ```
 
 **Diagram sources**
-- [middleware.ts:1-6](file://src/middleware.ts#L1-L6)
-- [auth.ts:27-79](file://src/auth.ts#L27-L79)
-- [prisma.ts:1-10](file://src/lib/prisma.ts#L1-L10)
-- [s3.ts:1-81](file://src/lib/s3.ts#L1-L81)
-- [generate.ts:23-111](file://src/lib/pdf/generate.ts#L23-L111)
-- [constants.ts:6-49](file://src/lib/constants.ts#L6-L49)
-- [api/admin/submissions/route.ts:1-38](file://src/app/api/admin/submissions/route.ts#L1-L38)
-- [api/admin/submissions/[id]/route.ts:1-63](file://src/app/api/admin/submissions/[id]/route.ts#L1-L63)
-- [api/submissions/route.ts:1-96](file://src/app/api/submissions/route.ts#L1-L96)
-- [api/submissions/[id]/route.ts:1-37](file://src/app/api/submissions/[id]/route.ts#L1-L37)
-- [api/submissions/[id]/pdf/route.ts:1-27](file://src/app/api/submissions/[id]/pdf/route.ts#L1-L27)
-- [api/register/route.ts:1-47](file://src/app/api/register/route.ts#L1-L47)
-- [api/upload/presign/route.ts:1-38](file://src/app/api/upload/presign/route.ts#L1-L38)
-
-**Section sources**
-- [middleware.ts:1-6](file://src/middleware.ts#L1-L6)
-- [auth.ts:27-79](file://src/auth.ts#L27-L79)
-- [prisma.ts:1-10](file://src/lib/prisma.ts#L1-L10)
-- [s3.ts:1-81](file://src/lib/s3.ts#L1-L81)
-- [generate.ts:23-111](file://src/lib/pdf/generate.ts#L23-L111)
-- [constants.ts:6-49](file://src/lib/constants.ts#L6-L49)
+- [middleware.ts](file://src/middleware.ts)
+- [auth.ts](file://src/auth.ts)
+- [prisma.ts](file://src/lib/prisma.ts)
+- [s3.ts](file://src/lib/s3.ts)
+- [generate.ts](file://src/lib/pdf/generate.ts)
+- [constants.ts](file://src/lib/constants.ts)
+- [editor/workspace.ts](file://src/lib/editor/workspace.ts)
+- [editor/elements.ts](file://src/lib/editor/elements.ts)
+- [pricing/config.ts](file://src/lib/pricing/config.ts)
+- [pricing/engine.ts](file://src/lib/pricing/engine.ts)
+- [pricing/schema.ts](file://src/lib/pricing/schema.ts)
+- [pricing/currency.ts](file://src/lib/pricing/currency.ts)
+- [api/orders/route.ts](file://src/app/api/orders/route.ts)
+- [api/orders/calculate/route.ts](file://src/app/api/orders/calculate/route.ts)
+- [api/submissions/from-template/route.ts](file://src/app/api/submissions/from-template/route.ts)
+- [api/submissions/[id]/detach-from-template/route.ts](file://src/app/api/submissions/[id]/detach-from-template/route.ts)
+- [api/submissions/[id]/pages/[pageLabel]/route.ts](file://src/app/api/submissions/[id]/pages/[pageLabel]/route.ts)
+- [api/assets/route.ts](file://src/app/api/assets/route.ts)
+- [api/assets/[assetId]/route.ts](file://src/app/api/assets/[assetId]/route.ts)
+- [api/assets/[assetId]/image/route.ts](file://src/app/api/assets/[assetId]/image/route.ts)
+- [api/assets/presign/route.ts](file://src/app/api/assets/presign/route.ts)
+- [api/templates/route.ts](file://src/app/api/templates/route.ts)
+- [api/templates/[id]/route.ts](file://src/app/api/templates/[id]/route.ts)
+- [api/templates/[id]/publish/route.ts](file://src/app/api/templates/[id]/publish/route.ts)
+- [api/templates/[id]/elements/route.ts](file://src/app/api/templates/[id]/elements/route.ts)
+- [api/templates/public/route.ts](file://src/app/api/templates/public/route.ts)
+- [api/admin/submissions/route.ts](file://src/app/api/admin/submissions/route.ts)
+- [api/admin/submissions/[id]/route.ts](file://src/app/api/admin/submissions/[id]/route.ts)
+- [api/admin/orders/route.ts](file://src/app/api/admin/orders/route.ts)
+- [api/admin/orders/[id]/route.ts](file://src/app/api/admin/orders/[id]/route.ts)
+- [api/admin/pricing-config/route.ts](file://src/app/api/admin/pricing-config/route.ts)
+- [api/pricing/public/route.ts](file://src/app/api/pricing/public/route.ts)
 
 ## Core Components
-- Middleware: Exposes NextAuth’s auth function and defines URL matchers for protected routes.
+- Middleware: Exposes NextAuth's auth function and defines URL matchers for protected routes.
 - NextAuth: Configures credentials provider, JWT session strategy, pages, and callbacks to attach user role to tokens and sessions.
-- Prisma: Singleton client for database operations.
-- S3: Presigned URL generation for uploads and downloads, plus direct upload/download helpers.
+- Prisma: Singleton client for database operations with comprehensive schema support for all new systems.
+- S3: Presigned URL generation for uploads and downloads, plus direct upload/download helpers for assets.
 - PDF Generation: Orchestrates fetching images, processing, composing PDF, uploading to S3, and updating submission records.
-- Constants: Strongly typed enums and constants for statuses, page labels, accepted image types, and limits.
+- Pricing Engine: Dynamic pricing calculation with configurable zones, quantities, weights, and currency conversion.
+- Editor Workspace: Canvas state management and element manipulation for the visual editor.
+- Asset Management: Comprehensive CRUD operations for media assets with S3 integration.
+- Template System: Full template lifecycle management including creation, editing, publishing, and element management.
 
 **Section sources**
-- [middleware.ts:1-6](file://src/middleware.ts#L1-L6)
-- [auth.ts:27-79](file://src/auth.ts#L27-L79)
-- [prisma.ts:1-10](file://src/lib/prisma.ts#L1-L10)
-- [s3.ts:1-81](file://src/lib/s3.ts#L1-L81)
-- [generate.ts:23-111](file://src/lib/pdf/generate.ts#L23-L111)
-- [constants.ts:6-49](file://src/lib/constants.ts#L6-L49)
+- [middleware.ts](file://src/middleware.ts)
+- [auth.ts](file://src/auth.ts)
+- [prisma.ts](file://src/lib/prisma.ts)
+- [s3.ts](file://src/lib/s3.ts)
+- [generate.ts](file://src/lib/pdf/generate.ts)
+- [constants.ts](file://src/lib/constants.ts)
+- [pricing/config.ts](file://src/lib/pricing/config.ts)
+- [pricing/engine.ts](file://src/lib/pricing/engine.ts)
+- [editor/workspace.ts](file://src/lib/editor/workspace.ts)
+- [editor/elements.ts](file://src/lib/editor/elements.ts)
 
 ## Architecture Overview
-The system follows a serverless API pattern with Next.js App Router. Requests are routed to route.ts handlers under src/app/api. Middleware enforces authentication for specific paths, while per-route handlers enforce authorization (roles) and perform domain logic. Authentication relies on NextAuth with JWT strategy and custom callbacks. Data persistence uses Prisma, and media assets are handled via AWS S3 with presigned URLs.
+The system follows a serverless API pattern with Next.js App Router. Requests are routed to route.ts handlers under src/app/api. Middleware enforces authentication for specific paths, while per-route handlers enforce authorization (roles) and perform domain logic. The architecture now supports complex business logic through specialized engines and services, with clear separation between presentation, business logic, and data access layers.
 
 ```mermaid
 sequenceDiagram
@@ -131,7 +237,7 @@ participant C as "Client"
 participant MW as "Middleware<br/>matcher"
 participant NA as "NextAuth<br/>auth()"
 participant AR as "API Route Handler"
-C->>MW : "HTTP request to /dashboard|/create|/admin"
+C->>MW : "HTTP request to /dashboard|/create|/admin|/orders"
 MW->>NA : "auth()"
 NA-->>MW : "Session (JWT)"
 MW-->>C : "Continue if authenticated"
@@ -139,20 +245,21 @@ C->>AR : "HTTP request to protected API"
 AR->>NA : "auth()"
 NA-->>AR : "Session (JWT)"
 AR->>AR : "Authorization check (role/id)"
+AR->>AR : "Business logic execution"
 AR-->>C : "JSON response"
 ```
 
 **Diagram sources**
-- [middleware.ts:1-6](file://src/middleware.ts#L1-L6)
-- [auth.ts:27-79](file://src/auth.ts#L27-L79)
-- [api/submissions/route.ts:20-33](file://src/app/api/submissions/route.ts#L20-L33)
-- [api/admin/submissions/route.ts:6-10](file://src/app/api/admin/submissions/route.ts#L6-L10)
+- [middleware.ts](file://src/middleware.ts)
+- [auth.ts](file://src/auth.ts)
+- [orders/route.ts](file://src/app/api/orders/route.ts)
+- [admin/submissions/route.ts](file://src/app/api/admin/submissions/route.ts)
 
 ## Detailed Component Analysis
 
 ### Middleware System and Route Protection
 - Purpose: Apply authentication guard to route groups (/dashboard, /create, /admin).
-- Behavior: Uses NextAuth’s exported auth function; matcher array controls which paths are intercepted.
+- Behavior: Uses NextAuth's exported auth function; matcher array controls which paths are intercepted.
 - Integration: Ensures unauthenticated clients are redirected or blocked by downstream handlers.
 
 ```mermaid
@@ -166,11 +273,11 @@ HasSession --> |No| Block["Return unauthorized/redirect"]
 ```
 
 **Diagram sources**
-- [middleware.ts:3-5](file://src/middleware.ts#L3-L5)
-- [auth.ts:27-79](file://src/auth.ts#L27-L79)
+- [middleware.ts](file://src/middleware.ts)
+- [auth.ts](file://src/auth.ts)
 
 **Section sources**
-- [middleware.ts:1-6](file://src/middleware.ts#L1-L6)
+- [middleware.ts](file://src/middleware.ts)
 
 ### NextAuth Integration and Session Management
 - Provider: Credentials provider validates email/password against hashed passwords stored in the database.
@@ -202,11 +309,11 @@ User <.. CredentialsProvider : "from DB"
 ```
 
 **Diagram sources**
-- [auth.ts:27-79](file://src/auth.ts#L27-L79)
-- [prisma.ts:1-10](file://src/lib/prisma.ts#L1-L10)
+- [auth.ts](file://src/auth.ts)
+- [prisma.ts](file://src/lib/prisma.ts)
 
 **Section sources**
-- [auth.ts:27-79](file://src/auth.ts#L27-L79)
+- [auth.ts](file://src/auth.ts)
 
 ### Authentication Flow: Login to Protected Routes
 - Login: Client submits credentials to NextAuth endpoint; provider authorizes and returns user.
@@ -224,7 +331,7 @@ NextAuth->>DB : "find user by email"
 DB-->>NextAuth : "User with passwordHash"
 NextAuth->>NextAuth : "compare password"
 NextAuth-->>Client : "Session (JWT)"
-Client->>Route : "GET /admin/submissions"
+Client->>Route : "GET /admin/orders"
 Route->>NextAuth : "auth()"
 NextAuth-->>Route : "Session with role"
 Route->>Route : "Role check (ADMIN)"
@@ -232,12 +339,12 @@ Route-->>Client : "200 OK or 403"
 ```
 
 **Diagram sources**
-- [auth.ts:35-58](file://src/auth.ts#L35-L58)
-- [api/admin/submissions/route.ts:7-10](file://src/app/api/admin/submissions/route.ts#L7-L10)
+- [auth.ts](file://src/auth.ts)
+- [admin/orders/route.ts](file://src/app/api/admin/orders/route.ts)
 
 **Section sources**
-- [auth.ts:35-58](file://src/auth.ts#L35-L58)
-- [api/admin/submissions/route.ts:7-10](file://src/app/api/admin/submissions/route.ts#L7-L10)
+- [auth.ts](file://src/auth.ts)
+- [admin/orders/route.ts](file://src/app/api/admin/orders/route.ts)
 
 ### API Route Structure by Feature Areas
 
@@ -264,18 +371,21 @@ Presign --> Ok200U["Return uploadUrl + s3Key"]
 ```
 
 **Diagram sources**
-- [api/register/route.ts:12-46](file://src/app/api/register/route.ts#L12-L46)
-- [api/upload/presign/route.ts:6-37](file://src/app/api/upload/presign/route.ts#L6-L37)
+- [register/route.ts](file://src/app/api/register/route.ts)
+- [upload/presign/route.ts](file://src/app/api/upload/presign/route.ts)
 
 **Section sources**
-- [api/register/route.ts:12-46](file://src/app/api/register/route.ts#L12-L46)
-- [api/upload/presign/route.ts:6-37](file://src/app/api/upload/presign/route.ts#L6-L37)
+- [register/route.ts](file://src/app/api/register/route.ts)
+- [upload/presign/route.ts](file://src/app/api/upload/presign/route.ts)
 
 #### Submissions (Authenticated Users)
-- GET /api/submissions: Lists current user’s submissions.
-- POST /api/submissions: Creates a new submission with 8 validated image entries; triggers asynchronous PDF generation.
-- GET /api/submissions/[id]: Retrieves a single submission; enforces ownership or ADMIN role; optionally generates presigned PDF URL.
+- GET /api/submissions: Lists current user's submissions.
+- POST /api/submissions: Creates a new submission with validated image entries; triggers asynchronous PDF generation.
+- GET /api/submissions/[id]: Retrieves a single submission; enforces ownership or ADMIN role.
 - POST /api/submissions/[id]/pdf: Regenerates PDF for a submission.
+- POST /api/submissions/from-template: Creates a new submission from a template.
+- POST /api/submissions/[id]/detach-from-template: Detaches a submission from its template.
+- POST /api/submissions/[id]/pages/[pageLabel]: Manages individual page operations.
 
 ```mermaid
 sequenceDiagram
@@ -284,7 +394,7 @@ participant Subs as "POST /api/submissions"
 participant Val as "Zod Validation"
 participant DB as "Prisma"
 participant PDF as "PDF Generator"
-Client->>Subs : "JSON with 8 images"
+Client->>Subs : "JSON with validated images"
 Subs->>Val : "safeParse"
 Val-->>Subs : "Parsed data or errors"
 Subs->>DB : "Create submission + images"
@@ -294,17 +404,124 @@ Subs-->>Client : "201 with submission id/status"
 ```
 
 **Diagram sources**
-- [api/submissions/route.ts:35-95](file://src/app/api/submissions/route.ts#L35-L95)
-- [generate.ts:23-111](file://src/lib/pdf/generate.ts#L23-L111)
+- [submissions/route.ts](file://src/app/api/submissions/route.ts)
+- [generate.ts](file://src/lib/pdf/generate.ts)
 
 **Section sources**
-- [api/submissions/route.ts:20-95](file://src/app/api/submissions/route.ts#L20-L95)
-- [api/submissions/[id]/route.ts:6-36](file://src/app/api/submissions/[id]/route.ts#L6-L36)
-- [api/submissions/[id]/pdf/route.ts:5-26](file://src/app/api/submissions/[id]/pdf/route.ts#L5-L26)
+- [submissions/route.ts](file://src/app/api/submissions/route.ts)
+- [submissions/[id]/route.ts](file://src/app/api/submissions/[id]/route.ts)
+- [submissions/[id]/pdf/route.ts](file://src/app/api/submissions/[id]/pdf/route.ts)
+- [submissions/from-template/route.ts](file://src/app/api/submissions/from-template/route.ts)
+- [submissions/[id]/detach-from-template/route.ts](file://src/app/api/submissions/[id]/detach-from-template/route.ts)
+- [submissions/[id]/pages/[pageLabel]/route.ts](file://src/app/api/submissions/[id]/pages/[pageLabel]/route.ts)
+
+#### Templates (Template Management System)
+- GET /api/templates: Lists user's templates with filtering options.
+- POST /api/templates: Creates a new template from submission or blank canvas.
+- GET /api/templates/[id]: Retrieves template details with elements.
+- PUT /api/templates/[id]: Updates template metadata and settings.
+- DELETE /api/templates/[id]: Deletes template with cascade protection.
+- POST /api/templates/[id]/publish: Publishes or unpublishes template.
+- GET /api/templates/[id]/elements: Lists template elements.
+- POST /api/templates/[id]/elements: Adds element to template.
+- GET /api/templates/public: Lists public templates for browsing.
+
+```mermaid
+flowchart TD
+TGet["GET /api/templates"] --> Filter["Apply filters & pagination"]
+Filter --> List["Fetch templates with elements count"]
+List --> Ok200T["Return template list"]
+TPub["POST /api/templates/[id]/publish"] --> Role["Verify ADMIN role"]
+Role --> |Fail| Err403["Return 403"]
+Role --> |Pass| Publish["Toggle published status"]
+Publish --> Ok200Pub["Return updated template"]
+```
+
+**Diagram sources**
+- [templates/route.ts](file://src/app/api/templates/route.ts)
+- [templates/[id]/publish/route.ts](file://src/app/api/templates/[id]/publish/route.ts)
+
+**Section sources**
+- [templates/route.ts](file://src/app/api/templates/route.ts)
+- [templates/[id]/route.ts](file://src/app/api/templates/[id]/route.ts)
+- [templates/[id]/publish/route.ts](file://src/app/api/templates/[id]/publish/route.ts)
+- [templates/[id]/elements/route.ts](file://src/app/api/templates/[id]/elements/route.ts)
+- [templates/public/route.ts](file://src/app/api/templates/public/route.ts)
+
+#### Assets (Media Management)
+- GET /api/assets: Lists user's assets with filtering and pagination.
+- POST /api/assets: Creates asset record and returns pre-signed upload URL.
+- GET /api/assets/[assetId]: Retrieves asset metadata and status.
+- PUT /api/assets/[assetId]: Updates asset metadata.
+- DELETE /api/assets/[assetId]: Deletes asset and S3 object.
+- GET /api/assets/[assetId]/image: Returns S3 object URL for download.
+- GET /api/assets/presign: Generates pre-signed URL for asset upload.
+
+```mermaid
+flowchart TD
+AGet["GET /api/assets"] --> Filter["Apply filters & pagination"]
+Filter --> List["Fetch assets with metadata"]
+List --> Ok200A["Return asset list"]
+APost["POST /api/assets"] --> Presign["Generate pre-signed URL"]
+Presign --> Create["Create asset record"]
+Create --> Ok201A["Return asset + upload URL"]
+```
+
+**Diagram sources**
+- [assets/route.ts](file://src/app/api/assets/route.ts)
+- [assets/[assetId]/route.ts](file://src/app/api/assets/[assetId]/route.ts)
+- [assets/presign/route.ts](file://src/app/api/assets/presign/route.ts)
+
+**Section sources**
+- [assets/route.ts](file://src/app/api/assets/route.ts)
+- [assets/[assetId]/route.ts](file://src/app/api/assets/[assetId]/route.ts)
+- [assets/[assetId]/image/route.ts](file://src/app/api/assets/[assetId]/image/route.ts)
+- [assets/presign/route.ts](file://src/app/api/assets/presign/route.ts)
+
+#### Orders and Pricing (Order Processing System)
+- GET /api/orders: Lists user's orders with submission details.
+- POST /api/orders: Creates order from approved submission with pricing calculation.
+- POST /api/orders/calculate: Calculates pricing for potential order without creating it.
+- GET /api/pricing/public: Returns current pricing configuration for client-side calculations.
+- Admin APIs: Comprehensive order management and pricing configuration for administrators.
+
+```mermaid
+sequenceDiagram
+participant Client as "Client"
+participant Orders as "POST /api/orders"
+participant PriceCfg as "loadPricingConfig"
+participant PriceEngine as "calculateOrder"
+participant DB as "Prisma"
+Client->>Orders : "Order creation request"
+Orders->>PriceCfg : "Load current pricing config"
+PriceCfg-->>Orders : "Configuration data"
+Orders->>PriceEngine : "calculateOrder(zone, quantity, config)"
+PriceEngine-->>Orders : "Calculated pricing"
+Orders->>DB : "Create order with calculated values"
+Orders-->>Client : "201 Created with order details"
+```
+
+**Diagram sources**
+- [orders/route.ts](file://src/app/api/orders/route.ts)
+- [orders/calculate/route.ts](file://src/app/api/orders/calculate/route.ts)
+- [pricing/config.ts](file://src/lib/pricing/config.ts)
+- [pricing/engine.ts](file://src/lib/pricing/engine.ts)
+
+**Section sources**
+- [orders/route.ts](file://src/app/api/orders/route.ts)
+- [orders/calculate/route.ts](file://src/app/api/orders/calculate/route.ts)
+- [pricing/public/route.ts](file://src/app/api/pricing/public/route.ts)
+- [admin/pricing-config/route.ts](file://src/app/api/admin/pricing-config/route.ts)
+- [admin/orders/route.ts](file://src/app/api/admin/orders/route.ts)
+- [admin/orders/[id]/route.ts](file://src/app/api/admin/orders/[id]/route.ts)
 
 #### Admin (Administrators Only)
 - GET /api/admin/submissions: Lists submissions with optional status filter; enriches with presigned PDF URLs.
 - PATCH /api/admin/submissions/[id]: Approves or rejects a submission; sets rejection reason when rejected.
+- GET /api/admin/orders: Lists all orders with filtering and pagination.
+- PATCH /api/admin/orders/[id]: Updates order status and admin notes.
+- GET /api/admin/pricing-config: Returns current pricing configuration.
+- PUT /api/admin/pricing-config: Updates pricing configuration with validation.
 
 ```mermaid
 flowchart TD
@@ -320,37 +537,52 @@ Update --> Ok200Patch["Return updated submission"]
 ```
 
 **Diagram sources**
-- [api/admin/submissions/route.ts:6-37](file://src/app/api/admin/submissions/route.ts#L6-L37)
-- [api/admin/submissions/[id]/route.ts:12-61](file://src/app/api/admin/submissions/[id]/route.ts#L12-L61)
+- [admin/submissions/route.ts](file://src/app/api/admin/submissions/route.ts)
+- [admin/submissions/[id]/route.ts](file://src/app/api/admin/submissions/[id]/route.ts)
+- [admin/orders/route.ts](file://src/app/api/admin/orders/route.ts)
+- [admin/orders/[id]/route.ts](file://src/app/api/admin/orders/[id]/route.ts)
+- [admin/pricing-config/route.ts](file://src/app/api/admin/pricing-config/route.ts)
 
 **Section sources**
-- [api/admin/submissions/route.ts:6-37](file://src/app/api/admin/submissions/route.ts#L6-L37)
-- [api/admin/submissions/[id]/route.ts:12-61](file://src/app/api/admin/submissions/[id]/route.ts#L12-L61)
+- [admin/submissions/route.ts](file://src/app/api/admin/submissions/route.ts)
+- [admin/submissions/[id]/route.ts](file://src/app/api/admin/submissions/[id]/route.ts)
+- [admin/orders/route.ts](file://src/app/api/admin/orders/route.ts)
+- [admin/orders/[id]/route.ts](file://src/app/api/admin/orders/[id]/route.ts)
+- [admin/pricing-config/route.ts](file://src/app/api/admin/pricing-config/route.ts)
 
 ### Request Validation and Response Formatting
-- Validation: Zod schemas define strict shapes for registration and submissions; safeParse returns structured errors.
+- Validation: Zod schemas define strict shapes for all endpoints; safeParse returns structured errors.
 - Responses: Consistent JSON bodies with either data objects or error messages; appropriate HTTP status codes (200/201/400/401/403/404/500).
 - Error Handling: Try/catch blocks wrap async operations; specific branches return 400/404/500 depending on failure mode.
+- Pricing Validation: Specialized schemas for order calculation with detailed error reporting.
 
 **Section sources**
-- [api/register/route.ts:6-10](file://src/app/api/register/route.ts#L6-L10)
-- [api/submissions/route.ts:8-18](file://src/app/api/submissions/route.ts#L8-L18)
-- [api/upload/presign/route.ts:18-30](file://src/app/api/upload/presign/route.ts#L18-L30)
+- [register/route.ts](file://src/app/api/register/route.ts)
+- [submissions/route.ts](file://src/app/api/submissions/route.ts)
+- [orders/route.ts](file://src/app/api/orders/route.ts)
+- [orders/calculate/route.ts](file://src/app/api/orders/calculate/route.ts)
+- [assets/route.ts](file://src/app/api/assets/route.ts)
+- [templates/route.ts](file://src/app/api/templates/route.ts)
 
 ### Serverless API Pattern in Next.js
 - Route Handlers: Each route.ts exports async functions (GET/POST/PATCH) that accept NextRequest/Request and return NextResponse.
 - Dynamic Routes: Parameters resolved via params promise; handlers await params to access route segments.
 - Environment: Uses Next.js runtime; no traditional server required.
+- Business Logic Separation: Complex operations delegated to specialized libraries (pricing, editor, PDF generation).
 
 **Section sources**
-- [api/submissions/[id]/route.ts:7-20](file://src/app/api/submissions/[id]/route.ts#L7-L20)
-- [api/admin/submissions/[id]/route.ts:12-22](file://src/app/api/admin/submissions/[id]/route.ts#L12-L22)
+- [submissions/[id]/route.ts](file://src/app/api/submissions/[id]/route.ts)
+- [admin/submissions/[id]/route.ts](file://src/app/api/admin/submissions/[id]/route.ts)
+- [orders/[id]/route.ts](file://src/app/api/orders/[id]/route.ts)
+- [templates/[id]/route.ts](file://src/app/api/templates/[id]/route.ts)
 
 ## Dependency Analysis
 - Middleware depends on NextAuth for session retrieval.
 - API routes depend on NextAuth for auth checks, Prisma for persistence, and S3 for media.
+- Pricing engine depends on configuration loader and calculation engine.
+- Editor workspace depends on element management and canvas state.
 - PDF generation depends on Prisma for data and S3 for storage.
-- Constants provide shared types and enums across modules.
+- All new systems integrate through shared Prisma models and S3 storage.
 
 ```mermaid
 graph LR
@@ -363,53 +595,100 @@ SUBS --> PDF["lib/pdf/generate.ts"]
 SUBSID["api/submissions/[id]/route.ts"] --> PRISMA
 SUBSID --> S3
 SUBSPDF["api/submissions/[id]/pdf/route.ts"] --> PDF
-ADMINS["api/admin/submissions/route.ts"] --> PRISMA
-ADMINS --> S3
-ADMINID["api/admin/submissions/[id]/route.ts"] --> PRISMA
-ADMINID --> CONST["lib/constants.ts"]
+FROM_TEMPLATE["api/submissions/from-template/route.ts"] --> PRISMA
+DETACH_TEMPLATE["api/submissions/[id]/detach-from-template/route.ts"] --> PRISMA
+PAGE_LABEL["api/submissions/[id]/pages/[pageLabel]/route.ts"] --> PRISMA
+ASSETS["api/assets/route.ts"] --> PRISMA
+ASSETS --> S3
+ASSET_ID["api/assets/[assetId]/route.ts"] --> PRISMA
+ASSET_ID --> S3
+ASSET_IMAGE["api/assets/[assetId]/image/route.ts"] --> S3
+ASSET_PRESIGN["api/assets/presign/route.ts"] --> S3
+TEMPLATES["api/templates/route.ts"] --> PRISMA
+TEMPLATE_ID["api/templates/[id]/route.ts"] --> PRISMA
+TEMPLATE_PUBLISH["api/templates/[id]/publish/route.ts"] --> PRISMA
+TEMPLATE_ELEMENTS["api/templates/[id]/elements/route.ts"] --> PRISMA
+TEMPLATE_PUBLIC["api/templates/public/route.ts"] --> PRISMA
+ORDERS["api/orders/route.ts"] --> PRISMA
+ORDERS --> PRICE_ENGINE["lib/pricing/engine.ts"]
+ORDERS --> PRICE_CFG["lib/pricing/config.ts"]
+ORDERS_CALC["api/orders/calculate/route.ts"] --> PRICE_ENGINE
+ORDERS_CALC --> PRICE_CFG
+PUBLIC_PRICE["api/pricing/public/route.ts"] --> PRICE_CFG
+ADMIN_SUBS["api/admin/submissions/route.ts"] --> PRISMA
+ADMIN_SUBS --> S3
+ADMIN_SUBS_ID["api/admin/submissions/[id]/route.ts"] --> PRISMA
+ADMIN_SUBS_ID --> CONST["lib/constants.ts"]
+ADMIN_ORDERS["api/admin/orders/route.ts"] --> PRISMA
+ADMIN_ORDERS --> PRICE_CFG
+ADMIN_ORDERS_ID["api/admin/orders/[id]/route.ts"] --> PRISMA
+ADMIN_PRICE_CFG["api/admin/pricing-config/route.ts"] --> PRISMA
+WORKSPACE["lib/editor/workspace.ts"] --> PRISMA
+ELEMENTS["lib/editor/elements.ts"] --> PRISMA
 ```
 
 **Diagram sources**
-- [middleware.ts:1-1](file://src/middleware.ts#L1-L1)
-- [auth.ts:27-79](file://src/auth.ts#L27-L79)
-- [prisma.ts:1-10](file://src/lib/prisma.ts#L1-L10)
-- [s3.ts:1-81](file://src/lib/s3.ts#L1-L81)
-- [generate.ts:23-111](file://src/lib/pdf/generate.ts#L23-L111)
-- [constants.ts:6-49](file://src/lib/constants.ts#L6-L49)
-- [api/register/route.ts:1-47](file://src/app/api/register/route.ts#L1-L47)
-- [api/upload/presign/route.ts:1-38](file://src/app/api/upload/presign/route.ts#L1-L38)
-- [api/submissions/route.ts:1-96](file://src/app/api/submissions/route.ts#L1-L96)
-- [api/submissions/[id]/route.ts:1-37](file://src/app/api/submissions/[id]/route.ts#L1-L37)
-- [api/submissions/[id]/pdf/route.ts:1-27](file://src/app/api/submissions/[id]/pdf/route.ts#L1-L27)
-- [api/admin/submissions/route.ts:1-38](file://src/app/api/admin/submissions/route.ts#L1-L38)
-- [api/admin/submissions/[id]/route.ts:1-63](file://src/app/api/admin/submissions/[id]/route.ts#L1-L63)
+- [middleware.ts](file://src/middleware.ts)
+- [auth.ts](file://src/auth.ts)
+- [prisma.ts](file://src/lib/prisma.ts)
+- [s3.ts](file://src/lib/s3.ts)
+- [generate.ts](file://src/lib/pdf/generate.ts)
+- [constants.ts](file://src/lib/constants.ts)
+- [pricing/config.ts](file://src/lib/pricing/config.ts)
+- [pricing/engine.ts](file://src/lib/pricing/engine.ts)
+- [pricing/schema.ts](file://src/lib/pricing/schema.ts)
+- [pricing/currency.ts](file://src/lib/pricing/currency.ts)
+- [editor/workspace.ts](file://src/lib/editor/workspace.ts)
+- [editor/elements.ts](file://src/lib/editor/elements.ts)
+- [orders/route.ts](file://src/app/api/orders/route.ts)
+- [orders/calculate/route.ts](file://src/app/api/orders/calculate/route.ts)
+- [assets/route.ts](file://src/app/api/assets/route.ts)
+- [assets/[assetId]/route.ts](file://src/app/api/assets/[assetId]/route.ts)
+- [assets/[assetId]/image/route.ts](file://src/app/api/assets/[assetId]/image/route.ts)
+- [assets/presign/route.ts](file://src/app/api/assets/presign/route.ts)
+- [templates/route.ts](file://src/app/api/templates/route.ts)
+- [templates/[id]/route.ts](file://src/app/api/templates/[id]/route.ts)
+- [templates/[id]/publish/route.ts](file://src/app/api/templates/[id]/publish/route.ts)
+- [templates/[id]/elements/route.ts](file://src/app/api/templates/[id]/elements/route.ts)
+- [templates/public/route.ts](file://src/app/api/templates/public/route.ts)
+- [admin/submissions/route.ts](file://src/app/api/admin/submissions/route.ts)
+- [admin/submissions/[id]/route.ts](file://src/app/api/admin/submissions/[id]/route.ts)
+- [admin/orders/route.ts](file://src/app/api/admin/orders/route.ts)
+- [admin/orders/[id]/route.ts](file://src/app/api/admin/orders/[id]/route.ts)
+- [admin/pricing-config/route.ts](file://src/app/api/admin/pricing-config/route.ts)
+- [pricing/public/route.ts](file://src/app/api/pricing/public/route.ts)
 
 **Section sources**
-- [package.json:11-24](file://package.json#L11-L24)
+- [package.json](file://package.json)
 
 ## Performance Considerations
 - Asynchronous PDF Generation: Background generation avoids blocking API responses; failures logged but do not fail the submission creation.
 - Parallel Operations: PDF generation downloads and processes images in parallel to reduce latency.
 - Presigned URLs: Offloads uploads/downloads to S3; reduces server bandwidth and CPU usage.
 - Transactional Writes: Submission creation uses a single transaction to maintain consistency.
-
-[No sources needed since this section provides general guidance]
+- Pricing Calculation Caching: Configuration loading optimized to minimize repeated database queries.
+- Template Element Management: Efficient element querying with proper indexing for large template structures.
+- Asset Management: Batch operations for asset CRUD to reduce database round trips.
 
 ## Security and Compliance
 - Authentication: JWT-based session strategy with NextAuth; credentials provider validates against hashed passwords.
 - Authorization: Per-route checks enforce user ownership or ADMIN role.
-- Input Validation: Zod schemas validate and sanitize request payloads.
-- Content Type Enforcement: Upload endpoint restricts accepted image types.
+- Input Validation: Zod schemas validate and sanitize request payloads across all endpoints.
+- Content Type Enforcement: Upload endpoints restrict accepted image types and validate file extensions.
 - Secrets Management: AWS credentials and bucket configured via environment variables; keep secrets out of client bundles.
 - CORS: Not explicitly configured in the provided files; configure at the framework level if cross-origin access is required.
 - Rate Limiting: Not implemented in the provided files; consider adding rate limiting at the edge or middleware layer.
 - Input Sanitization: Strict schema parsing; reject invalid payloads early with 400 responses.
+- Template Security: Template publishing requires ADMIN role; private templates not accessible publicly.
+- Pricing Security: Pricing calculations performed server-side to prevent manipulation; currency conversion validated.
 
 **Section sources**
-- [auth.ts:27-79](file://src/auth.ts#L27-L79)
-- [api/upload/presign/route.ts:25-30](file://src/app/api/upload/presign/route.ts#L25-L30)
-- [api/register/route.ts:17-22](file://src/app/api/register/route.ts#L17-L22)
-- [api/submissions/route.ts:45-50](file://src/app/api/submissions/route.ts#L45-L50)
+- [auth.ts](file://src/auth.ts)
+- [upload/presign/route.ts](file://src/app/api/upload/presign/route.ts)
+- [register/route.ts](file://src/app/api/register/route.ts)
+- [submissions/route.ts](file://src/app/api/submissions/route.ts)
+- [templates/[id]/publish/route.ts](file://src/app/api/templates/[id]/publish/route.ts)
+- [orders/route.ts](file://src/app/api/orders/route.ts)
 
 ## Troubleshooting Guide
 - Unauthorized Access: Ensure auth() is called and session contains user id; verify middleware matcher includes the route.
@@ -417,13 +696,21 @@ ADMINID --> CONST["lib/constants.ts"]
 - Validation Errors: Review Zod error messages returned in the error field; ensure payloads match schemas.
 - PDF Generation Failures: Check logs for PDF generation errors; regenerate via POST /api/submissions/[id]/pdf.
 - S3 Issues: Verify AWS credentials and bucket name; confirm presigned URL generation succeeds.
+- Pricing Calculation Failures: Check pricing configuration validity; verify zone availability and quantity constraints.
+- Template Publishing Issues: Ensure template has required elements and meets publishing criteria.
+- Asset Upload Problems: Verify asset type restrictions and S3 permissions; check pre-signed URL expiration.
+- Order Creation Errors: Confirm submission status is APPROVED and PDF is available before ordering.
 
 **Section sources**
-- [api/submissions/route.ts:21-24](file://src/app/api/submissions/route.ts#L21-L24)
-- [api/admin/submissions/route.ts:8-10](file://src/app/api/admin/submissions/route.ts#L8-L10)
-- [api/submissions/[id]/route.ts:26-28](file://src/app/api/submissions/[id]/route.ts#L26-L28)
-- [api/submissions/[id]/pdf/route.ts:19-25](file://src/app/api/submissions/[id]/pdf/route.ts#L19-L25)
-- [api/upload/presign/route.ts:34-36](file://src/app/api/upload/presign/route.ts#L34-L36)
+- [submissions/route.ts](file://src/app/api/submissions/route.ts)
+- [admin/submissions/route.ts](file://src/app/api/admin/submissions/route.ts)
+- [submissions/[id]/route.ts](file://src/app/api/submissions/[id]/route.ts)
+- [submissions/[id]/pdf/route.ts](file://src/app/api/submissions/[id]/pdf/route.ts)
+- [upload/presign/route.ts](file://src/app/api/upload/presign/route.ts)
+- [orders/route.ts](file://src/app/api/orders/route.ts)
+- [orders/calculate/route.ts](file://src/app/api/orders/calculate/route.ts)
+- [templates/[id]/publish/route.ts](file://src/app/api/templates/[id]/publish/route.ts)
+- [assets/presign/route.ts](file://src/app/api/assets/presign/route.ts)
 
 ## Conclusion
-The backend leverages Next.js serverless functions with a robust middleware and NextAuth integration to protect routes and manage sessions. API routes are organized by feature, with strong validation, consistent error handling, and clear authorization checks. Integrations with Prisma and AWS S3 enable scalable persistence and media handling, while asynchronous PDF generation improves responsiveness. Security is enforced through JWT sessions, role-based access control, and strict input validation.
+The backend leverages Next.js serverless functions with a robust middleware and NextAuth integration to protect routes and manage sessions. The architecture has evolved to support comprehensive business logic through specialized engines and services, including dynamic pricing calculation, template management, asset handling, and order processing. API routes are organized by feature areas with strong validation, consistent error handling, and clear authorization checks. Integrations with Prisma and AWS S3 enable scalable persistence and media handling, while asynchronous operations improve responsiveness. Security is enforced through JWT sessions, role-based access control, strict input validation, and server-side pricing calculations.

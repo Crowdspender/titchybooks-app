@@ -39,24 +39,39 @@ export default async function NewOrderPage({
     }
 
     return (
-        <div className="max-w-4xl mx-auto px-4 py-8">
-            <div className="mb-6 flex items-center justify-between">
+        <div className="page-container py-10">
+            <div className="mb-6 flex items-start justify-between">
                 <div>
-                    <h1 className="text-2xl font-bold">Order printed copies</h1>
-                    <p className="text-sm text-stone-500">
+                    <p className="section-label mb-2">Print &amp; Ship</p>
+                    <h1
+                        className="text-3xl font-semibold tracking-tight"
+                        style={{ color: "var(--color-text)" }}
+                    >
+                        Order printed copies
+                    </h1>
+                    <p
+                        className="mt-1 text-sm"
+                        style={{ color: "var(--color-text-muted)" }}
+                    >
                         {submission.title || "Titchybook"}
                     </p>
                 </div>
                 <Link
                     href="/dashboard"
-                    className="text-sm text-stone-600 hover:underline"
+                    className="btn btn-outline btn-sm"
                 >
                     Back to dashboard
                 </Link>
             </div>
 
             {submission.status !== SubmissionStatus.APPROVED && (
-                <p className="mb-4 rounded-md bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                <p
+                    className="mb-4 rounded-xl px-4 py-3 text-sm"
+                    style={{
+                        background: "var(--color-accent-light)",
+                        color: "#92400E",
+                    }}
+                >
                     This Titchybook isn&apos;t approved yet — you can preview
                     pricing, but ordering will unlock once an admin approves it.
                 </p>

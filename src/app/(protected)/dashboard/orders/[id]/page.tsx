@@ -30,83 +30,134 @@ export default async function OrderDetailPage({
     const fmt = (v: number) => `${v.toLocaleString("en-US")} HUF`;
 
     return (
-        <div className="max-w-3xl mx-auto px-4 py-8">
-            <div className="mb-6 flex items-center justify-between">
-                <h1 className="text-2xl font-bold">
-                    Order {order.id.slice(0, 8)}
-                </h1>
+        <div className="page-container py-10">
+            {/* Header */}
+            <div className="mb-8 flex items-start justify-between">
+                <div>
+                    <p className="section-label mb-2">Order details</p>
+                    <h1
+                        className="text-3xl font-semibold tracking-tight"
+                        style={{ color: "var(--color-text)" }}
+                    >
+                        Order {order.id.slice(0, 8)}
+                    </h1>
+                </div>
                 <Link
                     href="/dashboard/orders"
-                    className="text-sm text-stone-600 hover:underline"
+                    className="btn btn-ghost btn-sm"
                 >
-                    All orders
+                    ← All orders
                 </Link>
             </div>
 
             <div className="grid gap-4 md:grid-cols-2">
-                <Card title="Summary">
-                    <Row
+                <DetailCard title="Summary">
+                    <DetailRow
                         label="Status"
                         value={order.status.replace("_", " ")}
                     />
-                    <Row
+                    <DetailRow
                         label="Titchybook"
                         value={order.submission?.title || "—"}
                     />
-                    <Row label="Quantity" value={`${order.quantity} copies`} />
-                    <Row
+                    <DetailRow
+                        label="Quantity"
+                        value={`${order.quantity} copies`}
+                    />
+                    <DetailRow
                         label="Destination"
                         value={ZONE_LABELS[order.zone as Zone] ?? order.zone}
                     />
-                    <Row label="Weight" value={`${order.weightGrams} g`} />
-                    <Row
+                    <DetailRow
+                        label="Weight"
+                        value={`${order.weightGrams} g`}
+                    />
+                    <DetailRow
                         label="Created"
                         value={new Date(order.createdAt).toLocaleString()}
                     />
-                </Card>
+                </DetailCard>
 
-                <Card title="Pricing">
-                    <Row
+                <DetailCard title="Pricing">
+                    <DetailRow
                         label="Price per copy"
                         value={fmt(order.unitPriceHuf)}
                     />
-                    <Row label="Print cost" value={fmt(order.printCostHuf)} />
+                    <DetailRow
+                        label="Print cost"
+                        value={fmt(order.printCostHuf)}
+                    />
                     {order.handlingCostHuf > 0 && (
-                        <Row
+                        <DetailRow
                             label="Handling"
                             value={fmt(order.handlingCostHuf)}
                         />
                     )}
-                    <Row label="Shipping" value={fmt(order.shippingCostHuf)} />
+                    <DetailRow
+                        label="Shipping"
+                        value={fmt(order.shippingCostHuf)}
+                    />
                     {order.discountHuf > 0 && (
-                        <Row
+                        <DetailRow
                             label="Discount"
                             value={`-${fmt(order.discountHuf)}`}
                         />
                     )}
-                    <div className="my-2 h-px bg-stone-200" />
-                    <Row label="Total" value={fmt(order.totalHuf)} emphasis />
-                </Card>
+                    <div
+                        className="my-3 h-px"
+                        style={{ background: "var(--color-border)" }}
+                    />
+                    <DetailRow
+                        label="Total"
+                        value={fmt(order.totalHuf)}
+                        emphasis
+                    />
+                </DetailCard>
 
-                <Card title="Shipping address" className="md:col-span-2">
-                    <p className="text-sm">{order.recipientName}</p>
-                    <p className="text-sm">{order.line1}</p>
-                    {order.line2 && <p className="text-sm">{order.line2}</p>}
-                    <p className="text-sm">
-                        {order.postalCode} {order.city}, {order.countryCode}
-                    </p>
-                    {order.phone && (
-                        <p className="text-xs text-stone-500">
-                            Phone: {order.phone}
+                <DetailCard title="Shipping address" className="md:col-span-2">
+                    <div className="space-y-1">
+                        <p
+                            className="text-sm font-medium"
+                            style={{ color: "var(--color-text)" }}
+                        >
+                            {order.recipientName}
                         </p>
-                    )}
-                </Card>
+                        <p
+                            className="text-sm"
+                            style={{ color: "var(--color-text-muted)" }}
+                        >
+                            {order.line1}
+                        </p>
+                        {order.line2 && (
+                            <p
+                                className="text-sm"
+                                style={{ color: "var(--color-text-muted)" }}
+                            >
+                                {order.line2}
+                            </p>
+                        )}
+                        <p
+                            className="text-sm"
+                            style={{ color: "var(--color-text-muted)" }}
+                        >
+                            {order.postalCode} {order.city}, {order.countryCode}
+                        </p>
+                        {order.phone && (
+                            <p
+                                className="text-xs pt-1"
+                                style={{ color: "var(--color-text-subtle)" }}
+                            >
+                                Phone: {order.phone}
+                            </p>
+                        )}
+                    </div>
+                </DetailCard>
             </div>
         </div>
     );
 }
 
-function Card({
+function DetailCard({
     title,
     children,
     className,
@@ -116,20 +167,14 @@ function Card({
     className?: string;
 }) {
     return (
-        <div
-            className={`rounded-lg border border-stone-200 bg-white p-5 ${
-                className ?? ""
-            }`}
-        >
-            <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-stone-500">
-                {title}
-            </h2>
-            <div className="space-y-1.5">{children}</div>
+        <div className={`card p-6 ${className ?? ""}`}>
+            <h2 className="section-label mb-4">{title}</h2>
+            <div className="space-y-2.5">{children}</div>
         </div>
     );
 }
 
-function Row({
+function DetailRow({
     label,
     value,
     emphasis,
@@ -140,11 +185,10 @@ function Row({
 }) {
     return (
         <div className="flex items-center justify-between text-sm">
-            <span className="text-stone-600">{label}</span>
+            <span style={{ color: "var(--color-text-muted)" }}>{label}</span>
             <span
-                className={emphasis
-                    ? "text-base font-semibold"
-                    : "text-stone-800"}
+                className={emphasis ? "text-base font-semibold" : "font-medium"}
+                style={{ color: "var(--color-text)" }}
             >
                 {value}
             </span>

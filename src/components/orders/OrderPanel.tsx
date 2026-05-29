@@ -330,17 +330,23 @@ export default function OrderPanel({
     }
 
     return (
-        <section className="rounded-[28px] border border-stone-300 bg-white/95 p-6 shadow-sm">
+        <section className="card p-6">
             <header className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
                 <div>
-                    <p className="text-xs font-semibold uppercase tracking-[0.24em] text-stone-500">
+                    <p className="section-label">
                         Print &amp; Ship
                     </p>
-                    <h2 className="text-2xl font-semibold text-stone-900">
+                    <h2
+                        className="text-2xl font-semibold mt-1"
+                        style={{ color: "var(--color-text)" }}
+                    >
                         Order printed copies
                     </h2>
                     {submissionTitle && (
-                        <p className="text-sm text-stone-500">
+                        <p
+                            className="text-sm mt-1"
+                            style={{ color: "var(--color-text-muted)" }}
+                        >
                             For:{" "}
                             <span className="font-medium">
                                 {submissionTitle}
@@ -349,7 +355,10 @@ export default function OrderPanel({
                     )}
                 </div>
                 {!standalone && (
-                    <p className="text-xs text-stone-500">
+                    <p
+                        className="text-xs"
+                        style={{ color: "var(--color-text-muted)" }}
+                    >
                         Prices shown in your selected currency. Shipping rates
                         from Magyar Posta.
                     </p>
@@ -360,8 +369,8 @@ export default function OrderPanel({
                 {/* Controls */}
                 <div className="space-y-5">
                     <div>
-                        <label className="flex items-center justify-between text-sm font-medium text-stone-700">
-                            <span>Quantity</span>
+                        <label className="flex items-center justify-between">
+                            <span className="label">Quantity</span>
                             <input
                                 type="number"
                                 min={QUANTITY_MIN}
@@ -381,7 +390,12 @@ export default function OrderPanel({
                                         );
                                     }
                                 }}
-                                className="w-24 rounded-md border border-stone-300 px-2 py-1 text-right text-base font-semibold"
+                                className="input"
+                                style={{
+                                    width: "6rem",
+                                    textAlign: "right",
+                                    fontWeight: 600,
+                                }}
                             />
                         </label>
                         <input
@@ -392,6 +406,7 @@ export default function OrderPanel({
                             onChange={(event) =>
                                 setQuantity(Number(event.target.value))}
                             className="mt-2 w-full"
+                            style={{ accentColor: "var(--color-primary)" }}
                         />
                         <div className="mt-1 flex flex-wrap gap-1 text-xs">
                             {PRICE_BREAK_QUANTITIES.map((qty) => (
@@ -399,11 +414,18 @@ export default function OrderPanel({
                                     key={qty}
                                     type="button"
                                     onClick={() => setQuantity(qty)}
-                                    className={`rounded-full border px-2 py-0.5 transition ${
-                                        quantity === qty
-                                            ? "border-blue-500 bg-blue-50 text-blue-700"
-                                            : "border-stone-300 text-stone-600 hover:bg-stone-50"
-                                    }`}
+                                    className="rounded-full px-2 py-0.5 transition"
+                                    style={{
+                                        border: quantity === qty
+                                            ? "1.5px solid var(--color-primary)"
+                                            : "1px solid var(--color-border-strong)",
+                                        background: quantity === qty
+                                            ? "var(--color-primary-muted)"
+                                            : "transparent",
+                                        color: quantity === qty
+                                            ? "var(--color-primary)"
+                                            : "var(--color-text-muted)",
+                                    }}
                                     title={`Sweet spot: ${qty} copies`}
                                 >
                                     {qty}
@@ -417,7 +439,14 @@ export default function OrderPanel({
                                         setQuantity(
                                             suggestion.suggestedQuantity,
                                         )}
-                                    className="rounded-full border border-emerald-400 bg-emerald-50 px-2 py-0.5 text-emerald-700 hover:bg-emerald-100"
+                                    className="rounded-full px-2 py-0.5"
+                                    style={{
+                                        border:
+                                            "1px solid var(--color-success)",
+                                        background:
+                                            "var(--color-success-light)",
+                                        color: "#065F46",
+                                    }}
                                 >
                                     Try {suggestion.suggestedQuantity}{" "}
                                     (-{suggestion.savingsPct}% / book)
@@ -427,14 +456,14 @@ export default function OrderPanel({
                     </div>
 
                     <div>
-                        <label className="block text-sm font-medium text-stone-700">
+                        <label className="label">
                             Shipping destination
                         </label>
                         <select
                             value={zone}
                             onChange={(event) =>
                                 setZone(event.target.value as Zone)}
-                            className="mt-1 w-full rounded-md border border-stone-300 px-3 py-2 text-sm"
+                            className="input mt-1"
                         >
                             {config.enabledZones.map((z) => (
                                 <option key={z} value={z}>
@@ -445,7 +474,7 @@ export default function OrderPanel({
                     </div>
 
                     <div>
-                        <label className="block text-sm font-medium text-stone-700">
+                        <label className="label">
                             Display currency
                         </label>
                         <select
@@ -454,7 +483,7 @@ export default function OrderPanel({
                                 const next = event.target.value;
                                 if (isCurrency(next)) setCurrency(next);
                             }}
-                            className="mt-1 w-full rounded-md border border-stone-300 px-3 py-2 text-sm"
+                            className="input mt-1"
                         >
                             {SUPPORTED_CURRENCIES.map((c) => (
                                 <option key={c} value={c}>
@@ -462,7 +491,10 @@ export default function OrderPanel({
                                 </option>
                             ))}
                         </select>
-                        <p className="mt-1 text-[11px] text-stone-500">
+                        <p
+                            className="mt-1 text-[11px]"
+                            style={{ color: "var(--color-text-muted)" }}
+                        >
                             Amounts are calculated in HUF and converted using
                             reference exchange rates.
                         </p>
@@ -473,13 +505,19 @@ export default function OrderPanel({
                             {messages.map((msg, idx) => (
                                 <li
                                     key={`${msg.level}-${idx}`}
-                                    className={`rounded-md px-3 py-2 text-xs ${
-                                        msg.level === "tip"
-                                            ? "bg-emerald-50 text-emerald-800"
+                                    className="rounded-lg px-3 py-2 text-xs"
+                                    style={{
+                                        background: msg.level === "tip"
+                                            ? "var(--color-success-light)"
                                             : msg.level === "warning"
-                                            ? "bg-rose-50 text-rose-800"
-                                            : "bg-amber-50 text-amber-800"
-                                    }`}
+                                            ? "var(--color-error-light)"
+                                            : "var(--color-accent-light)",
+                                        color: msg.level === "tip"
+                                            ? "#065F46"
+                                            : msg.level === "warning"
+                                            ? "#991B1B"
+                                            : "#92400E",
+                                    }}
                                 >
                                     {msg.text}
                                 </li>
@@ -490,13 +528,20 @@ export default function OrderPanel({
                     <button
                         type="button"
                         onClick={() => setShowAddress((s) => !s)}
-                        className="text-sm font-medium text-blue-600 hover:underline"
+                        className="text-sm font-medium transition"
+                        style={{ color: "var(--color-secondary)" }}
                     >
                         {showAddress ? "Hide" : "Add"} shipping address
                     </button>
 
                     {showAddress && (
-                        <div className="grid gap-3 rounded-2xl border border-stone-200 bg-stone-50 p-4 sm:grid-cols-2">
+                        <div
+                            className="grid gap-3 rounded-xl p-4 sm:grid-cols-2"
+                            style={{
+                                border: "1px solid var(--color-border)",
+                                background: "var(--color-surface)",
+                            }}
+                        >
                             <AddressInput
                                 label="Recipient name"
                                 value={address.recipientName}
@@ -556,8 +601,14 @@ export default function OrderPanel({
                 </div>
 
                 {/* Breakdown */}
-                <aside className="rounded-2xl border border-stone-200 bg-stone-50 p-5">
-                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-stone-500">
+                <aside
+                    className="rounded-xl p-5"
+                    style={{
+                        border: "1px solid var(--color-border)",
+                        background: "var(--color-surface)",
+                    }}
+                >
+                    <p className="section-label">
                         Estimate
                     </p>
                     {breakdown
@@ -609,7 +660,13 @@ export default function OrderPanel({
                                         }`}
                                     />
                                 )}
-                                <div className="my-2 h-px bg-stone-300" />
+                                <div
+                                    className="my-2 h-px"
+                                    style={{
+                                        background:
+                                            "var(--color-border-strong)",
+                                    }}
+                                />
                                 <Row
                                     label="Total"
                                     value={formatMoney(
@@ -628,7 +685,10 @@ export default function OrderPanel({
                                     )}
                                     muted
                                 />
-                                <p className="text-xs text-stone-500">
+                                <p
+                                    className="text-xs"
+                                    style={{ color: "var(--color-text-muted)" }}
+                                >
                                     Shipment weight {breakdown.weightGrams}{" "}
                                     g · band {breakdown.shippingBand + 1} of
                                     {" "}
@@ -637,13 +697,22 @@ export default function OrderPanel({
                             </dl>
                         )
                         : (
-                            <p className="mt-3 text-sm text-stone-500">
+                            <p
+                                className="mt-3 text-sm"
+                                style={{ color: "var(--color-text-muted)" }}
+                            >
                                 {calcError ?? "Adjust quantity to see pricing."}
                             </p>
                         )}
 
                     {placeOrderDisabledReason && (
-                        <p className="mt-4 rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                        <p
+                            className="mt-4 rounded-lg px-3 py-2 text-xs"
+                            style={{
+                                background: "var(--color-accent-light)",
+                                color: "#92400E",
+                            }}
+                        >
                             {placeOrderDisabledReason}{" "}
                             {!standalone && (
                                 <Link href="/dashboard" className="underline">
@@ -657,7 +726,7 @@ export default function OrderPanel({
                         type="button"
                         onClick={handlePlaceOrder}
                         disabled={!canPlaceOrder || submitting}
-                        className="mt-4 w-full rounded-full bg-stone-900 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-stone-700 disabled:cursor-not-allowed disabled:opacity-50"
+                        className="btn btn-primary w-full mt-4"
                     >
                         {submitting
                             ? "Placing order..."
@@ -665,7 +734,10 @@ export default function OrderPanel({
                             ? "Calculating..."
                             : "Place order"}
                     </button>
-                    <p className="mt-2 text-[11px] text-stone-500">
+                    <p
+                        className="mt-2 text-[11px]"
+                        style={{ color: "var(--color-text-muted)" }}
+                    >
                         No charge yet. You will be invoiced once the order is
                         reviewed.
                     </p>
@@ -688,15 +760,29 @@ function Row({
 }) {
     return (
         <div className="flex items-center justify-between">
-            <dt className={muted ? "text-xs text-stone-500" : "text-stone-600"}>
+            <dt
+                className={muted ? "text-xs" : "text-sm"}
+                style={{
+                    color: muted
+                        ? "var(--color-text-muted)"
+                        : "var(--color-text-muted)",
+                }}
+            >
                 {label}
             </dt>
             <dd
                 className={emphasis
-                    ? "text-base font-semibold text-stone-900"
+                    ? "text-base font-semibold"
                     : muted
-                    ? "text-xs text-stone-500"
-                    : "text-stone-800"}
+                    ? "text-xs"
+                    : "text-sm"}
+                style={{
+                    color: emphasis
+                        ? "var(--color-text)"
+                        : muted
+                        ? "var(--color-text-muted)"
+                        : "var(--color-text)",
+                }}
             >
                 {value}
             </dd>
@@ -717,12 +803,13 @@ function AddressInput({
 }) {
     return (
         <label className={`block text-xs ${full ? "sm:col-span-2" : ""}`}>
-            <span className="text-stone-600">{label}</span>
+            <span style={{ color: "var(--color-text-muted)" }}>{label}</span>
             <input
                 type="text"
                 value={value}
                 onChange={(event) => onChange(event.target.value)}
-                className="mt-1 w-full rounded-md border border-stone-300 bg-white px-2 py-1.5 text-sm"
+                className="input mt-1"
+                style={{ padding: "0.375rem 0.5rem", fontSize: "0.875rem" }}
             />
         </label>
     );

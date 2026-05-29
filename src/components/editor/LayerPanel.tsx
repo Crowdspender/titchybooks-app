@@ -52,17 +52,25 @@ export default function LayerPanel({
     (isInstanceMode ? templateElements.length : 0);
 
   return (
-    <aside className="rounded-[24px] border border-stone-300 bg-white p-5 shadow-sm">
+    <aside className="card p-5">
       <div className="flex items-center justify-between">
-        <p className="text-sm font-semibold text-stone-800">Layers</p>
-        <span className="text-xs uppercase tracking-[0.18em] text-stone-500">
+        <p
+          className="text-sm font-semibold"
+          style={{ color: "var(--color-text)" }}
+        >
+          Layers
+        </p>
+        <span className="section-label">
           {totalElements} total
         </span>
       </div>
 
       {totalElements === 0
         ? (
-          <p className="mt-3 text-sm leading-6 text-stone-500">
+          <p
+            className="mt-3 text-sm leading-6"
+            style={{ color: "var(--color-text-muted)" }}
+          >
             Add text boxes or images to populate this page&apos;s layer stack.
           </p>
         )
@@ -71,70 +79,25 @@ export default function LayerPanel({
             {/* Template Elements Section */}
             {hasTemplateElements && (
               <>
-                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-stone-400">
+                <p className="section-label">
                   Template Elements
                 </p>
                 {orderedTemplateElements.map((element, index) => {
                   const isTextEditable = element.type === "text";
                   const isSelected = selectedElementId === element.id;
-                  const commonClass = `rounded-2xl border p-3 transition ${
-                    isSelected
-                      ? "border-blue-500 bg-blue-50"
-                      : "border-stone-200 bg-stone-50/50 opacity-70"
-                  }`;
-                  const body = (
-                    <div className="flex items-center justify-between">
-                      <div className="min-w-0">
-                        <p
-                          className={`truncate text-sm font-medium ${
-                            isTextEditable ? "text-stone-700" : "text-stone-600"
-                          }`}
-                        >
-                          {getLayerTitle(element, index)}
-                        </p>
-                        <p className="mt-1 text-xs uppercase tracking-[0.16em] text-stone-400">
-                          {isTextEditable
-                            ? `${element.type} · editable text`
-                            : element.type}
-                        </p>
-                      </div>
-                      <svg
-                        className="h-4 w-4 text-stone-400"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        stroke="currentColor"
-                        strokeWidth={2}
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"
-                        />
-                      </svg>
-                    </div>
-                  );
-
-                  if (isTextEditable) {
-                    return (
-                      <button
-                        key={element.id}
-                        type="button"
-                        onClick={() => onSelectElement(element.id)}
-                        className={`w-full text-left ${commonClass}`}
-                      >
-                        {body}
-                      </button>
-                    );
-                  }
-
                   return (
-                    <div key={element.id} className={commonClass}>
-                      {body}
-                    </div>
+                    <TemplateLayerItem
+                      key={element.id}
+                      element={element}
+                      index={index}
+                      isSelected={isSelected}
+                      isTextEditable={isTextEditable}
+                      onSelect={() => onSelectElement(element.id)}
+                    />
                   );
                 })}
-                <div className="border-t border-stone-200 my-2" />
-                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-stone-500">
+                <div className="divider my-2" />
+                <p className="section-label">
                   Your Elements
                 </p>
               </>
@@ -147,11 +110,15 @@ export default function LayerPanel({
               return (
                 <div
                   key={element.id}
-                  className={`rounded-2xl border p-3 transition ${
-                    isSelected
-                      ? "border-blue-500 bg-blue-50"
-                      : "border-stone-300 bg-stone-50"
-                  }`}
+                  className="rounded-xl p-3 transition"
+                  style={{
+                    border: isSelected
+                      ? "2px solid var(--color-primary)"
+                      : "1px solid var(--color-border)",
+                    background: isSelected
+                      ? "var(--color-primary-muted)"
+                      : "var(--color-surface)",
+                  }}
                 >
                   <button
                     type="button"
@@ -159,14 +126,20 @@ export default function LayerPanel({
                     className="flex w-full items-center justify-between gap-3 text-left"
                   >
                     <div className="min-w-0">
-                      <p className="truncate text-sm font-semibold text-stone-800">
+                      <p
+                        className="truncate text-sm font-semibold"
+                        style={{ color: "var(--color-text)" }}
+                      >
                         {getLayerTitle(element, index)}
                       </p>
-                      <p className="mt-1 text-xs uppercase tracking-[0.16em] text-stone-500">
+                      <p className="mt-1 section-label">
                         {element.type}
                       </p>
                     </div>
-                    <span className="text-xs text-stone-500">
+                    <span
+                      className="text-xs"
+                      style={{ color: "var(--color-text-muted)" }}
+                    >
                       z{element.zIndex}
                     </span>
                   </button>
@@ -175,28 +148,38 @@ export default function LayerPanel({
                     <button
                       type="button"
                       onClick={() => onToggleVisibility(element.id)}
-                      className="rounded-full border border-stone-300 px-2 py-1 text-xs font-medium text-stone-700 transition hover:border-stone-400 hover:bg-white"
+                      className="btn btn-outline btn-sm"
+                      style={{ fontSize: "0.75rem", padding: "0.25rem 0.5rem" }}
                     >
                       {element.visible ? "Hide" : "Show"}
                     </button>
                     <button
                       type="button"
                       onClick={() => onToggleLock(element.id)}
-                      className="rounded-full border border-stone-300 px-2 py-1 text-xs font-medium text-stone-700 transition hover:border-stone-400 hover:bg-white"
+                      className="btn btn-outline btn-sm"
+                      style={{ fontSize: "0.75rem", padding: "0.25rem 0.5rem" }}
                     >
                       {element.locked ? "Unlock" : "Lock"}
                     </button>
                     <button
                       type="button"
                       onClick={() => onDuplicateElement(element.id)}
-                      className="rounded-full border border-stone-300 px-2 py-1 text-xs font-medium text-stone-700 transition hover:border-stone-400 hover:bg-white"
+                      className="btn btn-outline btn-sm"
+                      style={{ fontSize: "0.75rem", padding: "0.25rem 0.5rem" }}
                     >
                       Copy
                     </button>
                     <button
                       type="button"
                       onClick={() => onDeleteElement(element.id)}
-                      className="rounded-full border border-red-200 px-2 py-1 text-xs font-medium text-red-700 transition hover:bg-red-50"
+                      className="btn btn-sm"
+                      style={{
+                        fontSize: "0.75rem",
+                        padding: "0.25rem 0.5rem",
+                        border: "1px solid var(--color-error-light)",
+                        color: "var(--color-error)",
+                        background: "transparent",
+                      }}
                     >
                       Delete
                     </button>
@@ -207,5 +190,80 @@ export default function LayerPanel({
           </div>
         )}
     </aside>
+  );
+}
+
+function TemplateLayerItem({
+  element,
+  index,
+  isSelected,
+  isTextEditable,
+  onSelect,
+}: {
+  element: EditorElement;
+  index: number;
+  isSelected: boolean;
+  isTextEditable: boolean;
+  onSelect: () => void;
+}) {
+  const commonStyle = {
+    border: isSelected
+      ? "2px solid var(--color-info)"
+      : "1px solid var(--color-border)",
+    background: isSelected ? "var(--color-info-light)" : "var(--color-surface)",
+    opacity: isTextEditable ? 1 : 0.7,
+  };
+
+  const body = (
+    <div className="flex items-center justify-between">
+      <div className="min-w-0">
+        <p
+          className="truncate text-sm font-medium"
+          style={{
+            color: isTextEditable
+              ? "var(--color-text)"
+              : "var(--color-text-muted)",
+          }}
+        >
+          {getLayerTitle(element, index)}
+        </p>
+        <p className="mt-1 section-label">
+          {isTextEditable ? `${element.type} · editable text` : element.type}
+        </p>
+      </div>
+      <svg
+        className="h-4 w-4"
+        style={{ color: "var(--color-text-subtle)" }}
+        fill="none"
+        viewBox="0 0 24 24"
+        stroke="currentColor"
+        strokeWidth={2}
+      >
+        <path
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"
+        />
+      </svg>
+    </div>
+  );
+
+  if (isTextEditable) {
+    return (
+      <button
+        type="button"
+        onClick={onSelect}
+        className="w-full rounded-xl p-3 text-left transition"
+        style={commonStyle}
+      >
+        {body}
+      </button>
+    );
+  }
+
+  return (
+    <div className="rounded-xl p-3 transition" style={commonStyle}>
+      {body}
+    </div>
   );
 }

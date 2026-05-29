@@ -2,18 +2,17 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { toast } from "sonner";
 
 export default function RegisterForm() {
   const router = useRouter();
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    setError("");
     setLoading(true);
 
     try {
@@ -26,57 +25,48 @@ export default function RegisterForm() {
       const data = await res.json();
 
       if (!res.ok) {
-        setError(data.error || "Registration failed");
+        toast.error(data.error || "Registration failed");
         setLoading(false);
         return;
       }
 
       router.push("/login?registered=true");
     } catch {
-      setError("Something went wrong");
+      toast.error("Something went wrong. Please try again.");
       setLoading(false);
     }
   }
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-4 w-full max-w-sm">
-      {error && (
-        <div className="bg-red-50 text-red-600 p-3 rounded-md text-sm">
-          {error}
-        </div>
-      )}
+    <form onSubmit={handleSubmit} className="space-y-5">
       <div>
-        <label htmlFor="name" className="block text-sm font-medium mb-1">
-          Name
-        </label>
+        <label htmlFor="name" className="label">Name</label>
         <input
           id="name"
           type="text"
           value={name}
           onChange={(e) => setName(e.target.value)}
           required
-          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+          className="input"
           placeholder="Your name"
         />
       </div>
+
       <div>
-        <label htmlFor="email" className="block text-sm font-medium mb-1">
-          Email
-        </label>
+        <label htmlFor="email" className="label">Email</label>
         <input
           id="email"
           type="email"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
           required
-          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+          className="input"
           placeholder="you@example.com"
         />
       </div>
+
       <div>
-        <label htmlFor="password" className="block text-sm font-medium mb-1">
-          Password
-        </label>
+        <label htmlFor="password" className="label">Password</label>
         <input
           id="password"
           type="password"
@@ -84,23 +74,49 @@ export default function RegisterForm() {
           onChange={(e) => setPassword(e.target.value)}
           required
           minLength={8}
-          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+          className="input"
           placeholder="Min 8 characters"
         />
+        <p
+          className="mt-1.5 text-xs"
+          style={{ color: "var(--color-text-subtle)" }}
+        >
+          Must be at least 8 characters
+        </p>
       </div>
+
       <button
         type="submit"
         disabled={loading}
-        className="w-full py-2 px-4 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+        className="btn btn-primary w-full btn-lg"
       >
-        {loading ? "Creating account..." : "Create Account"}
+        {loading
+          ? (
+            <span className="flex items-center gap-2">
+              <svg
+                className="animate-spin"
+                width="16"
+                height="16"
+                viewBox="0 0 16 16"
+                fill="none"
+              >
+                <circle
+                  cx="8"
+                  cy="8"
+                  r="6"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeDasharray="30"
+                  strokeDashoffset="10"
+                />
+              </svg>
+              Creating account...
+            </span>
+          )
+          : (
+            "Create account"
+          )}
       </button>
-      <p className="text-sm text-center text-gray-600">
-        Already have an account?{" "}
-        <a href="/login" className="text-blue-600 hover:underline">
-          Sign in
-        </a>
-      </p>
     </form>
   );
 }

@@ -138,8 +138,16 @@ export default function PricingConfigForm() {
 
     if (loading || !config) {
         return (
-            <div className="max-w-5xl mx-auto px-4 py-8">
-                <div className="h-32 animate-pulse rounded-lg bg-gray-100" />
+            <div className="page-container py-10">
+                <div
+                    className="card p-10 animate-pulse"
+                    style={{ background: "var(--color-border)" }}
+                >
+                    <div
+                        className="h-6 w-48 rounded"
+                        style={{ background: "var(--color-border-strong)" }}
+                    />
+                </div>
             </div>
         );
     }
@@ -265,19 +273,28 @@ export default function PricingConfigForm() {
     }
 
     return (
-        <div className="max-w-5xl mx-auto px-4 py-8 space-y-6">
-            <div className="flex items-center justify-between">
-                <h1 className="text-2xl font-bold">Pricing Configuration</h1>
-                <span className="text-xs text-stone-500">
+        <div className="page-container py-10 space-y-6">
+            <div className="flex items-center justify-between mb-2">
+                <div>
+                    <p className="section-label mb-2">Administration</p>
+                    <h1
+                        className="text-3xl font-semibold tracking-tight"
+                        style={{ color: "var(--color-text)" }}
+                    >
+                        Pricing Configuration
+                    </h1>
+                </div>
+                <span
+                    className="badge badge-draft"
+                    style={{ fontSize: "0.75rem" }}
+                >
                     Version {version}
                 </span>
             </div>
 
             {/* Global numbers */}
-            <section className="rounded-lg border border-stone-200 p-5">
-                <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-stone-500">
-                    Globals
-                </h2>
+            <section className="card p-6">
+                <h2 className="section-label mb-4">Globals</h2>
                 <div className="grid gap-4 sm:grid-cols-3">
                     <NumberField
                         label="Weight per book (g)"
@@ -300,10 +317,8 @@ export default function PricingConfigForm() {
             </section>
 
             {/* Enabled zones */}
-            <section className="rounded-lg border border-stone-200 p-5">
-                <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-stone-500">
-                    Enabled zones
-                </h2>
+            <section className="card p-6">
+                <h2 className="section-label mb-4">Enabled zones</h2>
                 <div className="flex flex-wrap gap-3">
                     {ZONES.map((zone) => (
                         <label
@@ -322,10 +337,8 @@ export default function PricingConfigForm() {
             </section>
 
             {/* Weight bands + shipping table */}
-            <section className="rounded-lg border border-stone-200 p-5">
-                <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-stone-500">
-                    Shipping table (HUF)
-                </h2>
+            <section className="card p-6">
+                <h2 className="section-label mb-4">Shipping table (HUF)</h2>
                 <div className="overflow-x-auto">
                     <table className="min-w-full text-sm">
                         <thead>
@@ -338,7 +351,13 @@ export default function PricingConfigForm() {
                                         key={idx}
                                         className="px-3 py-2 text-left font-medium"
                                     >
-                                        <span className="text-xs text-stone-500">
+                                        <span
+                                            className="text-xs"
+                                            style={{
+                                                color:
+                                                    "var(--color-text-subtle)",
+                                            }}
+                                        >
                                             ≤
                                         </span>
                                         <input
@@ -350,7 +369,7 @@ export default function PricingConfigForm() {
                                                     idx,
                                                     Number(event.target.value),
                                                 )}
-                                            className="ml-1 w-20 rounded border border-stone-300 px-1 py-0.5 text-xs"
+                                            className="input w-20 py-0.5 px-1.5 text-xs inline-block"
                                         />
                                         g
                                     </th>
@@ -382,7 +401,7 @@ export default function PricingConfigForm() {
                                                             event.target.value,
                                                         ),
                                                     )}
-                                                className="w-24 rounded border border-stone-300 px-2 py-1 text-sm"
+                                                className="input w-24 py-1 px-2 text-sm"
                                             />
                                         </td>
                                     ))}
@@ -394,30 +413,34 @@ export default function PricingConfigForm() {
             </section>
 
             {/* Price tiers */}
-            <section className="rounded-lg border border-stone-200 p-5">
+            <section className="card p-6">
                 <div className="mb-4 flex items-center justify-between">
-                    <h2 className="text-sm font-semibold uppercase tracking-wide text-stone-500">
-                        Price tiers
-                    </h2>
+                    <h2 className="section-label">Price tiers</h2>
                     <div className="flex items-center gap-2">
                         <button
                             type="button"
                             onClick={resetTiersToDefaults}
-                            className="rounded border border-stone-300 px-3 py-1 text-xs text-stone-700 hover:bg-stone-50"
+                            className="btn btn-outline btn-sm text-xs"
                         >
                             Reset to defaults
                         </button>
                         <button
                             type="button"
                             onClick={addTier}
-                            className="rounded bg-blue-600 px-3 py-1 text-xs text-white hover:bg-blue-700"
+                            className="btn btn-primary btn-sm text-xs"
                         >
                             Add tier
                         </button>
                     </div>
                 </div>
                 {tierError && (
-                    <p className="mb-3 rounded bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                    <p
+                        className="mb-3 rounded-lg px-3 py-2 text-xs"
+                        style={{
+                            background: "var(--color-accent-light)",
+                            color: "#92400E",
+                        }}
+                    >
                         {tierError}
                     </p>
                 )}
@@ -448,7 +471,7 @@ export default function PricingConfigForm() {
                                             setTierField(idx, {
                                                 min: Number(event.target.value),
                                             })}
-                                        className="w-20 rounded border border-stone-300 px-2 py-1 text-sm"
+                                        className="input w-20 py-1 px-2 text-sm"
                                     />
                                 </td>
                                 <td className="px-3 py-2">
@@ -460,7 +483,7 @@ export default function PricingConfigForm() {
                                             setTierField(idx, {
                                                 max: Number(event.target.value),
                                             })}
-                                        className="w-20 rounded border border-stone-300 px-2 py-1 text-sm"
+                                        className="input w-20 py-1 px-2 text-sm"
                                     />
                                 </td>
                                 <td className="px-3 py-2">
@@ -474,7 +497,7 @@ export default function PricingConfigForm() {
                                                     event.target.value,
                                                 ),
                                             })}
-                                        className="w-24 rounded border border-stone-300 px-2 py-1 text-sm"
+                                        className="input w-24 py-1 px-2 text-sm"
                                     />
                                 </td>
                                 <td className="px-3 py-2 text-right">
@@ -493,12 +516,19 @@ export default function PricingConfigForm() {
 
                 {/* Live preview — recalculated whenever tiers/config change */}
                 {tierPreview && (
-                    <div className="mt-6 rounded-md border border-stone-200 bg-stone-50 p-4">
+                    <div
+                        className="mt-6 rounded-lg p-4"
+                        style={{
+                            background: "var(--color-surface)",
+                            border: "1px solid var(--color-border)",
+                        }}
+                    >
                         <div className="mb-2 flex items-baseline justify-between">
-                            <h3 className="text-xs font-semibold uppercase tracking-wide text-stone-600">
-                                Live preview
-                            </h3>
-                            <span className="text-xs text-stone-500">
+                            <h3 className="section-label">Live preview</h3>
+                            <span
+                                className="text-xs"
+                                style={{ color: "var(--color-text-subtle)" }}
+                            >
                                 Shipping zone: {ZONE_LABELS[tierPreview.zone]}
                                 {" "}
                                 (first enabled)
@@ -574,20 +604,21 @@ export default function PricingConfigForm() {
             </section>
 
             {/* Currency rates */}
-            <section className="rounded-lg border border-stone-200 p-5">
+            <section className="card p-6">
                 <div className="mb-4 flex items-center justify-between">
-                    <h2 className="text-sm font-semibold uppercase tracking-wide text-stone-500">
-                        Currency rates
-                    </h2>
+                    <h2 className="section-label">Currency rates</h2>
                     <button
                         type="button"
                         onClick={resetRatesToDefaults}
-                        className="rounded border border-stone-300 px-3 py-1 text-xs text-stone-700 hover:bg-stone-50"
+                        className="btn btn-outline btn-sm text-xs"
                     >
                         Reset to defaults
                     </button>
                 </div>
-                <p className="mb-3 text-xs text-stone-500">
+                <p
+                    className="mb-3 text-xs"
+                    style={{ color: "var(--color-text-muted)" }}
+                >
                     HUF is the base currency and always equals 1. The values
                     below are the factor applied when displaying a HUF amount in
                     the target currency (e.g. 1 HUF ≈ 0.0026 EUR). These feed
@@ -630,7 +661,7 @@ export default function PricingConfigForm() {
                                             "EUR",
                                             Number(event.target.value),
                                         )}
-                                    className="w-32 rounded border border-stone-300 px-2 py-1 text-sm"
+                                    className="input w-32 py-1 px-2 text-sm"
                                 />
                             </td>
                             <td className="px-3 py-2 text-stone-500">
@@ -654,7 +685,7 @@ export default function PricingConfigForm() {
                                         "GBP",
                                         Number(event.target.value),
                                     )}
-                                    className="w-32 rounded border border-stone-300 px-2 py-1 text-sm"
+                                    className="input w-32 py-1 px-2 text-sm"
                                 />
                             </td>
                             <td className="px-3 py-2 text-stone-500">
@@ -673,7 +704,7 @@ export default function PricingConfigForm() {
                     type="button"
                     onClick={save}
                     disabled={saving || !!tierError}
-                    className="rounded-full bg-stone-900 px-6 py-2.5 text-sm font-semibold text-white hover:bg-stone-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    className="btn btn-primary btn-lg"
                 >
                     {saving ? "Saving..." : "Save pricing"}
                 </button>
@@ -694,16 +725,16 @@ function NumberField({
     step?: string;
 }) {
     return (
-        <label className="block text-sm">
-            <span className="text-stone-600">{label}</span>
+        <div>
+            <label className="label">{label}</label>
             <input
                 type="number"
                 value={value}
                 step={step ?? "1"}
                 min={0}
                 onChange={(event) => onChange(Number(event.target.value))}
-                className="mt-1 w-full rounded border border-stone-300 px-2 py-1.5 text-sm"
+                className="input"
             />
-        </label>
+        </div>
     );
 }

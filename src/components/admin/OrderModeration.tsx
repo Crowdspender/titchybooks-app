@@ -85,18 +85,27 @@ export default function OrderModeration() {
     }
 
     return (
-        <div className="max-w-6xl mx-auto px-4 py-8">
-            <h1 className="text-2xl font-bold mb-6">Order Moderation</h1>
+        <div className="page-container py-10">
+            <div className="mb-8">
+                <p className="section-label mb-2">Administration</p>
+                <h1
+                    className="text-3xl font-semibold tracking-tight"
+                    style={{ color: "var(--color-text)" }}
+                >
+                    Order Moderation
+                </h1>
+            </div>
 
-            <div className="mb-4 flex flex-wrap gap-2">
+            <div
+                className="flex flex-wrap gap-2 mb-6 pb-6"
+                style={{ borderBottom: "1px solid var(--color-border)" }}
+            >
                 {STATUS_FILTERS.map((status) => (
                     <button
                         key={status || "all"}
                         onClick={() => setFilter(status)}
-                        className={`px-3 py-1 text-sm rounded-md ${
-                            filter === status
-                                ? "bg-blue-600 text-white"
-                                : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                        className={`btn btn-sm ${
+                            filter === status ? "btn-primary" : "btn-ghost"
                         }`}
                     >
                         {status || "All"}
@@ -110,188 +119,283 @@ export default function OrderModeration() {
                         {[1, 2, 3].map((i) => (
                             <div
                                 key={i}
-                                className="h-16 bg-gray-100 rounded-lg animate-pulse"
-                            />
+                                className="card p-5 animate-pulse"
+                                style={{ background: "var(--color-border)" }}
+                            >
+                                <div
+                                    className="h-4 w-40 rounded"
+                                    style={{
+                                        background:
+                                            "var(--color-border-strong)",
+                                    }}
+                                />
+                            </div>
                         ))}
                     </div>
                 )
                 : orders.length === 0
                 ? (
-                    <p className="text-gray-500 text-center py-12">
-                        No orders found.
-                    </p>
+                    <div className="card p-12 text-center">
+                        <div
+                            className="inline-flex items-center justify-center w-16 h-16 rounded-2xl mb-4"
+                            style={{ background: "var(--color-primary-muted)" }}
+                        >
+                            <svg
+                                width="32"
+                                height="32"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="var(--color-primary)"
+                                strokeWidth="1.5"
+                            >
+                                <path
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                    d="M2.25 3h1.386c.51 0 .955.343 1.087.835l.383 1.437M7.5 14.25a3 3 0 00-3 3h15.75m-12.75-3h11.218c1.121-2.3 2.1-4.684 2.924-7.138a60.114 60.114 0 00-16.536-1.84M7.5 14.25L5.106 5.272M6 20.25a.75.75 0 11-1.5 0 .75.75 0 011.5 0zm12.75 0a.75.75 0 11-1.5 0 .75.75 0 011.5 0z"
+                                />
+                            </svg>
+                        </div>
+                        <p
+                            className="font-medium mb-1"
+                            style={{ color: "var(--color-text)" }}
+                        >
+                            No orders yet
+                        </p>
+                        <p
+                            className="text-sm"
+                            style={{ color: "var(--color-text-muted)" }}
+                        >
+                            Orders will appear here once users start placing
+                            print orders.
+                        </p>
+                    </div>
                 )
                 : (
-                    <div className="border border-gray-200 rounded-lg overflow-hidden">
-                        <table className="w-full text-sm">
-                            <thead className="bg-gray-50">
-                                <tr>
-                                    <th className="text-left px-4 py-2 font-medium">
-                                        User
-                                    </th>
-                                    <th className="text-left px-4 py-2 font-medium">
-                                        Titchybook
-                                    </th>
-                                    <th className="text-left px-4 py-2 font-medium">
-                                        Qty
-                                    </th>
-                                    <th className="text-left px-4 py-2 font-medium">
-                                        Zone
-                                    </th>
-                                    <th className="text-left px-4 py-2 font-medium">
-                                        Total
-                                    </th>
-                                    <th className="text-left px-4 py-2 font-medium">
-                                        Status
-                                    </th>
-                                    <th className="text-left px-4 py-2 font-medium">
-                                        Created
-                                    </th>
-                                    <th className="text-right px-4 py-2 font-medium">
-                                        Actions
-                                    </th>
-                                </tr>
-                            </thead>
-                            <tbody className="divide-y divide-gray-200">
-                                {orders.map((order) => {
-                                    const isEditing = editingId === order.id;
-                                    const allowedNext =
-                                        ORDER_STATUS_TRANSITIONS[
-                                            order.status
-                                        ] ?? [];
-                                    return (
-                                        <tr
-                                            key={order.id}
-                                            className="align-top"
-                                        >
-                                            <td className="px-4 py-3">
-                                                <div className="font-medium">
-                                                    {order.user.name || "—"}
-                                                </div>
-                                                <div className="text-xs text-gray-500">
-                                                    {order.user.email}
-                                                </div>
-                                            </td>
-                                            <td className="px-4 py-3">
-                                                {order.submission?.title ||
-                                                    "Titchybook"}
-                                                <div className="text-xs text-gray-500">
-                                                    {order.recipientName} ·{" "}
-                                                    {order.countryCode}
-                                                </div>
-                                            </td>
-                                            <td className="px-4 py-3">
-                                                {order.quantity}
-                                            </td>
-                                            <td className="px-4 py-3">
-                                                {order.zone}
-                                            </td>
-                                            <td className="px-4 py-3 font-medium">
-                                                {order.totalHuf.toLocaleString(
-                                                    "en-US",
-                                                )} HUF
-                                            </td>
-                                            <td className="px-4 py-3">
-                                                {isEditing
-                                                    ? (
-                                                        <select
-                                                            value={pendingStatus}
-                                                            onChange={(event) =>
-                                                                setPendingStatus(
+                    <div className="card overflow-hidden">
+                        <div className="overflow-x-auto">
+                            <table className="w-full text-sm">
+                                <thead>
+                                    <tr
+                                        style={{
+                                            background: "var(--color-surface)",
+                                            borderBottom:
+                                                "1px solid var(--color-border)",
+                                        }}
+                                    >
+                                        <th className="text-left px-5 py-3 section-label">
+                                            User
+                                        </th>
+                                        <th className="text-left px-5 py-3 section-label">
+                                            Titchybook
+                                        </th>
+                                        <th className="text-left px-5 py-3 section-label">
+                                            Qty
+                                        </th>
+                                        <th className="text-left px-5 py-3 section-label">
+                                            Zone
+                                        </th>
+                                        <th className="text-left px-5 py-3 section-label">
+                                            Total
+                                        </th>
+                                        <th className="text-left px-5 py-3 section-label">
+                                            Status
+                                        </th>
+                                        <th className="text-left px-5 py-3 section-label">
+                                            Created
+                                        </th>
+                                        <th className="text-right px-5 py-3 section-label">
+                                            Actions
+                                        </th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {orders.map((order) => {
+                                        const isEditing =
+                                            editingId === order.id;
+                                        const allowedNext =
+                                            ORDER_STATUS_TRANSITIONS[
+                                                order.status
+                                            ] ?? [];
+                                        return (
+                                            <tr
+                                                key={order.id}
+                                                className="align-top"
+                                                style={{
+                                                    borderBottom:
+                                                        "1px solid var(--color-border)",
+                                                }}
+                                            >
+                                                <td className="px-5 py-4">
+                                                    <div
+                                                        className="font-medium"
+                                                        style={{
+                                                            color:
+                                                                "var(--color-text)",
+                                                        }}
+                                                    >
+                                                        {order.user.name || "—"}
+                                                    </div>
+                                                    <div
+                                                        className="text-xs"
+                                                        style={{
+                                                            color:
+                                                                "var(--color-text-subtle)",
+                                                        }}
+                                                    >
+                                                        {order.user.email}
+                                                    </div>
+                                                </td>
+                                                <td
+                                                    className="px-5 py-4"
+                                                    style={{
+                                                        color:
+                                                            "var(--color-text)",
+                                                    }}
+                                                >
+                                                    {order.submission?.title ||
+                                                        "Titchybook"}
+                                                    <div
+                                                        className="text-xs"
+                                                        style={{
+                                                            color:
+                                                                "var(--color-text-subtle)",
+                                                        }}
+                                                    >
+                                                        {order.recipientName} ·
+                                                        {" "}
+                                                        {order.countryCode}
+                                                    </div>
+                                                </td>
+                                                <td className="px-5 py-4">
+                                                    {order.quantity}
+                                                </td>
+                                                <td
+                                                    className="px-5 py-4"
+                                                    style={{
+                                                        color:
+                                                            "var(--color-text-muted)",
+                                                    }}
+                                                >
+                                                    {order.zone}
+                                                </td>
+                                                <td className="px-5 py-4 font-medium">
+                                                    {order.totalHuf
+                                                        .toLocaleString(
+                                                            "en-US",
+                                                        )} HUF
+                                                </td>
+                                                <td className="px-5 py-4">
+                                                    {isEditing
+                                                        ? (
+                                                            <select
+                                                                value={pendingStatus}
+                                                                onChange={(
+                                                                    event,
+                                                                ) => setPendingStatus(
                                                                     event.target
                                                                         .value as OrderStatus,
                                                                 )}
-                                                            className="rounded border border-stone-300 px-2 py-1 text-xs"
-                                                        >
-                                                            <option
-                                                                value={order
-                                                                    .status}
+                                                                className="input text-xs py-1 px-2 w-auto"
                                                             >
-                                                                {order.status}
-                                                                {" "}
-                                                                (current)
-                                                            </option>
-                                                            {allowedNext.map((
-                                                                next,
-                                                            ) => (
                                                                 <option
-                                                                    key={next}
-                                                                    value={next}
+                                                                    value={order
+                                                                        .status}
                                                                 >
-                                                                    {next}
+                                                                    {order
+                                                                        .status}
+                                                                    {" "}
+                                                                    (current)
                                                                 </option>
-                                                            ))}
-                                                        </select>
-                                                    )
-                                                    : (
-                                                        <span className="rounded-full bg-stone-100 px-2 py-0.5 text-xs">
-                                                            {order.status
-                                                                .replace(
-                                                                    "_",
-                                                                    " ",
-                                                                )}
-                                                        </span>
-                                                    )}
-                                            </td>
-                                            <td className="px-4 py-3 text-gray-600 text-xs">
-                                                {new Date(order.createdAt)
-                                                    .toLocaleDateString()}
-                                            </td>
-                                            <td className="px-4 py-3 text-right">
-                                                {isEditing
-                                                    ? (
-                                                        <div className="flex flex-col items-end gap-2">
-                                                            <textarea
-                                                                value={pendingNotes}
-                                                                onChange={(
-                                                                    event,
-                                                                ) => setPendingNotes(
-                                                                    event.target
-                                                                        .value,
-                                                                )}
-                                                                placeholder="Internal notes"
-                                                                className="w-48 rounded border border-stone-300 p-1 text-xs"
-                                                                rows={2}
-                                                            />
-                                                            <div className="flex gap-2">
-                                                                <button
-                                                                    onClick={() =>
-                                                                        saveEdit(
-                                                                            order,
-                                                                        )}
-                                                                    className="px-2 py-1 text-xs bg-green-600 text-white rounded hover:bg-green-700"
-                                                                >
-                                                                    Save
-                                                                </button>
-                                                                <button
-                                                                    onClick={() =>
-                                                                        setEditingId(
-                                                                            null,
-                                                                        )}
-                                                                    className="px-2 py-1 text-xs bg-stone-200 text-stone-700 rounded"
-                                                                >
-                                                                    Cancel
-                                                                </button>
+                                                                {allowedNext
+                                                                    .map((
+                                                                        next,
+                                                                    ) => (
+                                                                        <option
+                                                                            key={next}
+                                                                            value={next}
+                                                                        >
+                                                                            {next}
+                                                                        </option>
+                                                                    ))}
+                                                            </select>
+                                                        )
+                                                        : (
+                                                            <span className="badge badge-draft">
+                                                                {order.status
+                                                                    .replace(
+                                                                        "_",
+                                                                        " ",
+                                                                    )}
+                                                            </span>
+                                                        )}
+                                                </td>
+                                                <td
+                                                    className="px-5 py-4 text-xs"
+                                                    style={{
+                                                        color:
+                                                            "var(--color-text-muted)",
+                                                    }}
+                                                >
+                                                    {new Date(order.createdAt)
+                                                        .toLocaleDateString()}
+                                                </td>
+                                                <td className="px-5 py-4 text-right">
+                                                    {isEditing
+                                                        ? (
+                                                            <div className="flex flex-col items-end gap-2">
+                                                                <textarea
+                                                                    value={pendingNotes}
+                                                                    onChange={(
+                                                                        event,
+                                                                    ) => setPendingNotes(
+                                                                        event
+                                                                            .target
+                                                                            .value,
+                                                                    )}
+                                                                    placeholder="Internal notes"
+                                                                    className="input text-xs p-1.5 w-48"
+                                                                    rows={2}
+                                                                />
+                                                                <div className="flex gap-2">
+                                                                    <button
+                                                                        onClick={() =>
+                                                                            saveEdit(
+                                                                                order,
+                                                                            )}
+                                                                        className="btn btn-success btn-sm text-xs"
+                                                                    >
+                                                                        Save
+                                                                    </button>
+                                                                    <button
+                                                                        onClick={() =>
+                                                                            setEditingId(
+                                                                                null,
+                                                                            )}
+                                                                        className="btn btn-ghost btn-sm text-xs"
+                                                                    >
+                                                                        Cancel
+                                                                    </button>
+                                                                </div>
                                                             </div>
-                                                        </div>
-                                                    )
-                                                    : (
-                                                        <button
-                                                            onClick={() =>
-                                                                startEdit(
-                                                                    order,
-                                                                )}
-                                                            className="px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700"
-                                                        >
-                                                            Update
-                                                        </button>
-                                                    )}
-                                            </td>
-                                        </tr>
-                                    );
-                                })}
-                            </tbody>
-                        </table>
+                                                        )
+                                                        : (
+                                                            <button
+                                                                onClick={() =>
+                                                                    startEdit(
+                                                                        order,
+                                                                    )}
+                                                                className="btn btn-primary btn-sm text-xs"
+                                                            >
+                                                                Update
+                                                            </button>
+                                                        )}
+                                                </td>
+                                            </tr>
+                                        );
+                                    })}
+                                </tbody>
+                            </table>
+                        </div>
                     </div>
                 )}
         </div>

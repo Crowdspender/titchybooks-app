@@ -952,12 +952,13 @@ export default function EditorCanvas({
   }
 
   return (
-    <div className="rounded-[28px] border border-stone-300 bg-stone-200/70 p-4 shadow-sm">
+    <div className="card p-4" style={{ background: "var(--color-surface)" }}>
       <Stage
         ref={stageRef}
         width={stageWidth}
         height={stageHeight}
-        className="mx-auto rounded-[22px] bg-white shadow-[0_20px_50px_rgba(0,0,0,0.12)]"
+        className="mx-auto rounded-xl bg-white"
+        style={{ boxShadow: "0 20px 50px rgba(28, 25, 23, 0.12)" }}
         onMouseDown={(event) => {
           if (event.target === event.target.getStage()) {
             onSelectElement(null);
@@ -985,7 +986,9 @@ export default function EditorCanvas({
           />
           {scene.elements
             .slice()
-            .sort((left, right) => left.zIndex - right.zIndex)
+            .sort((left, right) =>
+              left.zIndex - right.zIndex
+            )
             .map((element) => {
               const isTemplateEl = isInstanceMode &&
                 templateElementIds.has(element.id);

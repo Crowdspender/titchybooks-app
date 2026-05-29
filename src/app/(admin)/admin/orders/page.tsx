@@ -11,14 +11,30 @@ export default async function AdminOrdersPage() {
 
     return (
         <>
-            <div className="max-w-6xl mx-auto px-4 pt-6 flex gap-3 text-sm">
-                <Link href="/admin" className="text-stone-600 hover:underline">
+            <div
+                className="page-container pt-6 flex gap-1 text-sm"
+                style={{ borderBottom: "1px solid var(--color-border)" }}
+            >
+                <Link
+                    href="/admin"
+                    className="px-4 py-2.5 font-medium no-underline hover:text-stone-900 transition-colors"
+                    style={{ color: "var(--color-text-muted)" }}
+                >
                     Submissions
                 </Link>
-                <span className="text-blue-600 font-medium">Orders</span>
+                <span
+                    className="px-4 py-2.5 font-medium"
+                    style={{
+                        color: "var(--color-primary)",
+                        borderBottom: "2px solid var(--color-primary)",
+                    }}
+                >
+                    Orders
+                </span>
                 <Link
                     href="/admin/pricing"
-                    className="text-stone-600 hover:underline"
+                    className="px-4 py-2.5 font-medium no-underline hover:text-stone-900 transition-colors"
+                    style={{ color: "var(--color-text-muted)" }}
                 >
                     Pricing
                 </Link>

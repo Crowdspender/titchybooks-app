@@ -1,19 +1,26 @@
 "use client";
 
 import { signIn } from "next-auth/react";
-import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { useEffect, useState } from "react";
+import { toast } from "sonner";
 
 export default function LoginForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+
+  // Show success toast if redirected from registration
+  useEffect(() => {
+    if (searchParams.get("registered") === "true") {
+      toast.success("Account created! Please sign in.");
+    }
+  }, [searchParams]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    setError("");
     setLoading(true);
 
     const result = await signIn("credentials", {
@@ -25,61 +32,74 @@ export default function LoginForm() {
     setLoading(false);
 
     if (result?.error) {
-      setError("Invalid email or password");
+      toast.error("Invalid email or password");
     } else {
+      toast.success("Welcome back!");
       router.push("/dashboard");
       router.refresh();
     }
   }
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-4 w-full max-w-sm">
-      {error && (
-        <div className="bg-red-50 text-red-600 p-3 rounded-md text-sm">
-          {error}
-        </div>
-      )}
+    <form onSubmit={handleSubmit} className="space-y-5">
       <div>
-        <label htmlFor="email" className="block text-sm font-medium mb-1">
-          Email
-        </label>
+        <label htmlFor="email" className="label">Email</label>
         <input
           id="email"
           type="email"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
           required
-          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+          className="input"
           placeholder="you@example.com"
         />
       </div>
+
       <div>
-        <label htmlFor="password" className="block text-sm font-medium mb-1">
-          Password
-        </label>
+        <label htmlFor="password" className="label">Password</label>
         <input
           id="password"
           type="password"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
           required
-          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-          placeholder="Min 8 characters"
+          className="input"
+          placeholder="Enter your password"
         />
       </div>
+
       <button
         type="submit"
         disabled={loading}
-        className="w-full py-2 px-4 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+        className="btn btn-primary w-full btn-lg"
       >
-        {loading ? "Signing in..." : "Sign In"}
+        {loading
+          ? (
+            <span className="flex items-center gap-2">
+              <svg
+                className="animate-spin"
+                width="16"
+                height="16"
+                viewBox="0 0 16 16"
+                fill="none"
+              >
+                <circle
+                  cx="8"
+                  cy="8"
+                  r="6"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeDasharray="30"
+                  strokeDashoffset="10"
+                />
+              </svg>
+              Signing in...
+            </span>
+          )
+          : (
+            "Sign in"
+          )}
       </button>
-      <p className="text-sm text-center text-gray-600">
-        Don&apos;t have an account?{" "}
-        <a href="/register" className="text-blue-600 hover:underline">
-          Register
-        </a>
-      </p>
     </form>
   );
 }

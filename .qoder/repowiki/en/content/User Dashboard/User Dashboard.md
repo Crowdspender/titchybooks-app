@@ -5,6 +5,14 @@
 - [Dashboard Page](file://src/app/(protected)/dashboard/page.tsx)
 - [Submission List Component](file://src/components/submissions/SubmissionList.tsx)
 - [Status Badge Component](file://src/components/submissions/StatusBadge.tsx)
+- [Continue Editing Button](file://src/components/dashboard/ContinueEditingButton.tsx)
+- [Orders List Page](file://src/app/(protected)/dashboard/orders/page.tsx)
+- [New Order Page](file://src/app/(protected)/dashboard/orders/new/page.tsx)
+- [Order Detail Page](file://src/app/(protected)/dashboard/orders/[id]/page.tsx)
+- [Order Panel Component](file://src/components/orders/OrderPanel.tsx)
+- [Orders API](file://src/app/api/orders/route.ts)
+- [Order Calculation API](file://src/app/api/orders/calculate/route.ts)
+- [Order Detail API](file://src/app/api/orders/[id]/route.ts)
 - [Submissions API](file://src/app/api/submissions/route.ts)
 - [Submission Detail API](file://src/app/api/submissions/[id]/route.ts)
 - [Upload Presigned URL API](file://src/app/api/upload/presign/route.ts)
@@ -20,6 +28,15 @@
 - [Constants](file://src/lib/constants.ts)
 </cite>
 
+## Update Summary
+**Changes Made**
+- Added comprehensive order management functionality with dedicated order pages and panels
+- Integrated editor workspace access through Continue Editing button for draft submissions
+- Enhanced dashboard navigation with My Orders, From Template, and Continue Editing buttons
+- Implemented full order lifecycle tracking from creation to fulfillment
+- Added sophisticated pricing calculation and currency conversion system
+- Expanded submission tracking to include order associations and status monitoring
+
 ## Table of Contents
 1. [Introduction](#introduction)
 2. [Project Structure](#project-structure)
@@ -32,459 +49,351 @@
 9. [Conclusion](#conclusion)
 
 ## Introduction
-This document describes the user dashboard functionality for managing Titchybook submissions. It covers the submission tracking interface, submission list rendering, status badges, CRUD operations, download access management, lifecycle tracking, permissions, data privacy, ownership, customization examples, and integration with PDF generation and download workflows.
+This document describes the enhanced user dashboard functionality for managing Titchybook submissions with comprehensive order management capabilities. The dashboard now provides submission tracking, order management, editor workspace access, and integrated PDF generation workflows. Users can monitor their booklet creation history, track order status through the fulfillment pipeline, continue editing drafts, and access template-based creation workflows.
 
 ## Project Structure
-The dashboard is organized around a protected route that renders a submission list, which in turn renders individual submission cards. Users can navigate to a creation page to submit new booklets, which are persisted via API endpoints and later processed into downloadable PDFs.
+The dashboard has evolved into a comprehensive platform featuring submission tracking, order management, and editor workspace integration. The structure now includes dedicated routes for orders, pricing calculations, and template-based creation, along with enhanced submission management and draft continuation capabilities.
 
 ```mermaid
 graph TB
-subgraph "Protected Routes"
+subgraph "Enhanced Dashboard Routes"
 D["Dashboard Page<br/>(/dashboard)"]
-C["Create Page<br/>(/create)"]
+OD["Orders List<br/>(/dashboard/orders)"]
+ON["New Order<br/>(/dashboard/orders/new)"]
+OQ["Order Detail<br/>(/dashboard/orders/[id])"]
+CE["Continue Editing<br/>(localStorage draft)"]
 end
-subgraph "UI Components"
+subgraph "Submission Management"
 SL["SubmissionList"]
 SB["StatusBadge"]
+end
+subgraph "Order Management"
+OP["OrderPanel"]
+OA["Orders API"]
+OC["Order Calculation API"]
+OID["Order Detail API"]
+end
+subgraph "Editor Workspace"
+CP["Create Page<br/>(/create)"]
 UG["UploadGrid"]
 IU["ImageUploader"]
 end
-subgraph "API Layer"
-SA["GET /api/submissions"]
-SD["GET /api/submissions/[id]"]
-SU["POST /api/submissions"]
-SP["GET /api/upload/presign"]
-end
-subgraph "Libraries"
+subgraph "PDF & Storage"
 PDF["PDF Generation"]
 IMG["Image Processor"]
 S3["S3 Utilities"]
+end
+subgraph "System Integration"
 AUTH["Authentication"]
 MW["Middleware"]
 PRISMA["Prisma Schema"]
 end
 D --> SL
+D --> OD
+D --> CE
+OD --> ON
+OD --> OQ
+ON --> OP
+OP --> OA
+OP --> OC
 SL --> SB
-C --> UG
+CP --> UG
 UG --> IU
-SL --> SA
-D --> SD
-C --> SU
-IU --> SP
-SA --> PRISMA
-SD --> PRISMA
-SU --> PRISMA
-SU --> PDF
-PDF --> IMG
+IU --> S3
 PDF --> S3
-S3 --> AUTH
 AUTH --> MW
 ```
 
 **Diagram sources**
-- [Dashboard Page](file://src/app/(protected)/dashboard/page.tsx#L1-L20)
-- [Submission List Component:1-119](file://src/components/submissions/SubmissionList.tsx#L1-L119)
-- [Status Badge Component:1-18](file://src/components/submissions/StatusBadge.tsx#L1-L18)
-- [Create Page](file://src/app/(protected)/create/page.tsx#L1-L11)
-- [Upload Grid Component:1-115](file://src/components/create/UploadGrid.tsx#L1-L115)
-- [Image Uploader Component:1-148](file://src/components/create/ImageUploader.tsx#L1-L148)
-- [Submissions API:1-96](file://src/app/api/submissions/route.ts#L1-L96)
-- [Submission Detail API:1-37](file://src/app/api/submissions/[id]/route.ts#L1-L37)
-- [Upload Presigned URL API:1-38](file://src/app/api/upload/presign/route.ts#L1-L38)
-- [PDF Generation:1-112](file://src/lib/pdf/generate.ts#L1-L112)
-- [PDF Image Processor:1-30](file://src/lib/pdf/image-processor.ts#L1-L30)
-- [S3 Utilities:1-81](file://src/lib/s3.ts#L1-L81)
-- [Authentication:1-80](file://src/auth.ts#L1-L80)
-- [Middleware:1-6](file://src/middleware.ts#L1-L6)
-- [Prisma Schema:1-48](file://prisma/schema.prisma#L1-L48)
+- [Dashboard Page](file://src/app/(protected)/dashboard/page.tsx#L1-L36)
+- [Orders List Page](file://src/app/(protected)/dashboard/orders/page.tsx#L1-L99)
+- [New Order Page](file://src/app/(protected)/dashboard/orders/new/page.tsx#L1-L77)
+- [Order Detail Page](file://src/app/(protected)/dashboard/orders/[id]/page.tsx#L1-L154)
+- [Continue Editing Button:1-62](file://src/components/dashboard/ContinueEditingButton.tsx#L1-L62)
+- [Order Panel Component:1-730](file://src/components/orders/OrderPanel.tsx#L1-L730)
+- [Orders API:1-131](file://src/app/api/orders/route.ts#L1-L131)
+- [Order Calculation API:1-90](file://src/app/api/orders/calculate/route.ts#L1-L90)
+- [Order Detail API:1-33](file://src/app/api/orders/[id]/route.ts#L1-L33)
 
 **Section sources**
-- [Dashboard Page](file://src/app/(protected)/dashboard/page.tsx#L1-L20)
-- [Submission List Component:1-119](file://src/components/submissions/SubmissionList.tsx#L1-L119)
-- [Create Page](file://src/app/(protected)/create/page.tsx#L1-L11)
-- [Upload Grid Component:1-115](file://src/components/create/UploadGrid.tsx#L1-L115)
-- [Submissions API:1-96](file://src/app/api/submissions/route.ts#L1-L96)
-- [Submission Detail API:1-37](file://src/app/api/submissions/[id]/route.ts#L1-L37)
-- [Upload Presigned URL API:1-38](file://src/app/api/upload/presign/route.ts#L1-L38)
-- [PDF Generation:1-112](file://src/lib/pdf/generate.ts#L1-L112)
-- [S3 Utilities:1-81](file://src/lib/s3.ts#L1-L81)
-- [Prisma Schema:1-48](file://prisma/schema.prisma#L1-L48)
-- [Authentication:1-80](file://src/auth.ts#L1-L80)
-- [Middleware:1-6](file://src/middleware.ts#L1-L6)
+- [Dashboard Page](file://src/app/(protected)/dashboard/page.tsx#L1-L36)
+- [Orders List Page](file://src/app/(protected)/dashboard/orders/page.tsx#L1-L99)
+- [New Order Page](file://src/app/(protected)/dashboard/orders/new/page.tsx#L1-L77)
+- [Order Detail Page](file://src/app/(protected)/dashboard/orders/[id]/page.tsx#L1-L154)
+- [Continue Editing Button:1-62](file://src/components/dashboard/ContinueEditingButton.tsx#L1-L62)
+- [Order Panel Component:1-730](file://src/components/orders/OrderPanel.tsx#L1-L730)
 
 ## Core Components
-- Dashboard Page: Renders the header, "New Book" button, and the SubmissionList component.
-- SubmissionList: Fetches and displays the current user's submissions, shows loading states, empty state, and per-submission cards.
-- Submission Card: Displays status badge, creation date, optional rejection reason, and action buttons (download or re-upload).
-- StatusBadge: Visual indicator for submission statuses (PENDING, APPROVED, REJECTED).
-- UploadGrid: Collects 8 page images, validates completeness, and submits to the backend.
-- ImageUploader: Handles drag-and-drop/file selection, previews, validation, and direct S3 uploads via presigned URLs.
-- Submissions API: Lists submissions for the authenticated user and creates new submissions.
-- Submission Detail API: Retrieves a specific submission and generates a presigned PDF download URL when available.
-- Upload Presigned URL API: Generates signed URLs for direct S3 uploads with validation.
-- PDF Generation: Asynchronously builds a PDF from validated images and stores it in S3, updating submission metadata.
-- S3 Utilities: Provides helpers for presigned URLs, uploads/downloads, and key construction.
-- Authentication & Middleware: Protects routes and enforces user roles.
+- **Enhanced Dashboard Page**: Now features navigation to My Orders, From Template, Continue Editing, and New Book creation with improved layout and workflow integration.
+- **SubmissionList**: Displays user's booklet creation history with status badges and action buttons for download/re-upload.
+- **ContinueEditingButton**: Smart draft continuation that detects active editor drafts and provides seamless access to the editor workspace.
+- **Orders Management System**: Complete order lifecycle from creation to fulfillment with real-time pricing calculation and status tracking.
+- **OrderPanel**: Sophisticated pricing calculator with quantity optimization, currency conversion, and shipping destination selection.
+- **OrderListPage**: Comprehensive order history display with status badges, pricing summaries, and quick access to order details.
+- **OrderDetailPage**: Detailed order view showing pricing breakdown, shipping information, and status progression through the fulfillment pipeline.
+- **Enhanced Submission Workflow**: Integration between submission creation and order placement with approval gating and PDF readiness validation.
 
 **Section sources**
-- [Dashboard Page](file://src/app/(protected)/dashboard/page.tsx#L1-L20)
-- [Submission List Component:1-119](file://src/components/submissions/SubmissionList.tsx#L1-L119)
-- [Status Badge Component:1-18](file://src/components/submissions/StatusBadge.tsx#L1-L18)
-- [Upload Grid Component:1-115](file://src/components/create/UploadGrid.tsx#L1-L115)
-- [Image Uploader Component:1-148](file://src/components/create/ImageUploader.tsx#L1-L148)
-- [Submissions API:1-96](file://src/app/api/submissions/route.ts#L1-L96)
-- [Submission Detail API:1-37](file://src/app/api/submissions/[id]/route.ts#L1-L37)
-- [Upload Presigned URL API:1-38](file://src/app/api/upload/presign/route.ts#L1-L38)
-- [PDF Generation:1-112](file://src/lib/pdf/generate.ts#L1-L112)
-- [S3 Utilities:1-81](file://src/lib/s3.ts#L1-L81)
-- [Authentication:1-80](file://src/auth.ts#L1-L80)
-- [Middleware:1-6](file://src/middleware.ts#L1-L6)
+- [Dashboard Page](file://src/app/(protected)/dashboard/page.tsx#L1-L36)
+- [Continue Editing Button:1-62](file://src/components/dashboard/ContinueEditingButton.tsx#L1-L62)
+- [Orders List Page](file://src/app/(protected)/dashboard/orders/page.tsx#L1-L99)
+- [Order Panel Component:1-730](file://src/components/orders/OrderPanel.tsx#L1-L730)
 
 ## Architecture Overview
-The dashboard follows a client-rendered list pattern with server-side APIs for persistence and PDF generation. The frontend interacts with:
-- Submission listing and creation endpoints
-- Individual submission retrieval with presigned PDF download URLs
-- Direct S3 uploads for images during creation
-- Background PDF generation triggered upon submission
+The enhanced dashboard implements a comprehensive submission-to-order workflow with real-time pricing integration and draft management. The system now supports bidirectional flows between submission creation and order placement, with intelligent draft detection and preservation.
 
 ```mermaid
 sequenceDiagram
 participant U as "User"
-participant D as "Dashboard Page"
-participant L as "SubmissionList"
-participant API as "Submissions API"
-participant DB as "Prisma"
+participant D as "Dashboard"
+participant CE as "ContinueEditingButton"
+participant SL as "SubmissionList"
+participant OD as "OrdersList"
+participant OP as "OrderPanel"
+participant API as "Orders API"
 participant PDF as "PDF Generation"
-participant S3 as "S3"
 U->>D : Open /dashboard
-D->>L : Render SubmissionList
-L->>API : GET /api/submissions
-API->>DB : Find submissions by userId
-DB-->>API : Submissions
-API-->>L : JSON { submissions }
-L-->>U : Render cards with status badges
-U->>D : Click "New Book"
-D-->>U : Navigate to /create
-U->>Create : Upload 8 images
-Create->>API : POST /api/submissions
-API->>DB : Create submission + images
-API->>PDF : Trigger background PDF generation
-PDF->>S3 : Upload PDF
-PDF->>DB : Update submission with pdfS3Key
-API-->>Create : { id, status }
-Create-->>U : Success toast and redirect
+D->>CE : Check localStorage for draft
+CE->>API : Validate draft exists and is DRAFT
+API-->>CE : { status : "DRAFT" }
+CE-->>U : Show Continue Editing button
+D->>SL : Render submission list
+D->>OD : Render orders list
+U->>OD : View order history
+OD->>OP : Place new order
+OP->>API : Calculate pricing
+API-->>OP : { order, suggestion, messages }
+OP->>API : Create order
+API-->>OP : { order }
+OP-->>U : Redirect to order detail
 ```
 
 **Diagram sources**
-- [Dashboard Page](file://src/app/(protected)/dashboard/page.tsx#L1-L20)
-- [Submission List Component:1-119](file://src/components/submissions/SubmissionList.tsx#L1-L119)
-- [Submissions API:1-96](file://src/app/api/submissions/route.ts#L1-L96)
-- [PDF Generation:1-112](file://src/lib/pdf/generate.ts#L1-L112)
-- [S3 Utilities:1-81](file://src/lib/s3.ts#L1-L81)
-- [Prisma Schema:1-48](file://prisma/schema.prisma#L1-L48)
+- [Dashboard Page](file://src/app/(protected)/dashboard/page.tsx#L1-L36)
+- [Continue Editing Button:1-62](file://src/components/dashboard/ContinueEditingButton.tsx#L1-L62)
+- [Orders List Page](file://src/app/(protected)/dashboard/orders/page.tsx#L1-L99)
+- [Order Panel Component:1-730](file://src/components/orders/OrderPanel.tsx#L1-L730)
+- [Orders API:1-131](file://src/app/api/orders/route.ts#L1-L131)
 
 ## Detailed Component Analysis
 
-### Submission Tracking Interface
-- Purpose: Display user's booklet creation history and current status.
-- Data model: Submission with status, optional rejection reason, associated images, and timestamps.
-- Ownership: Submissions are scoped to the authenticated user via userId.
-- Rendering: SubmissionList fetches data client-side and renders cards with status badges and actions.
+### Enhanced Dashboard Navigation and Workflow
+The dashboard now provides comprehensive navigation between submission management and order fulfillment workflows, with intelligent draft detection and template-based creation options.
 
 ```mermaid
 flowchart TD
-Start(["Render SubmissionList"]) --> Fetch["Fetch /api/submissions"]
-Fetch --> Loaded{"Loaded?"}
-Loaded --> |No| Loading["Show skeleton loaders"]
-Loaded --> |Yes| Empty{"Any submissions?"}
-Empty --> |No| EmptyState["Show empty state with CTA"]
-Empty --> |Yes| Cards["Render cards per submission"]
-Cards --> Actions{"Status?"}
-Actions --> |APPROVED| Download["Enable Download PDF"]
-Actions --> |REJECTED| Reupload["Enable Re-upload"]
-Actions --> |PENDING| Pending["Show awaiting message"]
+Start(["Dashboard Entry"]) --> DraftCheck["Check for Active Draft"]
+DraftCheck --> HasDraft{"Draft Exists?"}
+HasDraft --> |Yes| ShowContinue["Show Continue Editing Button"]
+HasDraft --> |No| ShowNav["Show Standard Navigation"]
+ShowContinue --> NavOptions["My Orders | From Template | Continue Editing | New Book"]
+ShowNav --> NavOptions
+NavOptions --> SubmissionFlow["Submission Management"]
+NavOptions --> OrderFlow["Order Management"]
+SubmissionFlow --> DraftFlow["Draft Continuation"]
+OrderFlow --> PricingFlow["Real-time Pricing"]
 ```
 
 **Diagram sources**
-- [Submission List Component:1-119](file://src/components/submissions/SubmissionList.tsx#L1-L119)
-- [Submissions API:1-96](file://src/app/api/submissions/route.ts#L1-L96)
+- [Dashboard Page](file://src/app/(protected)/dashboard/page.tsx#L1-L36)
+- [Continue Editing Button:1-62](file://src/components/dashboard/ContinueEditingButton.tsx#L1-L62)
 
 **Section sources**
-- [Submission List Component:1-119](file://src/components/submissions/SubmissionList.tsx#L1-L119)
-- [Prisma Schema:21-33](file://prisma/schema.prisma#L21-L33)
+- [Dashboard Page](file://src/app/(protected)/dashboard/page.tsx#L1-L36)
+- [Continue Editing Button:1-62](file://src/components/dashboard/ContinueEditingButton.tsx#L1-L62)
 
-### Submission List Component
-- Responsibilities:
-  - Fetch submissions for the current user
-  - Render loading skeletons
-  - Handle empty state
-  - Render individual submission cards
-- Filtering, Sorting, Pagination:
-  - Filtering: None in the current implementation
-  - Sorting: Server-side ordering by creation time descending
-  - Pagination: Not implemented; consider adding offset/limit for large histories
-- Access Control:
-  - Protected by middleware and authenticated session checks in API
+### Order Management System
+The order management system provides complete lifecycle tracking from initial creation to fulfillment, with sophisticated pricing calculation and status monitoring.
+
+```mermaid
+stateDiagram-v2
+[*] --> PENDING_PAYMENT
+PENDING_PAYMENT --> PAID
+PAID --> IN_PRODUCTION
+IN_PRODUCTION --> SHIPPED
+SHIPPED --> DELIVERED
+PENDING_PAYMENT --> CANCELLED
+PAID --> CANCELLED
+```
+
+**Diagram sources**
+- [Orders List Page](file://src/app/(protected)/dashboard/orders/page.tsx#L6-L13)
+- [Order Detail Page](file://src/app/(protected)/dashboard/orders/[id]/page.tsx#L47-L89)
 
 **Section sources**
-- [Submission List Component:1-119](file://src/components/submissions/SubmissionList.tsx#L1-L119)
-- [Submissions API:20-33](file://src/app/api/submissions/route.ts#L20-L33)
-- [Middleware:1-6](file://src/middleware.ts#L1-L6)
+- [Orders List Page](file://src/app/(protected)/dashboard/orders/page.tsx#L6-L13)
+- [Order Detail Page](file://src/app/(protected)/dashboard/orders/[id]/page.tsx#L47-L89)
 
-### Status Badge System
-- Visual representation:
-  - PENDING: yellow badge
-  - APPROVED: green badge
-  - REJECTED: red badge
-- Usage: Displayed alongside each submission card for quick status recognition.
+### Order Panel Pricing Engine
+The OrderPanel implements a sophisticated pricing calculation system with real-time updates, optimal quantity suggestions, and currency conversion capabilities.
+
+```mermaid
+flowchart TD
+Input["User Input: Quantity, Zone, Currency"] --> ClientCalc["Client-side Calculation"]
+ClientCalc --> Debounce["Debounce 250ms"]
+Debounce --> ServerCalc["Server-side Validation"]
+ServerCalc --> UpdateUI["Update UI with Results"]
+UpdateUI --> Messages["Display UX Messages"]
+Messages --> CanOrder{"Can Place Order?"}
+CanOrder --> |Yes| EnableButton["Enable Place Order"]
+CanOrder --> |No| DisableButton["Disable Place Order"]
+```
+
+**Diagram sources**
+- [Order Panel Component:199-260](file://src/components/orders/OrderPanel.tsx#L199-L260)
+- [Order Calculation API:13-89](file://src/app/api/orders/calculate/route.ts#L13-L89)
+
+**Section sources**
+- [Order Panel Component:199-260](file://src/components/orders/OrderPanel.tsx#L199-L260)
+- [Order Calculation API:13-89](file://src/app/api/orders/calculate/route.ts#L13-L89)
+
+### Draft Continuation and Editor Workspace Access
+The ContinueEditingButton component provides seamless access to the editor workspace for active drafts, with automatic validation and localStorage integration.
+
+```mermaid
+sequenceDiagram
+participant U as "User"
+participant CE as "ContinueEditingButton"
+participant LS as "LocalStorage"
+participant API as "Submissions API"
+U->>CE : Visit Dashboard
+CE->>LS : Get ACTIVE_DRAFT_STORAGE_KEY
+LS-->>CE : draftId
+CE->>API : GET /api/submissions/{draftId}
+API-->>CE : { submission : { status : "DRAFT" } }
+CE-->>U : Show Continue Editing Button
+U->>CE : Click Continue Editing
+CE-->>U : Navigate to /create?submissionId=draftId
+```
+
+**Diagram sources**
+- [Continue Editing Button:13-47](file://src/components/dashboard/ContinueEditingButton.tsx#L13-L47)
+- [Submission Detail API:1-37](file://src/app/api/submissions/[id]/route.ts#L1-L37)
+
+**Section sources**
+- [Continue Editing Button:1-62](file://src/components/dashboard/ContinueEditingButton.tsx#L1-L62)
+- [Submission Detail API:1-37](file://src/app/api/submissions/[id]/route.ts#L1-L37)
+
+### Enhanced Submission-Order Integration
+The system now integrates submission creation with order placement, ensuring that only approved submissions can be ordered and that PDF readiness is validated before order creation.
+
+```mermaid
+flowchart TD
+Submission["Approved Submission"] --> Ready{"PDF Ready?"}
+Ready --> |Yes| Orderable["Orderable"]
+Ready --> |No| NotReady["Not Ready for Orders"]
+Orderable --> PlaceOrder["Place Order"]
+PlaceOrder --> Payment["Awaiting Payment"]
+Payment --> Fulfillment["Fulfillment Pipeline"]
+```
+
+**Diagram sources**
+- [Order Panel Component:266-275](file://src/components/orders/OrderPanel.tsx#L266-L275)
+- [Orders API:67-77](file://src/app/api/orders/route.ts#L67-L77)
+
+**Section sources**
+- [Order Panel Component:266-275](file://src/components/orders/OrderPanel.tsx#L266-L275)
+- [Orders API:67-77](file://src/app/api/orders/route.ts#L67-L77)
+
+### Order Detail and Status Tracking
+The order detail page provides comprehensive visibility into the order fulfillment process, with detailed pricing breakdowns and status progression tracking.
 
 ```mermaid
 classDiagram
-class StatusBadge {
-+props status : string
+class OrderDetailPage {
++props params : { id : string }
 +render() JSX.Element
 }
-class SubmissionCard {
-+props submission : Submission
-+render() JSX.Element
+class Order {
++id : string
++status : string
++quantity : number
++zone : string
++totalHuf : number
++createdAt : Date
 }
-SubmissionCard --> StatusBadge : "renders"
+class PricingBreakdown {
++unitPriceHuf : number
++printCostHuf : number
++shippingCostHuf : number
++discountHuf : number
++handlingCostHuf : number
+}
+Order --> PricingBreakdown : "includes"
 ```
 
 **Diagram sources**
-- [Status Badge Component:1-18](file://src/components/submissions/StatusBadge.tsx#L1-L18)
-- [Submission List Component:62-118](file://src/components/submissions/SubmissionList.tsx#L62-L118)
+- [Order Detail Page](file://src/app/(protected)/dashboard/orders/[id]/page.tsx#L7-L23)
+- [Order Detail Page](file://src/app/(protected)/dashboard/orders/[id]/page.tsx#L68-L89)
 
 **Section sources**
-- [Status Badge Component:1-18](file://src/components/submissions/StatusBadge.tsx#L1-L18)
-- [Submission List Component:82-83](file://src/components/submissions/SubmissionList.tsx#L82-L83)
-
-### Submission CRUD Operations
-- Creation:
-  - Frontend collects 8 validated images and posts to /api/submissions
-  - Backend validates payload, ensures all 8 unique page labels are present, persists submission and images, and triggers asynchronous PDF generation
-- Updates:
-  - Not implemented in the current codebase
-- Deletion:
-  - Not implemented in the current codebase
-- Ownership and Permissions:
-  - Only the owning user can access their submissions
-  - Admins can access submissions via the admin API surface (not covered here)
-
-```mermaid
-sequenceDiagram
-participant U as "User"
-participant CG as "UploadGrid"
-participant IU as "ImageUploader"
-participant API as "Submissions API"
-participant DB as "Prisma"
-participant PDF as "PDF Generation"
-U->>CG : Select 8 images
-loop For each page
-CG->>IU : onUploaded(pageLabel, s3Key, file)
-end
-CG->>API : POST /api/submissions {images}
-API->>DB : Create submission + images
-API->>PDF : generateTitchybookPdf(submissionId)
-API-->>CG : { id, status }
-CG-->>U : Success toast and redirect
-```
-
-**Diagram sources**
-- [Upload Grid Component:1-115](file://src/components/create/UploadGrid.tsx#L1-L115)
-- [Image Uploader Component:1-148](file://src/components/create/ImageUploader.tsx#L1-L148)
-- [Submissions API:35-95](file://src/app/api/submissions/route.ts#L35-L95)
-- [PDF Generation:1-112](file://src/lib/pdf/generate.ts#L1-L112)
-
-**Section sources**
-- [Upload Grid Component:42-76](file://src/components/create/UploadGrid.tsx#L42-L76)
-- [Image Uploader Component:22-73](file://src/components/create/ImageUploader.tsx#L22-L73)
-- [Submissions API:35-95](file://src/app/api/submissions/route.ts#L35-L95)
-- [PDF Generation:23-83](file://src/lib/pdf/generate.ts#L23-L83)
-
-### Download Access Management and Lifecycle Tracking
-- Lifecycle stages:
-  - PENDING: Initial state after submission
-  - PROCESSING: During background PDF generation
-  - APPROVED: PDF ready for download
-  - REJECTED: Optional rejection reason shown; user can re-upload
-- Download flow:
-  - SubmissionDetail API checks ownership or admin role, then generates a presigned download URL for the PDF stored in S3
-  - The frontend opens the URL in a new tab to trigger download
-- Ownership:
-  - Each submission belongs to a single user; unauthorized access returns forbidden
-
-```mermaid
-sequenceDiagram
-participant U as "User"
-participant SL as "SubmissionList"
-participant SD as "Submission Detail API"
-participant DB as "Prisma"
-participant S3 as "S3"
-U->>SL : Click Download
-SL->>SD : GET /api/submissions/ : id
-SD->>DB : Find submission by id
-DB-->>SD : Submission
-SD->>S3 : Generate presigned download URL
-S3-->>SD : URL
-SD-->>SL : { submission, pdfDownloadUrl }
-SL-->>U : Open URL in new tab
-```
-
-**Diagram sources**
-- [Submission List Component:65-76](file://src/components/submissions/SubmissionList.tsx#L65-L76)
-- [Submission Detail API:6-36](file://src/app/api/submissions/[id]/route.ts#L6-L36)
-- [S3 Utilities:30-36](file://src/lib/s3.ts#L30-L36)
-
-**Section sources**
-- [Submission List Component:65-103](file://src/components/submissions/SubmissionList.tsx#L65-L103)
-- [Submission Detail API:15-35](file://src/app/api/submissions/[id]/route.ts#L15-L35)
-- [S3 Utilities:30-36](file://src/lib/s3.ts#L30-L36)
-
-### PDF Generation and Download Workflows
-- Generation steps:
-  - Mark submission as PROCESSING
-  - Fetch images from DB and download from S3
-  - Process images (resize, crop, rotate) in parallel
-  - Compose PDF with pdf-lib and upload to S3
-  - Update submission with pdfS3Key and reset status to PENDING
-- Download workflow:
-  - Presigned URL expires in 1 hour
-  - Only the owner or admins can access the PDF
-
-```mermaid
-flowchart TD
-Start(["PDF Generation Trigger"]) --> Lock["Set status to PROCESSING"]
-Lock --> Load["Load submission + images"]
-Load --> Parallel["Parallel download + process"]
-Parallel --> Compose["Compose PDF with pdf-lib"]
-Compose --> Upload["Upload PDF to S3"]
-Upload --> Update["Update submission with pdfS3Key<br/>Reset status to PENDING"]
-Update --> End(["Done"])
-```
-
-**Diagram sources**
-- [PDF Generation:23-111](file://src/lib/pdf/generate.ts#L23-L111)
-- [PDF Image Processor:9-29](file://src/lib/pdf/image-processor.ts#L9-L29)
-- [S3 Utilities:52-64](file://src/lib/s3.ts#L52-L64)
-
-**Section sources**
-- [PDF Generation:13-111](file://src/lib/pdf/generate.ts#L13-L111)
-- [PDF Image Processor:3-29](file://src/lib/pdf/image-processor.ts#L3-L29)
-- [S3 Utilities:52-64](file://src/lib/s3.ts#L52-L64)
-
-### User Permissions, Data Privacy, and Ownership
-- Authentication:
-  - Uses JWT-based sessions via NextAuth
-  - Exposes user role in session and JWT tokens
-- Route protection:
-  - Middleware protects dashboard, create, and admin routes
-- Ownership:
-  - Submissions are bound to userId; retrieval requires matching ownership or admin role
-- Privacy:
-  - All assets are served via presigned URLs with limited lifetimes
-  - No sensitive data exposed in logs beyond minimal error messages
-
-**Section sources**
-- [Authentication:27-79](file://src/auth.ts#L27-L79)
-- [Middleware:1-6](file://src/middleware.ts#L1-L6)
-- [Submission Detail API:26-28](file://src/app/api/submissions/[id]/route.ts#L26-L28)
-- [S3 Utilities:30-36](file://src/lib/s3.ts#L30-L36)
-- [Prisma Schema:10-19](file://prisma/schema.prisma#L10-L19)
-
-### Dashboard Customization and Status Monitoring Examples
-- Customization ideas:
-  - Add filters by status (PENDING/APPROVED/REJECTED)
-  - Add sorting options (created date ascending/descending)
-  - Add pagination for long submission histories
-  - Add bulk actions (re-upload selected, download selected PDFs)
-  - Add tooltips or help text for status meanings
-- Status monitoring:
-  - Use StatusBadge for consistent visual indicators
-  - Display rejection reasons prominently when present
-  - Show last updated timestamps for dynamic status changes
-
-[No sources needed since this section provides general guidance]
+- [Order Detail Page](file://src/app/(protected)/dashboard/orders/[id]/page.tsx#L1-L154)
 
 ## Dependency Analysis
-The dashboard relies on a clear separation of concerns:
-- UI components depend on props and local state
-- API endpoints depend on authentication, Prisma, and S3 utilities
-- PDF generation depends on image processing and S3 utilities
-- Middleware and authentication protect routes and enforce ownership
+The enhanced dashboard maintains clear separation of concerns while adding sophisticated order management capabilities and draft continuation features.
 
 ```mermaid
 graph LR
-SL["SubmissionList"] --> SA["Submissions API"]
-SD["Submission Detail API"] --> PRISMA["Prisma"]
-SU["Submissions API"] --> PRISMA
-IU["ImageUploader"] --> SP["Upload Presigned URL API"]
-SP --> S3["S3 Utilities"]
-SU --> PDF["PDF Generation"]
-PDF --> S3
-PDF --> IMG["Image Processor"]
-AUTH["Authentication"] --> MW["Middleware"]
-SA --> AUTH
-SD --> AUTH
-IU --> AUTH
+D["Dashboard Page"] --> CE["ContinueEditingButton"]
+D --> OD["OrdersList"]
+D --> SL["SubmissionList"]
+CE --> API["Submissions API"]
+OD --> ON["NewOrderPage"]
+ON --> OP["OrderPanel"]
+OP --> OA["Orders API"]
+OP --> OC["OrderCalc API"]
+SL --> SB["StatusBadge"]
+OP --> PRISMA["Prisma"]
+OA --> PRISMA
+OC --> PRISMA
+OP --> AUTH["Authentication"]
+OD --> AUTH
+D --> AUTH
 ```
 
 **Diagram sources**
-- [Submission List Component:1-119](file://src/components/submissions/SubmissionList.tsx#L1-L119)
-- [Submissions API:1-96](file://src/app/api/submissions/route.ts#L1-L96)
-- [Submission Detail API:1-37](file://src/app/api/submissions/[id]/route.ts#L1-L37)
-- [Upload Presigned URL API:1-38](file://src/app/api/upload/presign/route.ts#L1-L38)
-- [Image Uploader Component:1-148](file://src/components/create/ImageUploader.tsx#L1-L148)
-- [PDF Generation:1-112](file://src/lib/pdf/generate.ts#L1-L112)
-- [PDF Image Processor:1-30](file://src/lib/pdf/image-processor.ts#L1-L30)
-- [S3 Utilities:1-81](file://src/lib/s3.ts#L1-L81)
-- [Authentication:1-80](file://src/auth.ts#L1-L80)
-- [Middleware:1-6](file://src/middleware.ts#L1-L6)
+- [Dashboard Page](file://src/app/(protected)/dashboard/page.tsx#L1-L36)
+- [Continue Editing Button:1-62](file://src/components/dashboard/ContinueEditingButton.tsx#L1-L62)
+- [Orders List Page](file://src/app/(protected)/dashboard/orders/page.tsx#L1-L99)
+- [Order Panel Component:1-730](file://src/components/orders/OrderPanel.tsx#L1-L730)
+- [Orders API:1-131](file://src/app/api/orders/route.ts#L1-L131)
 
 **Section sources**
-- [Submission List Component:1-119](file://src/components/submissions/SubmissionList.tsx#L1-L119)
-- [Submissions API:1-96](file://src/app/api/submissions/route.ts#L1-L96)
-- [Submission Detail API:1-37](file://src/app/api/submissions/[id]/route.ts#L1-L37)
-- [Upload Presigned URL API:1-38](file://src/app/api/upload/presign/route.ts#L1-L38)
-- [Image Uploader Component:1-148](file://src/components/create/ImageUploader.tsx#L1-L148)
-- [PDF Generation:1-112](file://src/lib/pdf/generate.ts#L1-L112)
-- [PDF Image Processor:1-30](file://src/lib/pdf/image-processor.ts#L1-L30)
-- [S3 Utilities:1-81](file://src/lib/s3.ts#L1-L81)
-- [Authentication:1-80](file://src/auth.ts#L1-L80)
-- [Middleware:1-6](file://src/middleware.ts#L1-L6)
+- [Dashboard Page](file://src/app/(protected)/dashboard/page.tsx#L1-L36)
+- [Continue Editing Button:1-62](file://src/components/dashboard/ContinueEditingButton.tsx#L1-L62)
+- [Orders List Page](file://src/app/(protected)/dashboard/orders/page.tsx#L1-L99)
+- [Order Panel Component:1-730](file://src/components/orders/OrderPanel.tsx#L1-L730)
 
 ## Performance Considerations
-- Asynchronous PDF generation:
-  - Offloads heavy work from request-response cycle to background tasks
-  - Prevents timeouts and improves user experience
-- Parallel processing:
-  - Downloads and image processing occur in parallel for better throughput
-- Caching and presigned URLs:
-  - Minimizes server bandwidth by serving PDFs directly from S3
-- Recommendations:
-  - Add pagination to limit initial load size
-  - Consider caching recent submission lists with ETag/Last-Modified headers
-  - Monitor PDF generation queue and retry failures
-
-[No sources needed since this section provides general guidance]
+- **Debounced Pricing Calculations**: OrderPanel implements 250ms debouncing to optimize network requests during rapid parameter changes
+- **Client-Server Calculation Reconciliation**: Immediate client-side calculations provide instant feedback while authoritative server calculations ensure accuracy
+- **Draft Validation Optimization**: Single API call to validate draft existence and status prevents unnecessary navigation attempts
+- **Local Storage Caching**: Persistent storage of user preferences (zones, currencies) reduces API calls and improves user experience
+- **Conditional Rendering**: ContinueEditingButton uses conditional rendering to avoid unnecessary API calls when no draft exists
 
 ## Troubleshooting Guide
-- Unauthorized access:
-  - Ensure the user is authenticated; protected routes require a valid session
-- Forbidden access to submission:
-  - Only the owner or admins can access a submission; verify userId matches or role is ADMIN
-- Missing or invalid parameters:
-  - Upload presigned URL endpoint requires filename, contentType, submissionId, and pageLabel
-- PDF not available:
-  - Submission must be APPROVED and have a pdfS3Key; otherwise, generate a presigned URL only when available
-- Validation errors:
-  - Submission creation requires exactly 8 unique page labels; verify payload structure
+- **Draft Continuation Issues**:
+  - Ensure localStorage contains valid draft ID with ACTIVE_DRAFT_STORAGE_KEY
+  - Verify draft submission exists and status is "DRAFT"
+  - Check that user has access to the draft submission
+- **Order Placement Failures**:
+  - Verify submission status is "APPROVED"
+  - Confirm PDF is ready (pdfS3Key exists)
+  - Ensure shipping zone is enabled in pricing configuration
+  - Validate shipping address completeness
+- **Pricing Calculation Errors**:
+  - Check network connectivity for server-side calculations
+  - Verify quantity is within supported range (1-333)
+  - Ensure selected currency is supported
+- **Navigation Issues**:
+  - Confirm user authentication status
+  - Verify proper route parameters for order detail pages
+  - Check admin role requirements for certain operations
 
 **Section sources**
-- [Submission Detail API:10-28](file://src/app/api/submissions/[id]/route.ts#L10-L28)
-- [Upload Presigned URL API:6-30](file://src/app/api/upload/presign/route.ts#L6-L30)
-- [Submissions API:41-61](file://src/app/api/submissions/route.ts#L41-L61)
-- [PDF Generation:102-108](file://src/lib/pdf/generate.ts#L102-L108)
+- [Continue Editing Button:23-46](file://src/components/dashboard/ContinueEditingButton.tsx#L23-L46)
+- [Order Panel Component:277-293](file://src/components/orders/OrderPanel.tsx#L277-L293)
+- [Orders API:67-77](file://src/app/api/orders/route.ts#L67-L77)
 
 ## Conclusion
-The user dashboard provides a clear, permission-aware interface for viewing submission history, understanding status, and downloading approved PDFs. The system leverages presigned URLs for secure asset delivery, background PDF generation for scalability, and strict ownership controls to protect user data. Future enhancements could include filtering, sorting, pagination, and expanded CRUD operations to further improve the user experience.
+The enhanced user dashboard provides a comprehensive platform for managing Titchybook submissions and orders, with sophisticated workflow integration between creation, approval, and fulfillment processes. The addition of order management capabilities, draft continuation features, and real-time pricing calculations creates a seamless user experience from initial submission to final product delivery. The system maintains strong security practices through proper authentication, authorization, and data privacy protections while providing intuitive interfaces for both submission tracking and order management.

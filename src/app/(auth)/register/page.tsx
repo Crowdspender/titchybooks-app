@@ -1,11 +1,55 @@
 import RegisterForm from "@/components/auth/RegisterForm";
+import Link from "next/link";
 
 export default function RegisterPage() {
   return (
-    <div className="flex min-h-[calc(100vh-3.5rem)] items-center justify-center">
-      <div className="w-full max-w-sm px-4">
-        <h1 className="text-2xl font-bold text-center mb-6">Create Account</h1>
-        <RegisterForm />
+    <div
+      className="flex min-h-[calc(100vh-4rem)] items-center justify-center px-4 py-12"
+      style={{ background: "var(--color-background)" }}
+    >
+      <div className="w-full max-w-md">
+        {/* Brand header */}
+        <div className="text-center mb-8">
+          <Link
+            href="/"
+            className="inline-flex items-center gap-0.5 text-2xl font-semibold tracking-tight no-underline"
+            style={{ color: "var(--color-text)" }}
+          >
+            Titchybook
+            <span
+              className="inline-block w-2 h-2 rounded-full mb-3"
+              style={{ background: "var(--color-primary)" }}
+            />
+          </Link>
+          <p
+            className="mt-2 text-sm"
+            style={{ color: "var(--color-text-muted)" }}
+          >
+            Create your account and start publishing
+          </p>
+        </div>
+
+        {/* Card */}
+        <div
+          className="card p-8"
+          style={{ boxShadow: "var(--shadow-lg)" }}
+        >
+          <RegisterForm />
+        </div>
+
+        <p
+          className="mt-6 text-center text-sm"
+          style={{ color: "var(--color-text-muted)" }}
+        >
+          Already have an account?{" "}
+          <Link
+            href="/login"
+            className="font-medium no-underline"
+            style={{ color: "var(--color-primary)" }}
+          >
+            Sign in
+          </Link>
+        </p>
       </div>
     </div>
   );

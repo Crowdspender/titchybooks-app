@@ -18,18 +18,32 @@ const creator = [
 
 export default function TwoWorlds() {
     return (
-        <section className="border-b border-stone-200 bg-stone-50">
+        <section
+            style={{
+                background: "var(--color-background)",
+                borderBottom: "1px solid var(--color-border)",
+            }}
+        >
             <div className="mx-auto max-w-6xl px-6 py-20 md:py-28">
-                <p className="text-xs uppercase tracking-[0.2em] text-stone-500 mb-4">
-                    Two worlds, one format
-                </p>
-                <h2 className="text-3xl md:text-5xl font-semibold tracking-tight text-stone-900 mb-14 leading-tight">
+                <p className="section-label mb-4">Two worlds, one format</p>
+                <h2
+                    className="text-3xl md:text-5xl font-semibold tracking-tight mb-14 leading-tight"
+                    style={{ color: "var(--color-text)" }}
+                >
                     Built equally for businesses
                     <br />
                     and creators.
                 </h2>
                 <div className="grid md:grid-cols-2 gap-6">
-                    <div className="rounded-sm bg-[#B4462B] text-stone-50 p-8 md:p-10 flex flex-col">
+                    {/* Business card */}
+                    <div
+                        className="rounded-xl p-8 md:p-10 flex flex-col transition-transform hover:-translate-y-1"
+                        style={{
+                            background: "var(--color-primary)",
+                            color: "var(--color-text-inverse)",
+                            boxShadow: "0 8px 32px -8px rgba(180, 70, 43, 0.3)",
+                        }}
+                    >
                         <div className="text-xs uppercase tracking-[0.2em] opacity-70 mb-4">
                             Outernet Commerce · For Businesses
                         </div>
@@ -49,13 +63,25 @@ export default function TwoWorlds() {
                         </ul>
                         <Link
                             href="/register?audience=business"
-                            className="mt-10 inline-flex w-fit items-center gap-2 px-5 py-3 bg-stone-50 text-stone-900 font-medium rounded-sm hover:bg-white"
+                            className="mt-10 inline-flex w-fit items-center gap-2 px-5 py-3 rounded-lg font-medium hover:bg-white/90 transition-colors"
+                            style={{
+                                background: "var(--color-surface)",
+                                color: "var(--color-text)",
+                            }}
                         >
                             Create a Business Titchybook →
                         </Link>
                     </div>
 
-                    <div className="rounded-sm bg-[#1F3A5F] text-stone-50 p-8 md:p-10 flex flex-col">
+                    {/* Creator card */}
+                    <div
+                        className="rounded-xl p-8 md:p-10 flex flex-col transition-transform hover:-translate-y-1"
+                        style={{
+                            background: "var(--color-secondary)",
+                            color: "var(--color-text-inverse)",
+                            boxShadow: "0 8px 32px -8px rgba(31, 58, 95, 0.3)",
+                        }}
+                    >
                         <div className="text-xs uppercase tracking-[0.2em] opacity-70 mb-4">
                             Outernet Publishing · For Creators
                         </div>
@@ -75,7 +101,11 @@ export default function TwoWorlds() {
                         </ul>
                         <Link
                             href="/create"
-                            className="mt-10 inline-flex w-fit items-center gap-2 px-5 py-3 bg-stone-50 text-stone-900 font-medium rounded-sm hover:bg-white"
+                            className="mt-10 inline-flex w-fit items-center gap-2 px-5 py-3 rounded-lg font-medium hover:bg-white/90 transition-colors"
+                            style={{
+                                background: "var(--color-surface)",
+                                color: "var(--color-text)",
+                            }}
                         >
                             Create a Personal Titchybook →
                         </Link>

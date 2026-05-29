@@ -19,26 +19,20 @@ export default function ContinueEditingButton() {
 
     setDraftId(storedId);
 
-    // Validate that the draft still exists and is in DRAFT status
     fetch(`/api/submissions/${storedId}`)
       .then((res) => {
-        if (!res.ok) {
-          // Draft doesn't exist or user doesn't have access
-          return false;
-        }
+        if (!res.ok) return false;
         return res.json();
       })
       .then((data) => {
         if (data?.submission?.status === "DRAFT") {
           setIsValidDraft(true);
         } else {
-          // Draft was submitted or deleted - clear localStorage
           localStorage.removeItem(ACTIVE_DRAFT_STORAGE_KEY);
           setIsValidDraft(false);
         }
       })
       .catch(() => {
-        // Network error or other issue - hide the button
         setIsValidDraft(false);
       })
       .finally(() => {
@@ -53,9 +47,19 @@ export default function ContinueEditingButton() {
   return (
     <Link
       href={`/create?submissionId=${draftId}`}
-      className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 text-sm"
+      className="btn btn-success btn-sm"
     >
-      Continue Editing
+      <svg
+        width="14"
+        height="14"
+        viewBox="0 0 14 14"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.6"
+      >
+        <path d="M7 1v12M1 7h12" />
+      </svg>
+      Continue editing
     </Link>
   );
 }

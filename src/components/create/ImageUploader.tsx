@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useState } from "react";
+import { toast } from "sonner";
 import { PAGE_LABEL_DISPLAY, type PageLabel } from "@/lib/constants";
 
 interface ImageUploaderProps {
@@ -16,21 +17,19 @@ export default function ImageUploader({
 }: ImageUploaderProps) {
   const [preview, setPreview] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
 
   const handleFile = useCallback(
     async (file: File) => {
       if (!file.type.match(/^image\/(jpeg|png|webp)$/)) {
-        setError("Only JPG, PNG, or WebP files allowed");
+        toast.error("Only JPG, PNG, or WebP files allowed");
         return;
       }
       if (file.size > 10 * 1024 * 1024) {
-        setError("File too large (max 10MB)");
+        toast.error("File too large (max 10MB)");
         return;
       }
 
-      setError(null);
       setUploading(true);
 
       // Show preview
@@ -61,15 +60,16 @@ export default function ImageUploader({
 
         if (!uploadRes.ok) throw new Error("Upload failed");
 
+        toast.success(`${PAGE_LABEL_DISPLAY[pageLabel]} uploaded`);
         onUploaded(pageLabel, s3Key, file);
       } catch (err) {
-        setError(err instanceof Error ? err.message : "Upload failed");
+        toast.error(err instanceof Error ? err.message : "Upload failed");
         setPreview(null);
       } finally {
         setUploading(false);
       }
     },
-    [pageLabel, submissionId, onUploaded]
+    [pageLabel, submissionId, onUploaded],
   );
 
   function handleDrop(e: React.DragEvent) {
@@ -86,7 +86,10 @@ export default function ImageUploader({
 
   return (
     <div className="flex flex-col items-center gap-1">
-      <span className="text-xs font-medium text-gray-600">
+      <span
+        className="text-xs font-medium"
+        style={{ color: "var(--color-text-muted)" }}
+      >
         {PAGE_LABEL_DISPLAY[pageLabel]}
       </span>
       <label
@@ -96,44 +99,78 @@ export default function ImageUploader({
           setDragOver(true);
         }}
         onDragLeave={() => setDragOver(false)}
-        className={`relative w-28 h-40 border-2 border-dashed rounded-lg cursor-pointer flex items-center justify-center overflow-hidden transition-colors ${
-          dragOver
-            ? "border-blue-500 bg-blue-50"
+        className="relative w-28 h-40 border-2 border-dashed rounded-lg cursor-pointer flex items-center justify-center overflow-hidden transition-colors"
+        style={{
+          borderColor: dragOver
+            ? "var(--color-primary)"
             : preview
-            ? "border-green-400 bg-green-50"
-            : "border-gray-300 hover:border-gray-400"
-        }`}
+            ? "var(--color-success)"
+            : "var(--color-border-strong)",
+          background: dragOver
+            ? "var(--color-primary-muted)"
+            : preview
+            ? "var(--color-success-light)"
+            : "transparent",
+        }}
       >
         {uploading && (
-          <div className="absolute inset-0 bg-white/80 flex items-center justify-center z-10">
-            <div className="w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
-          </div>
-        )}
-        {preview ? (
-          /* eslint-disable-next-line @next/next/no-img-element */
-          <img
-            src={preview}
-            alt={PAGE_LABEL_DISPLAY[pageLabel]}
-            className="w-full h-full object-cover"
-          />
-        ) : (
-          <div className="text-center p-2">
+          <div
+            className="absolute inset-0 flex items-center justify-center z-10"
+            style={{ background: "rgba(255,255,255,0.8)" }}
+          >
             <svg
-              className="w-6 h-6 mx-auto text-gray-400 mb-1"
+              className="animate-spin"
+              width="24"
+              height="24"
+              viewBox="0 0 16 16"
               fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
+              style={{ color: "var(--color-primary)" }}
             >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M12 6v6m0 0v6m0-6h6m-6 0H6"
+              <circle
+                cx="8"
+                cy="8"
+                r="6"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeDasharray="30"
+                strokeDashoffset="10"
               />
             </svg>
-            <span className="text-xs text-gray-500">Upload</span>
           </div>
         )}
+        {preview
+          ? (
+            /* eslint-disable-next-line @next/next/no-img-element */
+            <img
+              src={preview}
+              alt={PAGE_LABEL_DISPLAY[pageLabel]}
+              className="w-full h-full object-cover"
+            />
+          )
+          : (
+            <div className="text-center p-2">
+              <svg
+                className="w-6 h-6 mx-auto mb-1"
+                style={{ color: "var(--color-text-subtle)" }}
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M12 6v6m0 0v6m0-6h6m-6 0H6"
+                />
+              </svg>
+              <span
+                className="text-xs"
+                style={{ color: "var(--color-text-muted)" }}
+              >
+                Upload
+              </span>
+            </div>
+          )}
         <input
           type="file"
           accept="image/jpeg,image/png,image/webp"
@@ -141,7 +178,6 @@ export default function ImageUploader({
           className="hidden"
         />
       </label>
-      {error && <span className="text-xs text-red-500">{error}</span>}
     </div>
   );
 }

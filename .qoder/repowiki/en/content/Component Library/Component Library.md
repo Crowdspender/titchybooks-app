@@ -13,9 +13,23 @@
 - [SubmissionList.tsx](file://src/components/submissions/SubmissionList.tsx)
 - [StatusBadge.tsx](file://src/components/submissions/StatusBadge.tsx)
 - [AdminDashboard.tsx](file://src/components/admin/AdminDashboard.tsx)
+- [EditorWorkspace.tsx](file://src/components/editor/EditorWorkspace.tsx)
+- [EditorCanvas.tsx](file://src/components/editor/EditorCanvas.tsx)
+- [LayerPanel.tsx](file://src/components/editor/LayerPanel.tsx)
+- [PropertiesPanel.tsx](file://src/components/editor/PropertiesPanel.tsx)
+- [AiChatPanel.tsx](file://src/components/editor/AiChatPanel.tsx)
 - [constants.ts](file://src/lib/constants.ts)
 - [package.json](file://package.json)
 </cite>
+
+## Update Summary
+**Changes Made**
+- Added comprehensive documentation for the new sophisticated editor component ecosystem
+- Documented EditorWorkspace, EditorCanvas, LayerPanel, PropertiesPanel, and AiChatPanel components
+- Added detailed coverage of the AI chat integration system
+- Expanded component architecture to include advanced editor capabilities
+- Updated dependency analysis to include editor-specific libraries
+- Enhanced UI component documentation with editor-specific props and behaviors
 
 ## Table of Contents
 1. [Introduction](#introduction)
@@ -23,20 +37,22 @@
 3. [Core Components](#core-components)
 4. [Architecture Overview](#architecture-overview)
 5. [Detailed Component Analysis](#detailed-component-analysis)
-6. [Dependency Analysis](#dependency-analysis)
-7. [Performance Considerations](#performance-considerations)
-8. [Troubleshooting Guide](#troubleshooting-guide)
-9. [Conclusion](#conclusion)
-10. [Appendices](#appendices)
+6. [Editor Component Ecosystem](#editor-component-ecosystem)
+7. [AI Integration System](#ai-integration-system)
+8. [Dependency Analysis](#dependency-analysis)
+9. [Performance Considerations](#performance-considerations)
+10. [Troubleshooting Guide](#troubleshooting-guide)
+11. [Conclusion](#conclusion)
+12. [Appendices](#appendices)
 
 ## Introduction
-This document describes the React component library used in Titchybook Creator. It focuses on layout components (header navigation, provider wrappers, and page structure), authentication components (login and registration forms, plus authentication state management), upload components (image uploader, upload grid, and validation displays), submission management components (listing, status display, and administrative controls), and UI component documentation with props, events, styling options, and customization guidelines. It also provides usage examples, integration patterns, accessibility considerations, component composition, reusability, performance optimization, testing strategies, and development guidelines.
+This document describes the React component library used in Titchybook Creator. It focuses on layout components (header navigation, provider wrappers, and page structure), authentication components (login and registration forms, plus authentication state management), upload components (image uploader, upload grid, and validation displays), submission management components (listing, status display, and administrative controls), **editor components** (workspace, canvas, panels, and AI integration), and UI component documentation with props, events, styling options, and customization guidelines. It also provides usage examples, integration patterns, accessibility considerations, component composition, reusability, performance optimization, testing strategies, and development guidelines.
 
 ## Project Structure
 The application is a Next.js app with a clear separation of concerns:
 - App shell and providers are wired in the root layout.
 - Layout components provide global navigation and session-aware UI.
-- Feature-specific components live under dedicated folders (auth, create, submissions, admin).
+- Feature-specific components live under dedicated folders (auth, create, submissions, admin, editor).
 - Shared constants and types are centralized for reuse across components.
 
 ```mermaid
@@ -53,6 +69,7 @@ RP["Register Page<br/>(.../auth/register/page.tsx)"]
 CP["Create Page<br/>(.../(protected)/create/page.tsx)"]
 DP["Dashboard Page<br/>(.../(protected)/dashboard/page.tsx)"]
 AP["Admin Page<br/>(.../(admin)/admin/page.tsx)"]
+EP["Editor Page<br/>(.../(protected)/create/page.tsx)"]
 end
 subgraph "Components"
 AU["Auth Forms<br/>(LoginForm, RegisterForm)"]
@@ -61,6 +78,11 @@ IU2["Image Uploader<br/>(ImageUploader)"]
 SL["Submission List<br/>(SubmissionList)"]
 SB["Status Badge<br/>(StatusBadge)"]
 AD["Admin Dashboard<br/>(AdminDashboard)"]
+EW["Editor Workspace<br/>(EditorWorkspace)"]
+EC["Editor Canvas<br/>(EditorCanvas)"]
+LP["Layer Panel<br/>(LayerPanel)"]
+PP["Properties Panel<br/>(PropertiesPanel)"]
+ACP["AI Chat Panel<br/>(AiChatPanel)"]
 end
 L --> P --> H
 L --> HP
@@ -69,11 +91,17 @@ L --> RP
 L --> CP
 L --> DP
 L --> AP
+L --> EP
 CP --> IU
 IU --> IU2
 DP --> SL
 SL --> SB
 AP --> AD
+EP --> EW
+EW --> EC
+EW --> LP
+EW --> PP
+EW --> ACP
 ```
 
 **Diagram sources**
@@ -85,6 +113,11 @@ AP --> AD
 - [SubmissionList.tsx:15-118](file://src/components/submissions/SubmissionList.tsx#L15-L118)
 - [StatusBadge.tsx:1-17](file://src/components/submissions/StatusBadge.tsx#L1-L17)
 - [AdminDashboard.tsx:21-167](file://src/components/admin/AdminDashboard.tsx#L21-L167)
+- [EditorWorkspace.tsx:265-325](file://src/components/editor/EditorWorkspace.tsx#L265-L325)
+- [EditorCanvas.tsx:33-44](file://src/components/editor/EditorCanvas.tsx#L33-L44)
+- [LayerPanel.tsx:30-40](file://src/components/editor/LayerPanel.tsx#L30-L40)
+- [PropertiesPanel.tsx:41-53](file://src/components/editor/PropertiesPanel.tsx#L41-L53)
+- [AiChatPanel.tsx:31-36](file://src/components/editor/AiChatPanel.tsx#L31-L36)
 
 **Section sources**
 - [layout.tsx:23-41](file://src/app/layout.tsx#L23-L41)
@@ -94,7 +127,7 @@ AP --> AD
 This section documents the foundational building blocks of the UI.
 
 - Providers
-  - Purpose: Wraps the app with NextAuth’s session provider to enable session-aware components.
+  - Purpose: Wraps the app with NextAuth's session provider to enable session-aware components.
   - Props: children (ReactNode).
   - Behavior: Passes down session context to descendant components.
   - Accessibility: None by itself; ensures downstream components can read/use session state.
@@ -102,7 +135,7 @@ This section documents the foundational building blocks of the UI.
 
 - Header
   - Purpose: Renders the global navigation bar with branding, links, and session-dependent actions.
-  - Behavior: Shows “Dashboard”, “New Book”, “Admin” (when role is ADMIN), user email, and “Sign out” when logged in; otherwise shows “Sign in” and “Register”.
+  - Behavior: Shows "Dashboard", "New Book", "Admin" (when role is ADMIN), user email, and "Sign out" when logged in; otherwise shows "Sign in" and "Register".
   - Accessibility: Uses semantic links and buttons; ensure keyboard navigation and screen reader compatibility via standard anchor/button semantics.
   - Customization: Adjust routes, roles, and styling classes to match brand guidelines.
 
@@ -123,6 +156,7 @@ The component architecture follows a layered pattern:
 - Authentication state is managed by NextAuth and exposed via hooks.
 - Upload components coordinate with serverless APIs to obtain pre-signed URLs and upload images directly to S3.
 - Submission components fetch and display user submissions; admin components manage submissions.
+- **Editor components provide a sophisticated canvas-based editing experience with real-time collaboration, AI assistance, and template system integration.**
 
 ```mermaid
 sequenceDiagram
@@ -132,6 +166,9 @@ participant LG as "LoginForm"
 participant RG as "RegisterForm"
 participant IG as "ImageUploader"
 participant GG as "UploadGrid"
+participant EW as "EditorWorkspace"
+participant EC as "EditorCanvas"
+participant ACP as "AiChatPanel"
 participant SL as "SubmissionList"
 participant SB as "StatusBadge"
 participant AD as "AdminDashboard"
@@ -146,7 +183,11 @@ IG->>IG : Validate file type/size
 IG->>IG : Fetch pre-signed URL
 IG->>IG : PUT to S3
 IG-->>GG : onUploaded callback
-GG-->>SL : On successful submission, navigate to Dashboard
+GG-->>EW : On successful submission, open editor
+EW->>EC : Render canvas with merged template/user layers
+EC->>ACP : AI assistance for text generation
+ACP-->>EC : Apply AI suggestions to canvas
+EW-->>SL : Save and submit when ready
 SL-->>SB : Render status badges
 U->>AD : Admin reviews pending submissions
 AD-->>U : Approve/Reject with feedback
@@ -158,6 +199,9 @@ AD-->>U : Approve/Reject with feedback
 - [RegisterForm.tsx:6-106](file://src/components/auth/RegisterForm.tsx#L6-L106)
 - [ImageUploader.tsx:12-147](file://src/components/create/ImageUploader.tsx#L12-L147)
 - [UploadGrid.tsx:16-114](file://src/components/create/UploadGrid.tsx#L16-L114)
+- [EditorWorkspace.tsx:265-325](file://src/components/editor/EditorWorkspace.tsx#L265-L325)
+- [EditorCanvas.tsx:33-44](file://src/components/editor/EditorCanvas.tsx#L33-L44)
+- [AiChatPanel.tsx:31-36](file://src/components/editor/AiChatPanel.tsx#L31-L36)
 - [SubmissionList.tsx:15-118](file://src/components/submissions/SubmissionList.tsx#L15-L118)
 - [StatusBadge.tsx:1-17](file://src/components/submissions/StatusBadge.tsx#L1-L17)
 - [AdminDashboard.tsx:21-167](file://src/components/admin/AdminDashboard.tsx#L21-L167)
@@ -384,6 +428,11 @@ AD-->>U : Approve/Reject with feedback
   - Use StatusBadge for status indicators.
 - Admin:
   - Render AdminDashboard for reviewing submissions.
+- **Editor:**
+  - **Render EditorWorkspace as the main editor interface.**
+  - **Use EditorCanvas for the interactive drawing surface.**
+  - **Integrate LayerPanel and PropertiesPanel for element manipulation.**
+  - **Embed AiChatPanel for AI-powered content generation.**
 
 ### Accessibility Considerations
 - Ensure labels are associated with inputs.
@@ -391,17 +440,257 @@ AD-->>U : Approve/Reject with feedback
 - Maintain sufficient color contrast for status badges.
 - Use semantic HTML (buttons, links, tables).
 - Add ARIA attributes if extending components (e.g., aria-describedby for validation messages).
+- **For editor components, ensure canvas elements are keyboard accessible and screen reader friendly.**
 
 ### Component Composition and Reusability
 - Centralize shared constants (page labels, statuses) for type-safe composition.
 - Keep components small and focused; pass data and callbacks via props.
 - Encapsulate side effects (fetch, uploads) in components to improve testability.
+- **Use composition patterns for complex editor workflows combining multiple specialized panels.**
 
 ### Performance Optimization
-- Memoize callbacks passed to child components to avoid unnecessary re-renders.
-- Use skeleton loaders for lists to improve perceived performance.
-- Defer heavy computations off the main thread when possible.
-- Minimize reflows by batching DOM updates.
+- Prefer server-side rendering for static content; keep interactive components client-side.
+- Use memoization for expensive callbacks and derived data.
+- Lazy-load heavy assets or components when appropriate.
+- Optimize network requests: batch submissions, cache pre-signed URLs, and abort on unmount.
+- Minimize layout thrashing by avoiding synchronous reads of computed styles.
+- **For editor components, implement debounced saving and efficient canvas rendering.**
+
+## Editor Component Ecosystem
+
+### EditorWorkspace
+**Updated** Major addition of sophisticated editor workspace component
+
+The EditorWorkspace serves as the main orchestrator for the Titchybook editor, managing state, templates, assets, and AI integration.
+
+- Purpose: Main editor container that manages the complete editing workflow.
+- Props:
+  - submissionId?: string (optional submission identifier)
+  - forceNew?: boolean (force creation of new draft)
+- State Management:
+  - Loading states and messages
+  - Submission data with pages and assets
+  - Active page selection and element selection
+  - Save states (idle, saving, saved, error)
+  - Template system integration
+  - AI chat panel visibility
+  - Undo/redo history
+- Features:
+  - Real-time draft creation and persistence
+  - Template merging with user modifications
+  - Asset library management
+  - Keyboard shortcuts (Ctrl/Cmd+Z for undo/redo)
+  - Thumbnail generation for page previews
+  - AI-powered text suggestions
+  - Template detachment for full customization
+- Integration:
+  - Dynamic imports EditorCanvas for performance
+  - Manages EditorCanvas, LayerPanel, PropertiesPanel, and AiChatPanel
+  - Coordinates with backend APIs for saving and submitting
+
+**Section sources**
+- [EditorWorkspace.tsx:265-325](file://src/components/editor/EditorWorkspace.tsx#L265-L325)
+- [EditorWorkspace.tsx:398-712](file://src/components/editor/EditorWorkspace.tsx#L398-L712)
+- [EditorWorkspace.tsx:869-974](file://src/components/editor/EditorWorkspace.tsx#L869-L974)
+
+### EditorCanvas
+**Updated** Added comprehensive canvas component documentation
+
+The EditorCanvas provides the interactive drawing surface with advanced editing capabilities.
+
+- Purpose: Interactive canvas for creating and editing book pages.
+- Props:
+  - scene: EditorScene (current page scene data)
+  - assets: CanvasAsset[] (available assets)
+  - selectedElementId: string | null (currently selected element)
+  - onSelectElement: (id) => void (element selection handler)
+  - onSceneChange: (scene) => void (scene modification handler)
+  - pageLabel?: PageLabel (current page identifier)
+  - templateElementIds?: Set<string> (template element identifiers)
+  - templateTextElementIds?: Set<string> (editable template text elements)
+  - isInstanceMode?: boolean (template instance vs template editing)
+- Rendering:
+  - Supports text, image, and shape elements
+  - Real-time transformation with Konva.js
+  - Template layer rendering with proper interaction restrictions
+  - Image cropping overlay with pan/zoom controls
+- Interactions:
+  - Drag-and-drop element positioning
+  - Transform handles for resizing and rotating
+  - Double-click to enter crop mode for images
+  - Keyboard shortcuts for element operations
+- Performance:
+  - Efficient element rendering with proper z-index ordering
+  - Canvas-based thumbnail generation
+  - Optimized image loading with cross-origin support
+
+**Section sources**
+- [EditorCanvas.tsx:33-44](file://src/components/editor/EditorCanvas.tsx#L33-L44)
+- [EditorCanvas.tsx:69-296](file://src/components/editor/EditorCanvas.tsx#L69-L296)
+- [EditorCanvas.tsx:298-501](file://src/components/editor/EditorCanvas.tsx#L298-L501)
+- [EditorCanvas.tsx:503-694](file://src/components/editor/EditorCanvas.tsx#L503-L694)
+
+### LayerPanel
+**Updated** Added layer management component
+
+The LayerPanel provides hierarchical control over page elements with template awareness.
+
+- Purpose: Manage and organize page elements in z-order hierarchy.
+- Props:
+  - elements: EditorElement[] (user-created elements)
+  - templateElements: EditorElement[] (template-provided elements)
+  - selectedElementId: string | null (currently selected element)
+  - onSelectElement: (id) => void (element selection handler)
+  - onToggleVisibility: (id) => void (visibility toggle handler)
+  - onToggleLock: (id) => void (lock toggle handler)
+  - onDuplicateElement: (id) => void (duplicate handler)
+  - onDeleteElement: (id) => void (delete handler)
+  - isInstanceMode?: boolean (template instance mode)
+- Features:
+  - Separate sections for template elements and user elements
+  - Visual distinction between element types (text, image, shape)
+  - Template text elements with special handling
+  - Z-index display and sorting
+  - Action buttons for each element (show/hide, lock/unlock, copy, delete)
+- Template Integration:
+  - Shows template elements in locked state
+  - Allows text editing for template text elements
+  - Provides visual feedback for template vs user elements
+
+**Section sources**
+- [LayerPanel.tsx:30-40](file://src/components/editor/LayerPanel.tsx#L30-L40)
+- [LayerPanel.tsx:41-53](file://src/components/editor/LayerPanel.tsx#L41-L53)
+- [LayerPanel.tsx:71-141](file://src/components/editor/LayerPanel.tsx#L71-L141)
+- [LayerPanel.tsx:143-207](file://src/components/editor/LayerPanel.tsx#L143-L207)
+
+### PropertiesPanel
+**Updated** Added comprehensive properties editing component
+
+The PropertiesPanel provides detailed editing controls for selected elements with template-aware behavior.
+
+- Purpose: Edit properties of selected elements with context-aware controls.
+- Props:
+  - selectedElement: RenderableEditorElement | null (currently selected element)
+  - onChangeElement: (id, updater) => void (element property update handler)
+  - onDeleteElement: (id) => void (delete handler)
+  - onDuplicateElement: (id) => void (duplicate handler)
+  - onToggleVisibility: (id) => void (visibility toggle handler)
+  - onToggleLock: (id) => void (lock toggle handler)
+  - onBringForward: (id) => void (bring forward handler)
+  - onSendBackward: (id) => void (send backward handler)
+  - isInstanceMode?: boolean (template instance mode)
+  - templateTextOriginal?: string (original template text)
+  - onResetTemplateText?: (id) => void (reset template text handler)
+- Special Cases:
+  - Template text elements: Only text content is editable, position/size/style locked
+  - Template non-text elements: Fully locked, read-only display
+  - No selection: General guidance for element selection
+- Controls:
+  - Position and dimension inputs (X, Y, Width, Height)
+  - Rotation and opacity sliders
+  - Visibility and lock toggles
+  - Text-specific controls (font size, color, content)
+  - Shape-specific controls (fill, stroke, stroke width)
+  - Image-specific controls (crop zoom, focal point)
+  - Element manipulation (duplicate, reorder, delete)
+
+**Section sources**
+- [PropertiesPanel.tsx:41-53](file://src/components/editor/PropertiesPanel.tsx#L41-L53)
+- [PropertiesPanel.tsx:57-119](file://src/components/editor/PropertiesPanel.tsx#L57-L119)
+- [PropertiesPanel.tsx:123-152](file://src/components/editor/PropertiesPanel.tsx#L123-L152)
+- [PropertiesPanel.tsx:154-164](file://src/components/editor/PropertiesPanel.tsx#L154-L164)
+
+### Usage Examples and Integration Patterns
+- **Editor Integration:**
+  - Import EditorWorkspace as the main editor component.
+  - Pass submissionId for existing drafts or forceNew for fresh creation.
+  - Use EditorCanvas as the core drawing surface within EditorWorkspace.
+  - Integrate LayerPanel and PropertiesPanel for element management.
+  - Embed AiChatPanel for AI-powered content assistance.
+- **State Management:**
+  - Handle scene changes through onSceneChange callbacks.
+  - Manage element selections across panels.
+  - Implement proper error handling for save operations.
+- **Template Integration:**
+  - Use isInstanceMode to distinguish between template editing and instance customization.
+  - Handle template text overrides for per-instance customization.
+  - Implement template detachment when needed.
+
+## AI Integration System
+
+### AiChatPanel
+**Updated** Added comprehensive AI chat integration component
+
+The AiChatPanel provides an integrated AI assistant for creative writing and content generation.
+
+- Purpose: AI-powered content generation and editing assistance.
+- Props:
+  - isOpen: boolean (panel visibility state)
+  - onToggle: () => void (panel toggle handler)
+  - bookContext: BookContext (current editor state context)
+  - onApplyText: (targetPage, text, style?) => void (apply suggestion handler)
+- Features:
+  - Real-time streaming responses from AI backend
+  - Markdown rendering for AI responses
+  - Interactive suggestion cards with apply functionality
+  - Context-aware suggestions based on book content
+  - Floating trigger button when collapsed
+  - Auto-focus input when panel opens
+- AI Integration:
+  - Sends book context (title, active page, page content) to AI backend
+  - Parses structured AI responses with suggestions
+  - Supports multi-turn conversations with streaming
+  - Handles AI errors and connection issues gracefully
+- User Experience:
+  - Smooth auto-scrolling to latest messages
+  - Visual indicators for AI thinking and streaming
+  - Clear chat history management
+  - Responsive design with fixed positioning
+
+**Section sources**
+- [AiChatPanel.tsx:31-36](file://src/components/editor/AiChatPanel.tsx#L31-L36)
+- [AiChatPanel.tsx:65-186](file://src/components/editor/AiChatPanel.tsx#L65-L186)
+- [AiChatPanel.tsx:195-202](file://src/components/editor/AiChatPanel.tsx#L195-L202)
+- [AiChatPanel.tsx:209-233](file://src/components/editor/AiChatPanel.tsx#L209-L233)
+
+### AI Context System
+**Updated** Added AI context building and management
+
+The AI system builds contextual information from the current editor state to provide relevant suggestions.
+
+- Context Building:
+  - Title of the book
+  - Currently active page label
+  - Content snippets from all pages (up to 200 characters each)
+  - Template text overrides for per-instance customizations
+- Response Processing:
+  - Parses structured AI responses with message and suggestions
+  - Sanitizes AI-generated text for safe insertion
+  - Supports styled suggestions with font and formatting preferences
+- Integration Points:
+  - Passes context to AI backend via /api/ai/chat endpoint
+  - Handles SSE streaming responses for real-time interaction
+  - Manages conversation state and error recovery
+
+**Section sources**
+- [AiChatPanel.tsx:372-396](file://src/components/editor/AiChatPanel.tsx#L372-L396)
+- [AiChatPanel.tsx:108-121](file://src/components/editor/AiChatPanel.tsx#L108-L121)
+- [AiChatPanel.tsx:164-170](file://src/components/editor/AiChatPanel.tsx#L164-L170)
+
+### Usage Examples and Integration Patterns
+- **AI Integration:**
+  - Initialize AiChatPanel with EditorWorkspace context.
+  - Handle onApplyText callbacks to insert AI suggestions into editor.
+  - Manage AI panel visibility state alongside editor panels.
+  - Implement proper error handling for AI service connectivity.
+- **Context Management:**
+  - Update bookContext when editor state changes.
+  - Handle template text overrides in context building.
+  - Manage conversation history for meaningful AI interactions.
+- **User Experience:**
+  - Provide clear visual feedback for AI processing states.
+  - Implement suggestion cards with apply functionality.
+  - Handle streaming responses smoothly without blocking UI.
 
 ## Dependency Analysis
 External libraries and their roles:
@@ -411,6 +700,10 @@ External libraries and their roles:
 - @prisma/client: Database client.
 - pdf-lib: PDF generation pipeline (referenced in package.json).
 - sharp: Image processing pipeline (referenced in package.json).
+- **react-konva: Canvas rendering and interactive graphics for editor.**
+- **konva: 2D canvas library for element manipulation and transformations.**
+- **react-markdown: Markdown rendering for AI responses and content display.**
+- **@aws-sdk/client-s3: S3 operations for asset management and storage.**
 
 ```mermaid
 graph LR
@@ -423,6 +716,11 @@ GG["UploadGrid"]
 SL["SubmissionList"]
 SB["StatusBadge"]
 AD["AdminDashboard"]
+EW["EditorWorkspace"]
+EC["EditorCanvas"]
+LP["LayerPanel"]
+PP["PropertiesPanel"]
+ACP["AiChatPanel"]
 end
 subgraph "Libraries"
 NA["next-auth"]
@@ -431,6 +729,9 @@ AWS["@aws-sdk/*"]
 PRIS["@prisma/client"]
 PDF["pdf-lib"]
 SH["sharp"]
+RK["react-konva"]
+K["konva"]
+RMD["react-markdown"]
 end
 H --> NA
 LGF --> NA
@@ -442,6 +743,12 @@ AD --> SB
 GG --> PRIS
 SL --> PRIS
 AD --> PRIS
+EW --> RK
+EC --> K
+EW --> RMD
+ACP --> RMD
+EW --> AWS
+EC --> AWS
 IG --> PDF
 IG --> SH
 H --> SN
@@ -450,6 +757,7 @@ RGF --> SN
 GG --> SN
 SL --> SN
 AD --> SN
+ACP --> SN
 ```
 
 **Diagram sources**
@@ -460,6 +768,11 @@ AD --> SN
 - [UploadGrid.tsx:4](file://src/components/create/UploadGrid.tsx#L4)
 - [SubmissionList.tsx:3](file://src/components/submissions/SubmissionList.tsx#L3)
 - [AdminDashboard.tsx:3](file://src/components/admin/AdminDashboard.tsx#L3)
+- [EditorWorkspace.tsx:3](file://src/components/editor/EditorWorkspace.tsx#L3)
+- [EditorCanvas.tsx:3](file://src/components/editor/EditorCanvas.tsx#L3)
+- [LayerPanel.tsx:3](file://src/components/editor/LayerPanel.tsx#L3)
+- [PropertiesPanel.tsx:3](file://src/components/editor/PropertiesPanel.tsx#L3)
+- [AiChatPanel.tsx:3](file://src/components/editor/AiChatPanel.tsx#L3)
 
 **Section sources**
 - [package.json:11-25](file://package.json#L11-L25)
@@ -470,6 +783,11 @@ AD --> SN
 - Lazy-load heavy assets or components when appropriate.
 - Optimize network requests: batch submissions, cache pre-signed URLs, and abort on unmount.
 - Minimize layout thrashing by avoiding synchronous reads of computed styles.
+- **For editor components, implement debounced saving (700ms for titles, 800ms for scenes) to reduce API calls.**
+- **Use dynamic imports for EditorCanvas to improve initial page load performance.**
+- **Implement efficient canvas rendering with proper element sorting and z-index management.**
+- **Cache generated thumbnails and asset previews to avoid recomputation.**
+- **Optimize AI response streaming with proper abort controllers to prevent memory leaks.**
 
 ## Troubleshooting Guide
 - Authentication failures:
@@ -483,6 +801,15 @@ AD --> SN
   - AdminDashboard uses a refresh key to refetch; ensure PATCH actions update state and that the API responds correctly.
 - Toast feedback:
   - Sonner is globally configured; verify toasts appear on success/failure paths.
+- **Editor workspace issues:**
+  - **EditorWorkspace shows loading states; check /api/submissions endpoints and template loading.**
+  - **Canvas rendering problems: ensure react-konva and konva are properly imported and initialized.**
+  - **LayerPanel shows empty state; verify element data is properly passed from EditorWorkspace.**
+  - **PropertiesPanel shows locked state; check template mode and element permissions.**
+- **AI integration problems:**
+  - **AiChatPanel shows connection errors; verify /api/ai/chat endpoint and AI service availability.**
+  - **Streaming responses fail; check SSE implementation and response parsing.**
+  - **Suggestions not applying; ensure onApplyText callback is properly connected.**
 
 **Section sources**
 - [LoginForm.tsx:14-33](file://src/components/auth/LoginForm.tsx#L14-L33)
@@ -490,9 +817,12 @@ AD --> SN
 - [ImageUploader.tsx:22-73](file://src/components/create/ImageUploader.tsx#L22-L73)
 - [UploadGrid.tsx:42-76](file://src/components/create/UploadGrid.tsx#L42-L76)
 - [AdminDashboard.tsx:43-62](file://src/components/admin/AdminDashboard.tsx#L43-L62)
+- [EditorWorkspace.tsx:398-457](file://src/components/editor/EditorWorkspace.tsx#L398-L457)
+- [EditorCanvas.tsx:48-67](file://src/components/editor/EditorCanvas.tsx#L48-L67)
+- [AiChatPanel.tsx:108-121](file://src/components/editor/AiChatPanel.tsx#L108-L121)
 
 ## Conclusion
-The component library is structured around a clean separation of concerns: layout and providers at the root, feature components for authentication, uploads, submissions, and administration, and shared constants for type safety. Components are designed to be reusable, accessible, and testable, with clear integration patterns and performance-conscious behavior. Extending the library involves adding new components that follow these patterns and leveraging existing providers and utilities.
+The component library is structured around a clean separation of concerns: layout and providers at the root, feature components for authentication, uploads, submissions, administration, and **a sophisticated editor ecosystem**. The new editor components provide a comprehensive canvas-based editing experience with real-time collaboration, AI assistance, template integration, and advanced element manipulation. Components are designed to be reusable, accessible, and testable, with clear integration patterns and performance-conscious behavior. Extending the library involves adding new components that follow these patterns and leveraging existing providers, utilities, and the new editor infrastructure.
 
 ## Appendices
 
@@ -509,6 +839,46 @@ The component library is structured around a clean separation of concerns: layou
 - SubmissionList: none.
 - StatusBadge: status: string.
 - AdminDashboard: none.
+- **EditorWorkspace:**
+  - - submissionId?: string
+  - - forceNew?: boolean
+- **EditorCanvas:**
+  - - scene: EditorScene
+  - - assets: CanvasAsset[]
+  - - selectedElementId: string | null
+  - - onSelectElement: (id) => void
+  - - onSceneChange: (scene) => void
+  - - pageLabel?: PageLabel
+  - - templateElementIds?: Set<string>
+  - - templateTextElementIds?: Set<string>
+  - - isInstanceMode?: boolean
+- **LayerPanel:**
+  - - elements: EditorElement[]
+  - - templateElements: EditorElement[]
+  - - selectedElementId: string | null
+  - - onSelectElement: (id) => void
+  - - onToggleVisibility: (id) => void
+  - - onToggleLock: (id) => void
+  - - onDuplicateElement: (id) => void
+  - - onDeleteElement: (id) => void
+  - - isInstanceMode?: boolean
+- **PropertiesPanel:**
+  - - selectedElement: RenderableEditorElement | null
+  - - onChangeElement: (id, updater) => void
+  - - onDeleteElement: (id) => void
+  - - onDuplicateElement: (id) => void
+  - - onToggleVisibility: (id) => void
+  - - onToggleLock: (id) => void
+  - - onBringForward: (id) => void
+  - - onSendBackward: (id) => void
+  - - isInstanceMode?: boolean
+  - - templateTextOriginal?: string
+  - - onResetTemplateText?: (id) => void
+- **AiChatPanel:**
+  - - isOpen: boolean
+  - - onToggle: () => void
+  - - bookContext: BookContext
+  - - onApplyText: (targetPage, text, style?) => void
 
 ### Constants Reference
 - SubmissionStatus enum and VALID_STATUSES.

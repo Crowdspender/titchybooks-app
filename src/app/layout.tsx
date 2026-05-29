@@ -34,7 +34,16 @@ export default function RootLayout({
         <Providers>
           <Header />
           <main className="min-h-[calc(100vh-3.5rem)]">{children}</main>
-          <Toaster richColors position="top-right" />
+          <Toaster
+            richColors
+            position="top-right"
+            toastOptions={{
+              style: {
+                fontFamily: "var(--font-sans)",
+                borderRadius: "var(--radius-md)",
+              },
+            }}
+          />
         </Providers>
       </body>
     </html>

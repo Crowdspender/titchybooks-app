@@ -125,25 +125,31 @@ export default function TemplateManager() {
     return (
         <div>
             <div className="flex items-center justify-between mb-6">
-                <h2 className="text-xl font-bold">Templates</h2>
+                <h2
+                    className="text-xl font-semibold"
+                    style={{ color: "var(--color-text)" }}
+                >
+                    Templates
+                </h2>
                 <button
                     onClick={handleCreate}
                     disabled={creating}
-                    className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 text-sm disabled:opacity-50"
+                    className="btn btn-primary btn-sm"
                 >
                     {creating ? "Creating..." : "+ Create Template"}
                 </button>
             </div>
 
-            <div className="flex gap-2 mb-4">
+            <div
+                className="flex gap-2 mb-6 pb-6"
+                style={{ borderBottom: "1px solid var(--color-border)" }}
+            >
                 {["", "DRAFT", "APPROVED"].map((s) => (
                     <button
                         key={s}
                         onClick={() => setFilter(s)}
-                        className={`px-3 py-1 text-sm rounded-md ${
-                            filter === s
-                                ? "bg-blue-600 text-white"
-                                : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                        className={`btn btn-sm ${
+                            filter === s ? "btn-primary" : "btn-ghost"
                         }`}
                     >
                         {s || "All"}
@@ -157,110 +163,198 @@ export default function TemplateManager() {
                         {[1, 2, 3].map((i) => (
                             <div
                                 key={i}
-                                className="h-16 bg-gray-100 rounded-lg animate-pulse"
-                            />
+                                className="card p-5 animate-pulse"
+                                style={{ background: "var(--color-border)" }}
+                            >
+                                <div
+                                    className="h-4 w-40 rounded"
+                                    style={{
+                                        background:
+                                            "var(--color-border-strong)",
+                                    }}
+                                />
+                            </div>
                         ))}
                     </div>
                 )
                 : filteredTemplates.length === 0
                 ? (
-                    <p className="text-gray-500 text-center py-12">
-                        No templates found.
-                    </p>
+                    <div className="card p-12 text-center">
+                        <div
+                            className="inline-flex items-center justify-center w-16 h-16 rounded-2xl mb-4"
+                            style={{ background: "var(--color-primary-muted)" }}
+                        >
+                            <svg
+                                width="32"
+                                height="32"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="var(--color-primary)"
+                                strokeWidth="1.5"
+                            >
+                                <path
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                    d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"
+                                />
+                            </svg>
+                        </div>
+                        <p
+                            className="font-medium mb-1"
+                            style={{ color: "var(--color-text)" }}
+                        >
+                            No templates yet
+                        </p>
+                        <p
+                            className="text-sm mb-4"
+                            style={{ color: "var(--color-text-muted)" }}
+                        >
+                            Create templates that users can apply to their
+                            Titchybooks.
+                        </p>
+                        <button
+                            onClick={handleCreate}
+                            disabled={creating}
+                            className="btn btn-primary"
+                        >
+                            {creating ? "Creating..." : "Create first template"}
+                        </button>
+                    </div>
                 )
                 : (
-                    <div className="border border-gray-200 rounded-lg overflow-hidden">
-                        <table className="w-full text-sm">
-                            <thead className="bg-gray-50">
-                                <tr>
-                                    <th className="text-left px-4 py-2 font-medium">
-                                        Title
-                                    </th>
-                                    <th className="text-left px-4 py-2 font-medium">
-                                        Status
-                                    </th>
-                                    <th className="text-left px-4 py-2 font-medium">
-                                        Version
-                                    </th>
-                                    <th className="text-left px-4 py-2 font-medium">
-                                        Instances
-                                    </th>
-                                    <th className="text-left px-4 py-2 font-medium">
-                                        Created
-                                    </th>
-                                    <th className="text-right px-4 py-2 font-medium">
-                                        Actions
-                                    </th>
-                                </tr>
-                            </thead>
-                            <tbody className="divide-y divide-gray-200">
-                                {filteredTemplates.map((template) => (
-                                    <tr key={template.id}>
-                                        <td className="px-4 py-3 font-medium">
-                                            {template.title || "Untitled"}
-                                        </td>
-                                        <td className="px-4 py-3">
-                                            <span
-                                                className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${
-                                                    template.status ===
-                                                            "APPROVED"
-                                                        ? "bg-green-100 text-green-800"
-                                                        : "bg-yellow-100 text-yellow-800"
-                                                }`}
+                    <div className="card overflow-hidden">
+                        <div className="overflow-x-auto">
+                            <table className="w-full text-sm">
+                                <thead>
+                                    <tr
+                                        style={{
+                                            background: "var(--color-surface)",
+                                            borderBottom:
+                                                "1px solid var(--color-border)",
+                                        }}
+                                    >
+                                        <th className="text-left px-5 py-3 section-label">
+                                            Title
+                                        </th>
+                                        <th className="text-left px-5 py-3 section-label">
+                                            Status
+                                        </th>
+                                        <th className="text-left px-5 py-3 section-label">
+                                            Version
+                                        </th>
+                                        <th className="text-left px-5 py-3 section-label">
+                                            Instances
+                                        </th>
+                                        <th className="text-left px-5 py-3 section-label">
+                                            Created
+                                        </th>
+                                        <th className="text-right px-5 py-3 section-label">
+                                            Actions
+                                        </th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {filteredTemplates.map((template) => (
+                                        <tr
+                                            key={template.id}
+                                            style={{
+                                                borderBottom:
+                                                    "1px solid var(--color-border)",
+                                            }}
+                                        >
+                                            <td
+                                                className="px-5 py-4 font-medium"
+                                                style={{
+                                                    color: "var(--color-text)",
+                                                }}
                                             >
-                                                {template.status}
-                                            </span>
-                                        </td>
-                                        <td className="px-4 py-3 text-gray-600">
-                                            v{template.version}
-                                        </td>
-                                        <td className="px-4 py-3 text-gray-600">
-                                            {template.instanceCount}
-                                        </td>
-                                        <td className="px-4 py-3 text-gray-600">
-                                            {new Date(template.createdAt)
-                                                .toLocaleDateString()}
-                                        </td>
-                                        <td className="px-4 py-3 text-right">
-                                            <div className="flex gap-2 justify-end">
-                                                <button
-                                                    onClick={() =>
-                                                        router.push(
-                                                            `/create?submissionId=${template.id}`,
-                                                        )}
-                                                    className="px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700"
+                                                {template.title || "Untitled"}
+                                            </td>
+                                            <td className="px-5 py-4">
+                                                <span
+                                                    className={`badge ${
+                                                        template.status ===
+                                                                "APPROVED"
+                                                            ? "badge-approved"
+                                                            : "badge-pending"
+                                                    }`}
                                                 >
-                                                    Edit
-                                                </button>
-                                                {template.status !==
-                                                        "APPROVED" && (
+                                                    {template.status}
+                                                </span>
+                                            </td>
+                                            <td
+                                                className="px-5 py-4"
+                                                style={{
+                                                    color:
+                                                        "var(--color-text-muted)",
+                                                }}
+                                            >
+                                                v{template.version}
+                                            </td>
+                                            <td
+                                                className="px-5 py-4"
+                                                style={{
+                                                    color:
+                                                        "var(--color-text-muted)",
+                                                }}
+                                            >
+                                                {template.instanceCount}
+                                            </td>
+                                            <td
+                                                className="px-5 py-4"
+                                                style={{
+                                                    color:
+                                                        "var(--color-text-muted)",
+                                                }}
+                                            >
+                                                {new Date(template.createdAt)
+                                                    .toLocaleDateString()}
+                                            </td>
+                                            <td className="px-5 py-4 text-right">
+                                                <div className="flex gap-2 justify-end">
                                                     <button
                                                         onClick={() =>
-                                                            handlePublish(
-                                                                template.id,
+                                                            router.push(
+                                                                `/create?submissionId=${template.id}`,
                                                             )}
-                                                        className="px-3 py-1 text-xs bg-green-600 text-white rounded hover:bg-green-700"
+                                                        className="btn btn-primary btn-sm text-xs"
                                                     >
-                                                        Publish
+                                                        Edit
                                                     </button>
-                                                )}
-                                                <button
-                                                    onClick={() =>
-                                                        handleDelete(
-                                                            template.id,
-                                                            template
-                                                                .instanceCount,
-                                                        )}
-                                                    className="px-3 py-1 text-xs bg-red-600 text-white rounded hover:bg-red-700"
-                                                >
-                                                    Delete
-                                                </button>
-                                            </div>
-                                        </td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
+                                                    {template.status !==
+                                                            "APPROVED" && (
+                                                        <button
+                                                            onClick={() =>
+                                                                handlePublish(
+                                                                    template.id,
+                                                                )}
+                                                            className="btn btn-success btn-sm text-xs"
+                                                        >
+                                                            Publish
+                                                        </button>
+                                                    )}
+                                                    <button
+                                                        onClick={() =>
+                                                            handleDelete(
+                                                                template.id,
+                                                                template
+                                                                    .instanceCount,
+                                                            )}
+                                                        className="btn btn-ghost btn-sm text-xs"
+                                                        style={{
+                                                            color:
+                                                                "var(--color-error)",
+                                                        }}
+                                                    >
+                                                        Delete
+                                                    </button>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
                     </div>
                 )}
         </div>

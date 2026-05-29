@@ -61,13 +61,22 @@ export default function TemplateGallery() {
 
     if (loading) {
         return (
-            <div className="max-w-4xl mx-auto px-4 py-8">
-                <h1 className="text-2xl font-bold mb-6">Choose a Template</h1>
+            <div className="page-container py-10">
+                <div className="mb-8">
+                    <p className="section-label mb-2">Start from a template</p>
+                    <h1
+                        className="text-3xl font-semibold tracking-tight"
+                        style={{ color: "var(--color-text)" }}
+                    >
+                        Choose a Template
+                    </h1>
+                </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
                     {[1, 2, 3].map((i) => (
                         <div
                             key={i}
-                            className="h-64 bg-gray-100 rounded-xl animate-pulse"
+                            className="card h-64 animate-pulse"
+                            style={{ background: "var(--color-border)" }}
                         />
                     ))}
                 </div>
@@ -76,18 +85,29 @@ export default function TemplateGallery() {
     }
 
     return (
-        <div className="max-w-4xl mx-auto px-4 py-8">
-            <div className="flex items-center justify-between mb-6">
-                <h1 className="text-2xl font-bold">Choose a Template</h1>
+        <div className="page-container py-10">
+            <div className="flex items-start justify-between mb-2">
+                <div>
+                    <p className="section-label mb-2">Start from a template</p>
+                    <h1
+                        className="text-3xl font-semibold tracking-tight"
+                        style={{ color: "var(--color-text)" }}
+                    >
+                        Choose a Template
+                    </h1>
+                </div>
                 <button
                     onClick={() => router.push("/create?new=true")}
-                    className="px-4 py-2 border border-stone-300 text-stone-700 rounded-md hover:bg-stone-50 text-sm"
+                    className="btn btn-outline"
                 >
                     Start from Scratch
                 </button>
             </div>
 
-            <p className="text-stone-600 mb-6">
+            <p
+                className="mb-8 text-sm leading-relaxed"
+                style={{ color: "var(--color-text-muted)" }}
+            >
                 Pick a pre-designed template to get started quickly. Template
                 elements are locked so you can focus on adding your own content
                 on top.
@@ -95,13 +115,30 @@ export default function TemplateGallery() {
 
             {templates.length === 0
                 ? (
-                    <div className="text-center py-12">
-                        <p className="text-gray-500">
+                    <div className="card p-12 text-center">
+                        <svg
+                            className="mx-auto h-12 w-12"
+                            fill="none"
+                            viewBox="0 0 24 24"
+                            stroke="currentColor"
+                            strokeWidth={1.5}
+                            style={{ color: "var(--color-text-subtle)" }}
+                        >
+                            <path
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"
+                            />
+                        </svg>
+                        <p
+                            className="mt-4 text-sm"
+                            style={{ color: "var(--color-text-muted)" }}
+                        >
                             No templates available yet.
                         </p>
                         <button
                             onClick={() => router.push("/create?new=true")}
-                            className="mt-4 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 text-sm"
+                            className="btn btn-primary mt-4"
                         >
                             Create from Scratch
                         </button>
@@ -112,9 +149,15 @@ export default function TemplateGallery() {
                         {templates.map((template) => (
                             <div
                                 key={template.id}
-                                className="rounded-2xl border border-stone-300 bg-white shadow-sm overflow-hidden transition hover:shadow-md"
+                                className="card card-hover overflow-hidden transition-transform hover:-translate-y-1"
                             >
-                                <div className="h-48 bg-stone-100 flex items-center justify-center">
+                                <div
+                                    className="h-48 flex items-center justify-center"
+                                    style={{
+                                        background:
+                                            "var(--color-primary-muted)",
+                                    }}
+                                >
                                     {template.previewImage
                                         ? (
                                             <img
@@ -127,11 +170,15 @@ export default function TemplateGallery() {
                                         : (
                                             <div className="text-center">
                                                 <svg
-                                                    className="mx-auto h-12 w-12 text-stone-300"
+                                                    className="mx-auto h-12 w-12"
                                                     fill="none"
                                                     viewBox="0 0 24 24"
                                                     stroke="currentColor"
                                                     strokeWidth={1.5}
+                                                    style={{
+                                                        color:
+                                                            "var(--color-text-subtle)",
+                                                    }}
                                                 >
                                                     <path
                                                         strokeLinecap="round"
@@ -139,27 +186,40 @@ export default function TemplateGallery() {
                                                         d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"
                                                     />
                                                 </svg>
-                                                <p className="mt-2 text-xs text-stone-400">
+                                                <p
+                                                    className="mt-2 text-xs"
+                                                    style={{
+                                                        color:
+                                                            "var(--color-text-subtle)",
+                                                    }}
+                                                >
                                                     Preview coming soon
                                                 </p>
                                             </div>
                                         )}
                                 </div>
-                                <div className="p-4">
-                                    <h3 className="font-semibold text-stone-800">
+                                <div className="p-5">
+                                    <h3
+                                        className="font-semibold"
+                                        style={{ color: "var(--color-text)" }}
+                                    >
                                         {template.title || "Untitled Template"}
                                     </h3>
-                                    <p className="mt-1 text-xs text-stone-500">
+                                    <p
+                                        className="mt-1 text-xs"
+                                        style={{
+                                            color: "var(--color-text-muted)",
+                                        }}
+                                    >
                                         {new Date(template.createdAt)
                                             .toLocaleDateString()}
                                     </p>
                                     <button
-                                        onClick={() =>
-                                            handleCreateFromTemplate(
-                                                template.id,
-                                            )}
+                                        onClick={() => handleCreateFromTemplate(
+                                            template.id,
+                                        )}
                                         disabled={creating === template.id}
-                                        className="mt-3 w-full rounded-full bg-blue-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                                        className="btn btn-primary btn-sm mt-4 w-full"
                                     >
                                         {creating === template.id
                                             ? "Creating..."

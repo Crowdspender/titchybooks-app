@@ -32,11 +32,19 @@ function FieldLabel({
   children: React.ReactNode;
 }) {
   return (
-    <label className="space-y-1 text-xs font-medium uppercase tracking-[0.16em] text-stone-500">
-      <span>{children}</span>
+    <label className="space-y-1">
+      <span
+        className="block text-xs font-semibold uppercase tracking-[0.16em]"
+        style={{ color: "var(--color-text-muted)" }}
+      >
+        {typeof children === "string" ? children : children}
+      </span>
     </label>
   );
 }
+
+const inputClass = "input";
+const selectBtnClass = "btn btn-outline btn-sm";
 
 export default function PropertiesPanel({
   selectedElement,
@@ -53,7 +61,6 @@ export default function PropertiesPanel({
 }: PropertiesPanelProps) {
   // If in instance mode and the selected element is a template TEXT element,
   // show a simplified editor that only allows editing the text content.
-  // The template layer's position, size, and styling remain fixed.
   if (
     selectedElement && isInstanceMode &&
     selectedElement.layer === "template" &&
@@ -62,23 +69,37 @@ export default function PropertiesPanel({
     const isOverridden = templateTextOriginal !== undefined &&
       selectedElement.text !== templateTextOriginal;
     return (
-      <aside className="space-y-4 rounded-[24px] border border-stone-300 bg-white p-5 shadow-sm">
+      <aside className="card space-y-4 p-5">
         <div>
-          <p className="text-sm font-semibold text-stone-800">Properties</p>
-          <p className="mt-1 text-xs uppercase tracking-[0.18em] text-stone-500">
+          <p
+            className="text-sm font-semibold"
+            style={{ color: "var(--color-text)" }}
+          >
+            Properties
+          </p>
+          <p className="mt-1 section-label">
             Template Text
           </p>
         </div>
 
-        <div className="rounded-2xl border border-blue-200 bg-blue-50 p-3">
-          <p className="text-xs leading-5 text-blue-700">
+        <div
+          className="rounded-xl p-3"
+          style={{
+            background: "var(--color-info-light)",
+            border: "1px solid var(--color-info)",
+          }}
+        >
+          <p
+            className="text-xs leading-5"
+            style={{ color: "var(--color-secondary)" }}
+          >
             You can edit the text content of this template element. Its
             position, size, and styling are fixed by the template.
           </p>
         </div>
 
-        <FieldLabel>
-          Text
+        <div>
+          <FieldLabel>Text</FieldLabel>
           <textarea
             value={selectedElement.text}
             onChange={(event) => {
@@ -91,12 +112,13 @@ export default function PropertiesPanel({
                   : element);
             }}
             rows={5}
-            className="mt-1 w-full rounded-xl border border-stone-300 px-3 py-2 text-sm text-stone-800"
+            className={inputClass}
+            style={{ marginTop: "0.25rem", resize: "vertical" }}
           />
-        </FieldLabel>
+        </div>
 
         <div className="flex items-center justify-between gap-2">
-          <p className="text-xs text-stone-500">
+          <p className="text-xs" style={{ color: "var(--color-text-muted)" }}>
             {isOverridden
               ? "Modified from template default."
               : "Using template default."}
@@ -109,7 +131,7 @@ export default function PropertiesPanel({
                 onResetTemplateText(selectedElement.id);
               }
             }}
-            className="rounded-full border border-stone-300 px-3 py-1.5 text-xs font-medium text-stone-700 transition hover:border-stone-400 hover:bg-stone-50 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:border-stone-300 disabled:hover:bg-transparent"
+            className={selectBtnClass}
           >
             Reset to default
           </button>
@@ -124,11 +146,23 @@ export default function PropertiesPanel({
     selectedElement && isInstanceMode && selectedElement.layer === "template"
   ) {
     return (
-      <aside className="rounded-[24px] border border-stone-300 bg-white p-5 shadow-sm">
-        <p className="text-sm font-semibold text-stone-800">Properties</p>
-        <div className="mt-4 rounded-2xl border border-stone-200 bg-stone-50 p-4 text-center">
+      <aside className="card p-5">
+        <p
+          className="text-sm font-semibold"
+          style={{ color: "var(--color-text)" }}
+        >
+          Properties
+        </p>
+        <div
+          className="mt-4 rounded-xl p-4 text-center"
+          style={{
+            background: "var(--color-surface)",
+            border: "1px solid var(--color-border)",
+          }}
+        >
           <svg
-            className="mx-auto h-8 w-8 text-stone-400"
+            className="mx-auto h-8 w-8"
+            style={{ color: "var(--color-text-subtle)" }}
             fill="none"
             viewBox="0 0 24 24"
             stroke="currentColor"
@@ -140,10 +174,16 @@ export default function PropertiesPanel({
               d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"
             />
           </svg>
-          <p className="mt-2 text-sm font-medium text-stone-600">
+          <p
+            className="mt-2 text-sm font-medium"
+            style={{ color: "var(--color-text-muted)" }}
+          >
             Template Element
           </p>
-          <p className="mt-1 text-xs leading-5 text-stone-500">
+          <p
+            className="mt-1 text-xs leading-5"
+            style={{ color: "var(--color-text-subtle)" }}
+          >
             This element is part of the template and cannot be modified.
           </p>
         </div>
@@ -153,9 +193,17 @@ export default function PropertiesPanel({
 
   if (!selectedElement) {
     return (
-      <aside className="rounded-[24px] border border-stone-300 bg-white p-5 shadow-sm">
-        <p className="text-sm font-semibold text-stone-700">Properties</p>
-        <p className="mt-2 text-sm leading-6 text-stone-500">
+      <aside className="card p-5">
+        <p
+          className="text-sm font-semibold"
+          style={{ color: "var(--color-text)" }}
+        >
+          Properties
+        </p>
+        <p
+          className="mt-2 text-sm leading-6"
+          style={{ color: "var(--color-text-muted)" }}
+        >
           Select an element on the page to edit its content, sizing, and layer
           order.
         </p>
@@ -164,17 +212,22 @@ export default function PropertiesPanel({
   }
 
   return (
-    <aside className="space-y-4 rounded-[24px] border border-stone-300 bg-white p-5 shadow-sm">
+    <aside className="card space-y-4 p-5">
       <div>
-        <p className="text-sm font-semibold text-stone-800">Properties</p>
-        <p className="mt-1 text-xs uppercase tracking-[0.18em] text-stone-500">
+        <p
+          className="text-sm font-semibold"
+          style={{ color: "var(--color-text)" }}
+        >
+          Properties
+        </p>
+        <p className="mt-1 section-label">
           {selectedElement.type}
         </p>
       </div>
 
       <div className="grid grid-cols-2 gap-3">
-        <FieldLabel>
-          X
+        <div>
+          <FieldLabel>X</FieldLabel>
           <input
             type="number"
             value={Math.round(selectedElement.x)}
@@ -185,11 +238,11 @@ export default function PropertiesPanel({
                 x: Number.isFinite(nextValue) ? nextValue : element.x,
               }));
             }}
-            className="mt-1 w-full rounded-xl border border-stone-300 px-3 py-2 text-sm text-stone-800"
+            className={inputClass}
           />
-        </FieldLabel>
-        <FieldLabel>
-          Y
+        </div>
+        <div>
+          <FieldLabel>Y</FieldLabel>
           <input
             type="number"
             value={Math.round(selectedElement.y)}
@@ -200,11 +253,11 @@ export default function PropertiesPanel({
                 y: Number.isFinite(nextValue) ? nextValue : element.y,
               }));
             }}
-            className="mt-1 w-full rounded-xl border border-stone-300 px-3 py-2 text-sm text-stone-800"
+            className={inputClass}
           />
-        </FieldLabel>
-        <FieldLabel>
-          Width
+        </div>
+        <div>
+          <FieldLabel>Width</FieldLabel>
           <input
             type="number"
             value={Math.round(selectedElement.width)}
@@ -217,14 +270,14 @@ export default function PropertiesPanel({
                   : element.width,
               }));
             }}
-            className="mt-1 w-full rounded-xl border border-stone-300 px-3 py-2 text-sm text-stone-800"
+            className={inputClass}
           />
-        </FieldLabel>
+        </div>
         {/* Hide Height for line shapes — stroke width controls visual thickness */}
         {!(selectedElement.type === "shape" &&
           selectedElement.shape === "line") && (
-          <FieldLabel>
-            Height
+          <div>
+            <FieldLabel>Height</FieldLabel>
             <input
               type="number"
               value={Math.round(selectedElement.height)}
@@ -237,14 +290,14 @@ export default function PropertiesPanel({
                     : element.height,
                 }));
               }}
-              className="mt-1 w-full rounded-xl border border-stone-300 px-3 py-2 text-sm text-stone-800"
+              className={inputClass}
             />
-          </FieldLabel>
+          </div>
         )}
       </div>
 
-      <FieldLabel>
-        Rotation
+      <div>
+        <FieldLabel>Rotation</FieldLabel>
         <input
           type="range"
           min="-180"
@@ -256,12 +309,13 @@ export default function PropertiesPanel({
               rotation: Number(event.target.value),
             }));
           }}
-          className="mt-2 w-full accent-blue-600"
+          className="mt-2 w-full"
+          style={{ accentColor: "var(--color-primary)" }}
         />
-      </FieldLabel>
+      </div>
 
-      <FieldLabel>
-        Opacity
+      <div>
+        <FieldLabel>Opacity</FieldLabel>
         <input
           type="range"
           min="0"
@@ -274,22 +328,23 @@ export default function PropertiesPanel({
               opacity: Number(event.target.value),
             }));
           }}
-          className="mt-2 w-full accent-blue-600"
+          className="mt-2 w-full"
+          style={{ accentColor: "var(--color-primary)" }}
         />
-      </FieldLabel>
+      </div>
 
       <div className="grid grid-cols-2 gap-2">
         <button
           type="button"
           onClick={() => onToggleVisibility(selectedElement.id)}
-          className="rounded-full border border-stone-300 px-3 py-2 text-sm font-medium text-stone-700 transition hover:border-stone-400 hover:bg-stone-50"
+          className={selectBtnClass}
         >
           {selectedElement.visible ? "Hide Layer" : "Show Layer"}
         </button>
         <button
           type="button"
           onClick={() => onToggleLock(selectedElement.id)}
-          className="rounded-full border border-stone-300 px-3 py-2 text-sm font-medium text-stone-700 transition hover:border-stone-400 hover:bg-stone-50"
+          className={selectBtnClass}
         >
           {selectedElement.locked ? "Unlock Layer" : "Lock Layer"}
         </button>
@@ -298,8 +353,8 @@ export default function PropertiesPanel({
       {selectedElement.type === "text"
         ? (
           <>
-            <FieldLabel>
-              Text
+            <div>
+              <FieldLabel>Text</FieldLabel>
               <textarea
                 value={selectedElement.text}
                 onChange={(event) => {
@@ -312,13 +367,14 @@ export default function PropertiesPanel({
                       : element);
                 }}
                 rows={5}
-                className="mt-1 w-full rounded-xl border border-stone-300 px-3 py-2 text-sm text-stone-800"
+                className={inputClass}
+                style={{ resize: "vertical" }}
               />
-            </FieldLabel>
+            </div>
 
             <div className="grid grid-cols-2 gap-3">
-              <FieldLabel>
-                Font Size
+              <div>
+                <FieldLabel>Font Size</FieldLabel>
                 <input
                   type="number"
                   value={selectedElement.fontSize}
@@ -334,11 +390,11 @@ export default function PropertiesPanel({
                         }
                         : element);
                   }}
-                  className="mt-1 w-full rounded-xl border border-stone-300 px-3 py-2 text-sm text-stone-800"
+                  className={inputClass}
                 />
-              </FieldLabel>
-              <FieldLabel>
-                Color
+              </div>
+              <div>
+                <FieldLabel>Color</FieldLabel>
                 <input
                   type="color"
                   value={selectedElement.color}
@@ -351,9 +407,13 @@ export default function PropertiesPanel({
                         }
                         : element);
                   }}
-                  className="mt-1 h-11 w-full rounded-xl border border-stone-300 bg-white px-2"
+                  className="h-11 w-full rounded-lg"
+                  style={{
+                    border: "1.5px solid var(--color-border-strong)",
+                    background: "var(--color-surface-raised)",
+                  }}
                 />
-              </FieldLabel>
+              </div>
             </div>
           </>
         )
@@ -363,16 +423,19 @@ export default function PropertiesPanel({
         ? (
           <>
             <div>
-              <p className="text-sm font-semibold text-stone-800">
+              <p
+                className="text-sm font-semibold"
+                style={{ color: "var(--color-text)" }}
+              >
                 Shape Style
               </p>
-              <p className="mt-1 text-xs uppercase tracking-[0.16em] text-stone-500">
+              <p className="mt-1 section-label">
                 {selectedElement.shape}
               </p>
             </div>
 
-            <FieldLabel>
-              Fill Color
+            <div>
+              <FieldLabel>Fill Color</FieldLabel>
               <input
                 type="color"
                 value={selectedElement.fill === "transparent"
@@ -387,12 +450,16 @@ export default function PropertiesPanel({
                       }
                       : element);
                 }}
-                className="mt-1 h-11 w-full rounded-xl border border-stone-300 bg-white px-2"
+                className="h-11 w-full rounded-lg"
+                style={{
+                  border: "1.5px solid var(--color-border-strong)",
+                  background: "var(--color-surface-raised)",
+                }}
               />
-            </FieldLabel>
+            </div>
 
-            <FieldLabel>
-              Stroke Color
+            <div>
+              <FieldLabel>Stroke Color</FieldLabel>
               <input
                 type="color"
                 value={selectedElement.stroke ?? "#000000"}
@@ -405,12 +472,16 @@ export default function PropertiesPanel({
                       }
                       : element);
                 }}
-                className="mt-1 h-11 w-full rounded-xl border border-stone-300 bg-white px-2"
+                className="h-11 w-full rounded-lg"
+                style={{
+                  border: "1.5px solid var(--color-border-strong)",
+                  background: "var(--color-surface-raised)",
+                }}
               />
-            </FieldLabel>
+            </div>
 
-            <FieldLabel>
-              Stroke Width
+            <div>
+              <FieldLabel>Stroke Width</FieldLabel>
               <input
                 type="range"
                 min="0"
@@ -426,9 +497,10 @@ export default function PropertiesPanel({
                       }
                       : element);
                 }}
-                className="mt-2 w-full accent-blue-600"
+                className="mt-2 w-full"
+                style={{ accentColor: "var(--color-primary)" }}
               />
-            </FieldLabel>
+            </div>
           </>
         )
         : null}
@@ -437,14 +509,22 @@ export default function PropertiesPanel({
         ? (
           <>
             <div>
-              <p className="text-sm font-semibold text-stone-800">Crop</p>
-              <p className="mt-1 text-xs leading-5 text-stone-500">
+              <p
+                className="text-sm font-semibold"
+                style={{ color: "var(--color-text)" }}
+              >
+                Crop
+              </p>
+              <p
+                className="mt-1 text-xs leading-5"
+                style={{ color: "var(--color-text-muted)" }}
+              >
                 Adjust zoom and focal point inside the image frame.
               </p>
             </div>
 
-            <FieldLabel>
-              Zoom
+            <div>
+              <FieldLabel>Zoom</FieldLabel>
               <input
                 type="range"
                 min="1"
@@ -467,12 +547,13 @@ export default function PropertiesPanel({
                       }
                       : element);
                 }}
-                className="mt-2 w-full accent-blue-600"
+                className="mt-2 w-full"
+                style={{ accentColor: "var(--color-primary)" }}
               />
-            </FieldLabel>
+            </div>
 
-            <FieldLabel>
-              Horizontal Focus
+            <div>
+              <FieldLabel>Horizontal Focus</FieldLabel>
               <input
                 type="range"
                 min="-100"
@@ -494,12 +575,13 @@ export default function PropertiesPanel({
                       }
                       : element);
                 }}
-                className="mt-2 w-full accent-blue-600"
+                className="mt-2 w-full"
+                style={{ accentColor: "var(--color-primary)" }}
               />
-            </FieldLabel>
+            </div>
 
-            <FieldLabel>
-              Vertical Focus
+            <div>
+              <FieldLabel>Vertical Focus</FieldLabel>
               <input
                 type="range"
                 min="-100"
@@ -521,9 +603,10 @@ export default function PropertiesPanel({
                       }
                       : element);
                 }}
-                className="mt-2 w-full accent-blue-600"
+                className="mt-2 w-full"
+                style={{ accentColor: "var(--color-primary)" }}
               />
-            </FieldLabel>
+            </div>
 
             <button
               type="button"
@@ -541,7 +624,7 @@ export default function PropertiesPanel({
                     }
                     : element);
               }}
-              className="w-full rounded-full border border-stone-300 px-3 py-2 text-sm font-medium text-stone-700 transition hover:border-stone-400 hover:bg-stone-50"
+              className="btn btn-outline w-full"
             >
               Reset Crop
             </button>
@@ -553,21 +636,21 @@ export default function PropertiesPanel({
         <button
           type="button"
           onClick={() => onDuplicateElement(selectedElement.id)}
-          className="rounded-full border border-stone-300 px-3 py-2 text-sm font-medium text-stone-700 transition hover:border-stone-400 hover:bg-stone-50"
+          className={selectBtnClass}
         >
           Duplicate
         </button>
         <button
           type="button"
           onClick={() => onSendBackward(selectedElement.id)}
-          className="rounded-full border border-stone-300 px-3 py-2 text-sm font-medium text-stone-700 transition hover:border-stone-400 hover:bg-stone-50"
+          className={selectBtnClass}
         >
           Send Back
         </button>
         <button
           type="button"
           onClick={() => onBringForward(selectedElement.id)}
-          className="rounded-full border border-stone-300 px-3 py-2 text-sm font-medium text-stone-700 transition hover:border-stone-400 hover:bg-stone-50"
+          className={selectBtnClass}
         >
           Bring Front
         </button>
@@ -576,7 +659,7 @@ export default function PropertiesPanel({
       <button
         type="button"
         onClick={() => onDeleteElement(selectedElement.id)}
-        className="w-full rounded-full bg-red-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-red-700"
+        className="btn btn-danger w-full"
       >
         Delete Element
       </button>

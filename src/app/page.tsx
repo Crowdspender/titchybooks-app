@@ -8,7 +8,7 @@ import FooterCTA from "@/components/home/FooterCTA";
 
 export default function Home() {
   return (
-    <div className="bg-stone-50 text-stone-900">
+    <div>
       <Hero />
       <WhatItIs />
       <TwoWorlds />

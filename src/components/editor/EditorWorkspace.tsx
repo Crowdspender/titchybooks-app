@@ -20,12 +20,18 @@ import type {
 import LayerPanel from "./LayerPanel";
 import PropertiesPanel from "./PropertiesPanel";
 import OrderPanel from "@/components/orders/OrderPanel";
+import AiChatPanel from "./AiChatPanel";
+import type { BookContext } from "@/lib/ai/system-prompt";
+import type { AiSuggestion } from "@/lib/ai/protocol";
 
 const EditorCanvas = dynamic(() => import("./EditorCanvas"), {
   ssr: false,
   loading: () => (
-    <div className="rounded-[28px] border border-stone-300 bg-stone-200/70 p-4 shadow-sm">
-      <div className="mx-auto h-[600px] w-[420px] animate-pulse rounded-[22px] bg-white" />
+    <div className="card p-4">
+      <div
+        className="mx-auto h-[600px] w-[420px] animate-pulse rounded-xl"
+        style={{ background: "var(--color-surface)" }}
+      />
     </div>
   ),
 });
@@ -307,6 +313,9 @@ export default function EditorWorkspace({
       >,
   );
 
+  // AI Chat panel state
+  const [aiPanelOpen, setAiPanelOpen] = useState(false);
+
   // Template system state
   const [templateElements, setTemplateElements] = useState<
     TemplateElementsByPage
@@ -361,6 +370,33 @@ export default function EditorWorkspace({
         null,
     [mergedElements, selectedElementId],
   );
+
+  // Build AI book context from current editor state
+  const aiBookContext: BookContext = useMemo(() => {
+    return {
+      title,
+      activePage: activePageLabel,
+      pages: PAGE_LABELS.map((label) => {
+        const page = pagesByLabel[label];
+        const textSnippets = page.scene.elements
+          .filter((el): el is Extract<EditorElement, { type: "text" }> =>
+            el.type === "text"
+          )
+          .map((el) => el.text.slice(0, 200))
+          .filter((t) => t.length > 0);
+        // Also include template text overrides
+        const overrides = page.scene.templateTextOverrides ?? {};
+        const overrideTexts = Object.values(overrides).map((t) =>
+          t.slice(0, 200)
+        );
+        return {
+          label,
+          elementCount: page.scene.elements.length,
+          textSnippets: [...textSnippets, ...overrideTexts],
+        };
+      }),
+    };
+  }, [title, activePageLabel, pagesByLabel]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1288,6 +1324,76 @@ export default function EditorWorkspace({
     setSelectedElementId(nextElement.id);
   }
 
+  function handleAiApplyText(
+    targetPage: PageLabel,
+    text: string,
+    style?: AiSuggestion["style"],
+  ) {
+    // Switch to the target page if needed
+    if (targetPage !== activePageLabel) {
+      // Persist current page before switching
+      void persistPageImmediately(activePageLabel);
+      setActivePageLabel(targetPage);
+    }
+
+    // Build the text element using the target page's scene
+    const targetPageRecord = pagesByLabel[targetPage];
+    const baseElement = createTextElement(targetPageRecord.scene);
+    const nextElement: typeof baseElement = {
+      ...baseElement,
+      text,
+      ...(style?.fontSize && { fontSize: style.fontSize }),
+      ...(style?.fontFamily && { fontFamily: style.fontFamily }),
+      ...(style?.fontWeight && { fontWeight: style.fontWeight }),
+      ...(style?.color && { color: style.color }),
+      ...(style?.align && { align: style.align }),
+    };
+
+    // If we're on the target page already, apply immediately
+    if (targetPage === activePageLabel) {
+      pushHistory();
+      setPagesByLabel((current) => {
+        const page = current[targetPage];
+        const normalizedScene = normalizeSceneZIndexes({
+          ...page.scene,
+          elements: [...page.scene.elements, nextElement],
+        });
+        return {
+          ...current,
+          [targetPage]: {
+            ...page,
+            scene: normalizedScene,
+            sceneJson: JSON.stringify(normalizedScene),
+          },
+        };
+      });
+      setSelectedElementId(nextElement.id);
+    } else {
+      // Apply to the target page state (will be visible when user navigates there)
+      pushHistory();
+      setPagesByLabel((current) => {
+        const page = current[targetPage];
+        const normalizedScene = normalizeSceneZIndexes({
+          ...page.scene,
+          elements: [...page.scene.elements, nextElement],
+        });
+        return {
+          ...current,
+          [targetPage]: {
+            ...page,
+            scene: normalizedScene,
+            sceneJson: JSON.stringify(normalizedScene),
+          },
+        };
+      });
+      // Select the new element and switch to that page
+      setActivePageLabel(targetPage);
+      setSelectedElementId(nextElement.id);
+    }
+
+    toast.success(`Text added to ${PAGE_LABEL_DISPLAY[targetPage]}`);
+  }
+
   async function handleAssetUpload(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     if (!file) {
@@ -1479,25 +1585,40 @@ export default function EditorWorkspace({
   if (loading) {
     return (
       <div className="flex min-h-[calc(100vh-3.5rem)] items-center justify-center px-4 py-8">
-        <div className="rounded-[28px] border border-stone-300 bg-white px-8 py-10 text-center shadow-sm">
-          <p className="text-sm font-medium uppercase tracking-[0.2em] text-stone-500">
+        <div className="card px-8 py-10 text-center">
+          <p className="section-label">
             Titchybook Studio
           </p>
-          <p className="mt-3 text-base text-stone-700">{loadingMessage}</p>
+          <p className="mt-3 text-base" style={{ color: "var(--color-text)" }}>
+            {loadingMessage}
+          </p>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-[calc(100vh-3.5rem)] bg-[radial-gradient(circle_at_top,_#fef3c7,_#f5f5f4_48%,_#e7e5e4_100%)] px-4 py-6">
+    <div
+      className="min-h-[calc(100vh-3.5rem)] px-4 py-6"
+      style={{
+        background:
+          "linear-gradient(180deg, var(--color-primary-muted) 0%, var(--color-background) 40%)",
+      }}
+    >
       <div className="mx-auto flex max-w-[1500px] flex-col gap-5">
         {/* Template instance banner */}
         {isInstanceMode && (
-          <div className="flex items-center justify-between rounded-2xl border border-blue-200 bg-blue-50 px-5 py-3">
+          <div
+            className="flex items-center justify-between rounded-xl px-5 py-3"
+            style={{
+              background: "var(--color-secondary-light)",
+              border: "1px solid var(--color-secondary)",
+            }}
+          >
             <div className="flex items-center gap-3">
               <svg
-                className="h-5 w-5 text-blue-500"
+                className="h-5 w-5"
+                style={{ color: "var(--color-secondary)" }}
                 fill="none"
                 viewBox="0 0 24 24"
                 stroke="currentColor"
@@ -1510,10 +1631,16 @@ export default function EditorWorkspace({
                 />
               </svg>
               <div>
-                <p className="text-sm font-medium text-blue-800">
+                <p
+                  className="text-sm font-medium"
+                  style={{ color: "var(--color-secondary)" }}
+                >
                   Template Instance
                 </p>
-                <p className="text-xs text-blue-600">
+                <p
+                  className="text-xs"
+                  style={{ color: "var(--color-text-muted)" }}
+                >
                   Template elements are locked. You can add and edit your own
                   elements on top.
                 </p>
@@ -1522,30 +1649,59 @@ export default function EditorWorkspace({
             <button
               type="button"
               onClick={handleDetachFromTemplate}
-              className="rounded-full border border-blue-300 bg-white px-4 py-1.5 text-xs font-medium text-blue-700 transition hover:bg-blue-50"
+              className="btn btn-outline btn-sm"
+              style={{
+                color: "var(--color-secondary)",
+                borderColor: "var(--color-secondary)",
+              }}
             >
               Unlock All Elements
             </button>
           </div>
         )}
-        <section className="rounded-[28px] border border-stone-300 bg-white/90 p-5 shadow-sm backdrop-blur">
+        <section
+          className="card p-5 backdrop-blur"
+          style={{ background: "rgba(255,255,255,0.92)" }}
+        >
           <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div className="space-y-2">
-              <p className="text-xs font-semibold uppercase tracking-[0.24em] text-stone-500">
+              <p className="section-label">
                 Titchybook Studio
               </p>
               <input
                 value={title}
                 onChange={(event) => setTitle(event.target.value)}
-                className="w-full max-w-xl border-none bg-transparent p-0 text-3xl font-semibold tracking-tight text-stone-900 outline-none"
+                className="w-full max-w-xl border-none bg-transparent p-0 text-3xl font-semibold tracking-tight outline-none"
+                style={{ color: "var(--color-text)" }}
               />
-              <p className="text-sm text-stone-500">
+              <p
+                className="text-sm"
+                style={{ color: "var(--color-text-muted)" }}
+              >
                 Compose each booklet page individually. Safe area guides are
                 shown on the canvas.
               </p>
             </div>
-            <div className="flex items-center gap-3">
-              <span className="rounded-full border border-stone-300 bg-stone-50 px-4 py-2 text-sm font-medium text-stone-700">
+            <div className="flex flex-wrap items-center gap-3">
+              <span
+                className="badge"
+                style={{
+                  background: saveState === "saving"
+                    ? "var(--color-accent-light)"
+                    : saveState === "saved"
+                    ? "var(--color-success-light)"
+                    : saveState === "error"
+                    ? "var(--color-error-light)"
+                    : "var(--color-border)",
+                  color: saveState === "saving"
+                    ? "#92400E"
+                    : saveState === "saved"
+                    ? "#065F46"
+                    : saveState === "error"
+                    ? "#991B1B"
+                    : "var(--color-text-muted)",
+                }}
+              >
                 {saveState === "saving"
                   ? "Saving..."
                   : saveState === "saved"
@@ -1558,7 +1714,7 @@ export default function EditorWorkspace({
                 type="button"
                 onClick={undo}
                 disabled={!canUndo}
-                className="rounded-full border border-stone-300 bg-white px-4 py-2 text-sm font-medium text-stone-700 transition hover:bg-stone-50 disabled:cursor-not-allowed disabled:opacity-40"
+                className="btn btn-outline btn-sm"
                 title="Undo (Ctrl+Z)"
               >
                 Undo
@@ -1567,7 +1723,7 @@ export default function EditorWorkspace({
                 type="button"
                 onClick={redo}
                 disabled={!canRedo}
-                className="rounded-full border border-stone-300 bg-white px-4 py-2 text-sm font-medium text-stone-700 transition hover:bg-stone-50 disabled:cursor-not-allowed disabled:opacity-40"
+                className="btn btn-outline btn-sm"
                 title="Redo (Ctrl+Shift+Z)"
               >
                 Redo
@@ -1575,34 +1731,70 @@ export default function EditorWorkspace({
               <div className="relative group">
                 <button
                   type="button"
-                  className="rounded-full border border-stone-300 bg-white px-5 py-2.5 text-sm font-medium text-stone-700 transition hover:bg-stone-50"
+                  className="btn btn-outline btn-sm"
                 >
                   Add Shape ▾
                 </button>
                 <div className="invisible absolute left-0 top-full pt-2 opacity-0 transition-all duration-150 group-hover:visible group-hover:opacity-100 z-50">
-                  <div className="flex flex-col gap-1 rounded-2xl border border-stone-300 bg-white p-2 shadow-lg">
+                  <div
+                    className="flex flex-col gap-1 card p-2 shadow-lg"
+                    style={{ minWidth: "140px" }}
+                  >
                     <button
                       type="button"
                       onClick={() => addShapeElement("rect")}
-                      className="flex items-center gap-2 rounded-xl px-3 py-2 text-sm text-stone-700 transition hover:bg-stone-50"
+                      className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm transition"
+                      style={{ color: "var(--color-text)" }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.background =
+                          "var(--color-surface)";
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.background = "transparent";
+                      }}
                     >
-                      <div className="h-4 w-4 rounded-sm border-2 border-stone-600" />
+                      <div
+                        className="h-4 w-4 rounded-sm border-2"
+                        style={{ borderColor: "var(--color-text-muted)" }}
+                      />
                       Rectangle
                     </button>
                     <button
                       type="button"
                       onClick={() => addShapeElement("circle")}
-                      className="flex items-center gap-2 rounded-xl px-3 py-2 text-sm text-stone-700 transition hover:bg-stone-50"
+                      className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm transition"
+                      style={{ color: "var(--color-text)" }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.background =
+                          "var(--color-surface)";
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.background = "transparent";
+                      }}
                     >
-                      <div className="h-4 w-4 rounded-full border-2 border-stone-600" />
+                      <div
+                        className="h-4 w-4 rounded-full border-2"
+                        style={{ borderColor: "var(--color-text-muted)" }}
+                      />
                       Circle
                     </button>
                     <button
                       type="button"
                       onClick={() => addShapeElement("line")}
-                      className="flex items-center gap-2 rounded-xl px-3 py-2 text-sm text-stone-700 transition hover:bg-stone-50"
+                      className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm transition"
+                      style={{ color: "var(--color-text)" }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.background =
+                          "var(--color-surface)";
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.background = "transparent";
+                      }}
                     >
-                      <div className="h-0.5 w-4 bg-stone-600" />
+                      <div
+                        className="h-0.5 w-4"
+                        style={{ background: "var(--color-text-muted)" }}
+                      />
                       Line
                     </button>
                   </div>
@@ -1611,7 +1803,7 @@ export default function EditorWorkspace({
               <button
                 type="button"
                 onClick={addTextElement}
-                className="rounded-full bg-blue-600 px-5 py-2.5 text-sm font-medium text-white transition hover:bg-blue-700"
+                className="btn btn-primary btn-sm"
               >
                 Add Text Box
               </button>
@@ -1619,7 +1811,7 @@ export default function EditorWorkspace({
                 type="button"
                 onClick={() => void handleSubmit()}
                 disabled={submitting}
-                className="rounded-full bg-stone-900 px-5 py-2.5 text-sm font-medium text-white transition hover:bg-stone-700 disabled:cursor-not-allowed disabled:opacity-60"
+                className="btn btn-secondary btn-sm"
               >
                 {submitting ? "Submitting..." : "Submit For PDF"}
               </button>
@@ -1629,10 +1821,15 @@ export default function EditorWorkspace({
 
         <div className="grid gap-5 xl:grid-cols-[240px_minmax(0,1fr)_320px]">
           <aside className="space-y-5">
-            <section className="rounded-[24px] border border-stone-300 bg-white p-5 shadow-sm">
+            <section className="card p-5">
               <div className="flex items-center justify-between">
-                <p className="text-sm font-semibold text-stone-800">Pages</p>
-                <span className="text-xs uppercase tracking-[0.18em] text-stone-500">
+                <p
+                  className="text-sm font-semibold"
+                  style={{ color: "var(--color-text)" }}
+                >
+                  Pages
+                </p>
+                <span className="section-label">
                   8 total
                 </span>
               </div>
@@ -1648,13 +1845,23 @@ export default function EditorWorkspace({
                       key={pageLabel}
                       type="button"
                       onClick={() => void handlePageSelect(pageLabel)}
-                      className={`w-full rounded-2xl border p-3 text-left transition ${
-                        isActive
-                          ? "border-blue-500 bg-blue-50 text-blue-900"
-                          : "border-stone-300 bg-stone-50 text-stone-800 hover:border-stone-400 hover:bg-white"
-                      }`}
+                      className="w-full rounded-xl p-3 text-left transition"
+                      style={{
+                        border: isActive
+                          ? "2px solid var(--color-primary)"
+                          : "1px solid var(--color-border)",
+                        background: isActive
+                          ? "var(--color-primary-muted)"
+                          : "var(--color-surface)",
+                        color: isActive
+                          ? "var(--color-primary)"
+                          : "var(--color-text)",
+                      }}
                     >
-                      <div className="mb-2 overflow-hidden rounded-xl border border-stone-300 bg-white">
+                      <div
+                        className="mb-2 overflow-hidden rounded-lg"
+                        style={{ border: "1px solid var(--color-border)" }}
+                      >
                         {thumbnail
                           ? (
                             // eslint-disable-next-line @next/next/no-img-element
@@ -1665,7 +1872,13 @@ export default function EditorWorkspace({
                             />
                           )
                           : (
-                            <div className="flex h-20 items-center justify-center bg-stone-100 text-xs text-stone-400">
+                            <div
+                              className="flex h-20 items-center justify-center text-xs"
+                              style={{
+                                background: "var(--color-surface)",
+                                color: "var(--color-text-subtle)",
+                              }}
+                            >
                               No content
                             </div>
                           )}
@@ -1674,7 +1887,10 @@ export default function EditorWorkspace({
                         <span className="text-sm font-semibold">
                           {PAGE_LABEL_DISPLAY[pageLabel]}
                         </span>
-                        <span className="text-xs text-stone-500">
+                        <span
+                          className="text-xs"
+                          style={{ color: "var(--color-text-muted)" }}
+                        >
                           {elementCount}
                         </span>
                       </div>
@@ -1684,12 +1900,15 @@ export default function EditorWorkspace({
               </div>
             </section>
 
-            <section className="rounded-[24px] border border-stone-300 bg-white p-5 shadow-sm">
+            <section className="card p-5">
               <div className="flex items-center justify-between">
-                <p className="text-sm font-semibold text-stone-800">
+                <p
+                  className="text-sm font-semibold"
+                  style={{ color: "var(--color-text)" }}
+                >
                   Asset Library
                 </p>
-                <label className="cursor-pointer rounded-full bg-stone-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-stone-700">
+                <label className="btn btn-secondary btn-sm cursor-pointer">
                   {assetUploading ? "Uploading..." : "Upload"}
                   <input
                     type="file"
@@ -1700,13 +1919,19 @@ export default function EditorWorkspace({
                   />
                 </label>
               </div>
-              <p className="mt-3 text-xs leading-5 text-stone-500">
+              <p
+                className="mt-3 text-xs leading-5"
+                style={{ color: "var(--color-text-muted)" }}
+              >
                 Click any thumbnail to place another copy on the current page.
               </p>
               <div className="mt-4 grid grid-cols-2 gap-3">
                 {assets.length === 0
                   ? (
-                    <p className="col-span-2 text-sm leading-6 text-stone-500">
+                    <p
+                      className="col-span-2 text-sm leading-6"
+                      style={{ color: "var(--color-text-muted)" }}
+                    >
                       Upload images to start placing artwork on the page.
                     </p>
                   )
@@ -1714,7 +1939,11 @@ export default function EditorWorkspace({
                     assets.map((asset) => (
                       <div
                         key={asset.id}
-                        className="group relative overflow-hidden rounded-2xl border border-stone-300 bg-stone-50 transition hover:border-stone-400 hover:bg-white"
+                        className="group relative overflow-hidden rounded-xl transition"
+                        style={{
+                          border: "1px solid var(--color-border)",
+                          background: "var(--color-surface)",
+                        }}
                       >
                         <button
                           type="button"
@@ -1732,12 +1961,21 @@ export default function EditorWorkspace({
                               />
                             )
                             : (
-                              <div className="flex h-28 items-center justify-center bg-stone-200 text-xs text-stone-500">
+                              <div
+                                className="flex h-28 items-center justify-center text-xs"
+                                style={{
+                                  background: "var(--color-border)",
+                                  color: "var(--color-text-muted)",
+                                }}
+                              >
                                 No preview
                               </div>
                             )}
                           <div className="px-3 py-2">
-                            <p className="truncate text-xs font-medium text-stone-700">
+                            <p
+                              className="truncate text-xs font-medium"
+                              style={{ color: "var(--color-text)" }}
+                            >
                               {asset.originalFilename}
                             </p>
                           </div>
@@ -1746,7 +1984,8 @@ export default function EditorWorkspace({
                           type="button"
                           onClick={() =>
                             handleAssetDelete(asset.id, asset.originalFilename)}
-                          className="absolute right-2 top-2 rounded-full bg-red-500 p-1.5 text-white opacity-0 shadow-sm transition hover:bg-red-600 group-hover:opacity-100"
+                          className="absolute right-2 top-2 rounded-full p-1.5 text-white opacity-0 shadow-sm transition group-hover:opacity-100"
+                          style={{ background: "var(--color-error)" }}
                           title="Delete asset"
                         >
                           <svg
@@ -1771,17 +2010,26 @@ export default function EditorWorkspace({
           </aside>
 
           <section className="space-y-4">
-            <div className="rounded-[24px] border border-stone-300 bg-white p-4 shadow-sm">
+            <div className="card p-4">
               <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                 <div>
-                  <p className="text-sm font-semibold text-stone-800">
+                  <p
+                    className="text-sm font-semibold"
+                    style={{ color: "var(--color-text)" }}
+                  >
                     {PAGE_LABEL_DISPLAY[activePageLabel]}
                   </p>
-                  <p className="text-sm text-stone-500">
+                  <p
+                    className="text-sm"
+                    style={{ color: "var(--color-text-muted)" }}
+                  >
                     Drag elements freely, then resize or rotate from the page.
                   </p>
                 </div>
-                <label className="flex items-center gap-2 text-sm text-stone-600">
+                <label
+                  className="flex items-center gap-2 text-sm"
+                  style={{ color: "var(--color-text-muted)" }}
+                >
                   <span>Background</span>
                   <input
                     type="color"
@@ -1795,7 +2043,8 @@ export default function EditorWorkspace({
                         },
                       });
                     }}
-                    className="h-10 w-12 rounded-xl border border-stone-300 bg-white"
+                    className="h-10 w-12 rounded-lg"
+                    style={{ border: "1.5px solid var(--color-border-strong)" }}
                   />
                 </label>
               </div>
@@ -1938,6 +2187,13 @@ export default function EditorWorkspace({
           />
         )}
       </div>
+
+      <AiChatPanel
+        isOpen={aiPanelOpen}
+        onToggle={() => setAiPanelOpen((prev) => !prev)}
+        bookContext={aiBookContext}
+        onApplyText={handleAiApplyText}
+      />
     </div>
   );
 }
