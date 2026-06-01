@@ -62,6 +62,9 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
   pages: {
     signIn: "/login",
   },
+  // In NextAuth v5, the URL is determined at runtime from the request
+  // but we can influence it with trustHost and explicit URL config
+  trustHost: true,
   callbacks: {
     authorized({ auth }) {
       // Middleware matcher limits this to protected paths, so any hit here
