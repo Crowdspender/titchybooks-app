@@ -17,14 +17,8 @@ const PRESET_COLORS = [
     "#6C757D",
     "#495057",
     "#343A40",
-// Named CSS colors commonly used
-const NAMED_COLOR_MAP: Record<string, string> = {
-  white: '#FFFFFF',
-  black: '#000000',
-  red: '#FF0000',
-  green: '#008000',
-  blue: '#0000FF',
-};    "#D97706",
+    "#212529",
+    "#000000",
     "#FEF3C7",
     "#059669",
     "#D1FAE5",
