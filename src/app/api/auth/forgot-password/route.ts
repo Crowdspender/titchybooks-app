@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { randomBytes } from "crypto";
+import { randomBytes, createHash } from "crypto";
 
 export async function POST(request: Request) {
   try {
@@ -26,11 +26,14 @@ export async function POST(request: Request) {
     const resetToken = randomBytes(32).toString("hex");
     const resetExpiry = new Date(Date.now() + 3600000); // 1 hour from now
 
-    // Save token to database
+    // Hash token before storing in database
+    const hashedToken = createHash('sha256').update(resetToken).digest('hex');
+
+    // Save hashed token to database
     await prisma.user.update({
       where: { id: user.id },
       data: {
-        passwordResetToken: resetToken,
+        passwordResetToken: hashedToken,
         passwordResetExpires: resetExpiry,
       },
     });
@@ -39,7 +42,10 @@ export async function POST(request: Request) {
     // For now, we'll log it (you should integrate with a service like Resend, SendGrid, etc.)
     const resetUrl = `${process.env.NEXTAUTH_URL || "http://localhost:3000"}/reset-password?token=${resetToken}`;
     
-    console.log("Password reset URL (for development):", resetUrl);
+    // Only log reset URL in development environment - never in production
+    if (process.env.NODE_ENV === "development") {
+      console.log("Password reset URL (for development):", resetUrl);
+    }
     
     // TODO: Send email with resetUrl
     // Example with Resend:

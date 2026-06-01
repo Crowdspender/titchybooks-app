@@ -199,8 +199,7 @@ function SubmissionCard({
           className="text-xs"
           style={{ color: "var(--color-text-subtle)" }}
         >
-          Created{" "}
-          {new Date(submission.createdAt).toLocaleDateString("en-US", {
+          Created {new Date(submission.createdAt).toLocaleDateString("en-US", {
             month: "short",
             day: "numeric",
             year: "numeric",

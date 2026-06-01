@@ -29,7 +29,7 @@ export default function FooterCTA() {
                         style={{
                             background: "var(--color-primary)",
                             color: "var(--color-text-inverse)",
-                            boxShadow: "0 8px 32px -8px rgba(180, 70, 43, 0.3)",
+                            boxShadow: "0 8px 32px -8px rgba(39, 199, 249, 0.35)",
                         }}
                     >
                         <span className="text-xs uppercase tracking-[0.2em] opacity-70">
@@ -52,7 +52,7 @@ export default function FooterCTA() {
                             Outernet Publishing
                         </span>
                         <span className="text-xl font-medium">
-                            Create a Titchybooks →
+                            Create Titchybooks →
                         </span>
                     </Link>
                 </div>

@@ -41,7 +41,7 @@ export default function Examples() {
                                     background: "var(--color-primary)",
                                     color: "var(--color-text-inverse)",
                                     boxShadow:
-                                        "0 8px 24px -4px rgba(180, 70, 43, 0.3)",
+                                        "0 8px 24px -4px rgba(39, 199, 249, 0.35)",
                                 }}
                             >
                                 <span className="uppercase tracking-widest opacity-70">

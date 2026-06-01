@@ -374,8 +374,8 @@ export default function AiChatPanel({
                             style={{ color: "var(--color-text-muted)" }}
                         >
                             Ask me to write stories, captions, titles, or any
-                            text for your Titchybooks. I can generate content for
-                            any page.
+                            text for your Titchybooks. I can generate content
+                            for any page.
                         </p>
                         <div className="mt-5 flex flex-col gap-2 w-full">
                             <button

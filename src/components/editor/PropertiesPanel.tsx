@@ -440,12 +440,13 @@ export default function PropertiesPanel({
                   onChangeElement(selectedElement.id, (element) =>
                     element.type === "shape"
                       ? {
-                        ...element,
-                        fill: color,
-                      }
+                          ...element,
+                          fill: color === "transparent" ? "transparent" : color,
+                        }
                       : element);
                 }}
                 className="w-full"
+                showTransparent
               />
             </div>
 

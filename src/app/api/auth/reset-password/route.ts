@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { hash } from "bcryptjs";
 import { z } from "zod";
+import { createHash } from "crypto";
 
 const resetSchema = z.object({
   token: z.string().min(1, "Token is required"),
@@ -22,10 +23,13 @@ export async function POST(request: Request) {
 
     const { token, password } = parsed.data;
 
+    // Hash the incoming token to compare with stored hashed token
+    const hashedToken = createHash('sha256').update(token).digest('hex');
+
     // Find user with valid reset token
     const user = await prisma.user.findFirst({
       where: {
-        passwordResetToken: token,
+        passwordResetToken: hashedToken,
         passwordResetExpires: {
           gt: new Date(),
         },

@@ -41,7 +41,7 @@ export default function TwoWorlds() {
                         style={{
                             background: "var(--color-primary)",
                             color: "var(--color-text-inverse)",
-                            boxShadow: "0 8px 32px -8px rgba(180, 70, 43, 0.3)",
+                            boxShadow: "0 8px 32px -8px rgba(39, 199, 249, 0.35)",
                         }}
                     >
                         <div className="text-xs uppercase tracking-[0.2em] opacity-70 mb-4">
@@ -69,7 +69,7 @@ export default function TwoWorlds() {
                                 color: "var(--color-text)",
                             }}
                         >
-                            Create a Business Titchybooks →
+                            Create Business Titchybooks →
                         </Link>
                     </div>
 
@@ -107,7 +107,7 @@ export default function TwoWorlds() {
                                 color: "var(--color-text)",
                             }}
                         >
-                            Create a Personal Titchybooks →
+                            Create Personal Titchybooks →
                         </Link>
                     </div>
                 </div>

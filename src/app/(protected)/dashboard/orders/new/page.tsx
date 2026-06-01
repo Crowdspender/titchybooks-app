@@ -72,7 +72,7 @@ export default async function NewOrderPage({
                         color: "#92400E",
                     }}
                 >
-                    This Titchybooks isn&apos;t approved yet — you can preview
+                    This Titchybook isn&apos;t approved yet — you can preview
                     pricing, but ordering will unlock once an admin approves it.
                 </p>
             )}

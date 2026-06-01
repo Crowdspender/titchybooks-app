@@ -63,7 +63,7 @@ export default async function OrdersListPage() {
                             className="text-sm mb-6"
                             style={{ color: "var(--color-text-muted)" }}
                         >
-                            Submit an approved Titchybooks for printing to see
+                            Submit an approved Titchybook for printing to see
                             your orders here.
                         </p>
                         <Link href="/dashboard" className="btn btn-primary">

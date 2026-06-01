@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useId } from "react";
+import { useCallback, useId, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import ImageUploader from "./ImageUploader";
@@ -17,7 +17,7 @@ export default function UploadGrid() {
   const router = useRouter();
   const submissionId = useId().replace(/:/g, "").slice(0, 12) + Date.now();
   const [uploads, setUploads] = useState<Map<PageLabel, UploadedImage>>(
-    new Map()
+    new Map(),
   );
   const [submitting, setSubmitting] = useState(false);
 
@@ -34,7 +34,7 @@ export default function UploadGrid() {
         return next;
       });
     },
-    []
+    [],
   );
 
   const allUploaded = uploads.size === 8;

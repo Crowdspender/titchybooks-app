@@ -958,7 +958,7 @@ export default function EditorCanvas({
         width={stageWidth}
         height={stageHeight}
         className="mx-auto rounded-xl bg-white"
-        style={{ boxShadow: "0 20px 50px rgba(28, 25, 23, 0.12)" }}
+        style={{ boxShadow: "0 20px 50px rgba(0, 0, 0, 0.1)" }}
         onMouseDown={(event) => {
           if (event.target === event.target.getStage()) {
             onSelectElement(null);

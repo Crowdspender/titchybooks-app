@@ -7,7 +7,7 @@ export default function Hero() {
             className="relative overflow-hidden"
             style={{
                 background:
-                    "linear-gradient(175deg, #F5F3EE 0%, #FAFAF7 60%, #F5F3EE 100%)",
+                    "linear-gradient(175deg, #ffffff 0%, #f8f9fa 60%, #ffffff 100%)",
                 borderBottom: "1px solid var(--color-border)",
             }}
         >
@@ -36,7 +36,7 @@ export default function Hero() {
                             className="btn btn-primary btn-lg"
                             style={{ background: "var(--color-surface-dark)" }}
                         >
-                            Create a Titchybooks
+                            Create Titchybooks
                         </Link>
                         <Link
                             href="/register?audience=business"
@@ -66,7 +66,7 @@ export default function Hero() {
                             sizes="(max-width: 768px) 100vw, 50vw"
                             style={{
                                 boxShadow:
-                                    "0 32px 64px -16px rgba(28, 25, 23, 0.2), 0 12px 24px -8px rgba(28, 25, 23, 0.12)",
+                                    "0 32px 64px -16px rgba(0, 0, 0, 0.15), 0 12px 24px -8px rgba(0, 0, 0, 0.1)",
                             }}
                         />
                     </div>
