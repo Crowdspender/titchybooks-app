@@ -1,8 +1,7 @@
-import LoginForm from "@/components/auth/LoginForm";
+import ForgotPasswordForm from "@/components/auth/ForgotPasswordForm";
 import Link from "next/link";
-import { Suspense } from "react";
 
-export default function LoginPage() {
+export default function ForgotPasswordPage() {
   return (
     <div
       className="flex min-h-[calc(100vh-4rem)] items-center justify-center px-4 py-12"
@@ -26,7 +25,7 @@ export default function LoginPage() {
             className="mt-2 text-sm"
             style={{ color: "var(--color-text-muted)" }}
           >
-            Sign in to continue to your account
+            Enter your email to reset your password
           </p>
         </div>
 
@@ -35,31 +34,20 @@ export default function LoginPage() {
           className="card p-8"
           style={{ boxShadow: "var(--shadow-lg)" }}
         >
-          <Suspense
-            fallback={
-              <div
-                className="text-center py-4"
-                style={{ color: "var(--color-text-muted)" }}
-              >
-                Loading...
-              </div>
-            }
-          >
-            <LoginForm />
-          </Suspense>
+          <ForgotPasswordForm />
         </div>
 
         <p
           className="mt-6 text-center text-sm"
           style={{ color: "var(--color-text-muted)" }}
         >
-          Don&apos;t have an account?{" "}
+          Remember your password?{" "}
           <Link
-            href="/register"
+            href="/login"
             className="font-medium no-underline"
             style={{ color: "var(--color-primary)" }}
           >
-            Create one
+            Sign in
           </Link>
         </p>
       </div>

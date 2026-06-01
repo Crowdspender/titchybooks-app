@@ -21,7 +21,7 @@ import {
 } from "./layout";
 
 /**
- * Generate the Titchybook PDF for a submission.
+ * Generate the Titchybooks PDF for a submission.
  *
  * 1. Fetch submission images from DB
  * 2. Download all 8 images from S3

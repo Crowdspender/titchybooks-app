@@ -8,16 +8,18 @@ datasource db {
 }
 
 model User {
-  id           String       @id @default(cuid())
-  email        String       @unique
-  passwordHash String
-  name         String?
-  role         String       @default("USER")
-  assets       Asset[]
-  submissions  Submission[]
-  orders       Order[]
-  createdAt    DateTime     @default(now())
-  updatedAt    DateTime     @updatedAt
+  id                      String       @id @default(cuid())
+  email                   String       @unique
+  passwordHash            String
+  name                    String?
+  role                    String       @default("USER")
+  passwordResetToken      String?
+  passwordResetExpires    DateTime?
+  assets                  Asset[]
+  submissions             Submission[]
+  orders                  Order[]
+  createdAt               DateTime     @default(now())
+  updatedAt               DateTime     @updatedAt
 }
 
 model Submission {

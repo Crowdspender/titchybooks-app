@@ -21,6 +21,7 @@ import LayerPanel from "./LayerPanel";
 import PropertiesPanel from "./PropertiesPanel";
 import OrderPanel from "@/components/orders/OrderPanel";
 import AiChatPanel from "./AiChatPanel";
+import ColorPicker from "./ColorPicker";
 import type { BookContext } from "@/lib/ai/system-prompt";
 import type { AiSuggestion } from "@/lib/ai/protocol";
 
@@ -292,7 +293,7 @@ export default function EditorWorkspace({
   >(
     "idle",
   );
-  const [title, setTitle] = useState("Untitled Titchybook");
+  const [title, setTitle] = useState("Untitled Titchybooks");
   const [assets, setAssets] = useState<AssetRecord[]>([]);
   const [assetUploading, setAssetUploading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -330,7 +331,7 @@ export default function EditorWorkspace({
   const isInstanceMode = submission?.templateId != null;
 
   const savedPagesRef = useRef<Partial<Record<PageLabel, string>>>({});
-  const savedTitleRef = useRef("Untitled Titchybook");
+  const savedTitleRef = useRef("Untitled Titchybooks");
   const submissionIdRef = useRef<string | null>(null);
 
   const activePage = pagesByLabel[activePageLabel];
@@ -437,7 +438,7 @@ export default function EditorWorkspace({
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               mode: "EDITOR",
-              title: "Untitled Titchybook",
+              title: "Untitled Titchybooks",
             }),
           });
 
@@ -591,13 +592,13 @@ export default function EditorWorkspace({
       }
 
       setSubmission(nextSubmission);
-      setTitle(nextSubmission.title ?? "Untitled Titchybook");
+      setTitle(nextSubmission.title ?? "Untitled Titchybooks");
       setPagesByLabel(nextPages);
       setTemplateElements(nextTemplateElements);
       setActivePageLabel("FRONT_COVER");
       setSelectedElementId(null);
       submissionIdRef.current = nextSubmission.id;
-      savedTitleRef.current = nextSubmission.title ?? "Untitled Titchybook";
+      savedTitleRef.current = nextSubmission.title ?? "Untitled Titchybooks";
       savedPagesRef.current = Object.fromEntries(
         PAGE_LABELS.map((
           pageLabel,
@@ -610,7 +611,7 @@ export default function EditorWorkspace({
         pageScenes: Object.fromEntries(
           PAGE_LABELS.map((label) => [label, nextPages[label].sceneJson]),
         ) as Record<PageLabel, string>,
-        title: nextSubmission.title ?? "Untitled Titchybook",
+        title: nextSubmission.title ?? "Untitled Titchybooks",
       };
       setHistory({
         past: [],
@@ -636,7 +637,7 @@ export default function EditorWorkspace({
         setPagesByLabel(normalizePages([]));
         setActivePageLabel("FRONT_COVER");
         setSelectedElementId(null);
-        setTitle("Untitled Titchybook");
+        setTitle("Untitled Titchybooks");
         setTemplateElements(
           Object.fromEntries(
             PAGE_LABELS.map((label) => [label, [] as EditorElement[]]),
@@ -647,7 +648,7 @@ export default function EditorWorkspace({
         setCanRedo(false);
         setSaveState("idle");
         submissionIdRef.current = null;
-        savedTitleRef.current = "Untitled Titchybook";
+        savedTitleRef.current = "Untitled Titchybooks";
         savedPagesRef.current = {};
 
         await loadAssets();
@@ -1534,11 +1535,11 @@ export default function EditorWorkspace({
 
       if (!response.ok) {
         const data = (await response.json()) as { error?: string };
-        throw new Error(data.error || "Could not submit Titchybook");
+        throw new Error(data.error || "Could not submit Titchybooks");
       }
 
       localStorage.removeItem(ACTIVE_DRAFT_STORAGE_KEY);
-      toast.success("Titchybook submitted. PDF generation is now processing.");
+      toast.success("Titchybooks submitted. PDF generation is now processing.");
       router.push("/dashboard");
       router.refresh();
     } catch (error) {
@@ -1587,7 +1588,7 @@ export default function EditorWorkspace({
       <div className="flex min-h-[calc(100vh-3.5rem)] items-center justify-center px-4 py-8">
         <div className="card px-8 py-10 text-center">
           <p className="section-label">
-            Titchybook Studio
+            Titchybooks Studio
           </p>
           <p className="mt-3 text-base" style={{ color: "var(--color-text)" }}>
             {loadingMessage}
@@ -1666,7 +1667,7 @@ export default function EditorWorkspace({
           <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div className="space-y-2">
               <p className="section-label">
-                Titchybook Studio
+                Titchybooks Studio
               </p>
               <input
                 value={title}
@@ -2031,20 +2032,17 @@ export default function EditorWorkspace({
                   style={{ color: "var(--color-text-muted)" }}
                 >
                   <span>Background</span>
-                  <input
-                    type="color"
+                  <ColorPicker
                     value={activePage.scene.page.backgroundColor}
-                    onChange={(event) => {
+                    onChange={(color) => {
                       updateScene({
                         ...activePage.scene,
                         page: {
                           ...activePage.scene.page,
-                          backgroundColor: event.target.value,
+                          backgroundColor: color,
                         },
                       });
                     }}
-                    className="h-10 w-12 rounded-lg"
-                    style={{ border: "1.5px solid var(--color-border-strong)" }}
                   />
                 </label>
               </div>

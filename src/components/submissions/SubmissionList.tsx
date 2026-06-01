@@ -136,7 +136,7 @@ export default function SubmissionList() {
           Create your first booklet and start designing.
         </p>
         <Link href="/create" className="btn btn-primary">
-          Create your first Titchybook
+          Create your first Titchybooks
         </Link>
       </div>
     );
@@ -191,7 +191,7 @@ function SubmissionCard({
             className="font-semibold text-[0.9375rem] truncate"
             style={{ color: "var(--color-text)" }}
           >
-            {submission.title || "Untitled Titchybook"}
+            {submission.title || "Untitled Titchybooks"}
           </span>
           <StatusBadge status={submission.status} />
         </div>

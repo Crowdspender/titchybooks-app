@@ -1,8 +1,8 @@
-import LoginForm from "@/components/auth/LoginForm";
+import ResetPasswordForm from "@/components/auth/ResetPasswordForm";
 import Link from "next/link";
 import { Suspense } from "react";
 
-export default function LoginPage() {
+export default function ResetPasswordPage() {
   return (
     <div
       className="flex min-h-[calc(100vh-4rem)] items-center justify-center px-4 py-12"
@@ -26,7 +26,7 @@ export default function LoginPage() {
             className="mt-2 text-sm"
             style={{ color: "var(--color-text-muted)" }}
           >
-            Sign in to continue to your account
+            Create a new password for your account
           </p>
         </div>
 
@@ -45,7 +45,7 @@ export default function LoginPage() {
               </div>
             }
           >
-            <LoginForm />
+            <ResetPasswordForm />
           </Suspense>
         </div>
 
@@ -53,13 +53,13 @@ export default function LoginPage() {
           className="mt-6 text-center text-sm"
           style={{ color: "var(--color-text-muted)" }}
         >
-          Don&apos;t have an account?{" "}
+          Remember your password?{" "}
           <Link
-            href="/register"
+            href="/login"
             className="font-medium no-underline"
             style={{ color: "var(--color-primary)" }}
           >
-            Create one
+            Sign in
           </Link>
         </p>
       </div>

@@ -9,7 +9,7 @@ export const EDITOR_MAX_ELEMENTS_PER_PAGE = 100;
 
 export const EDITOR_SUBMISSION_MODE = SubmissionMode.EDITOR;
 
-// Permanent branding text printed on the BACK_COVER panel of every Titchybook.
+// Permanent branding text printed on the BACK_COVER panel of every Titchybooks.
 // The back cover panel is intentionally shorter than the other panels to reserve
 // a strip at the bottom of the printed cover for this branding.
 export const BACK_COVER_BRAND_TEXT = "www.titchybooks.com";

@@ -6,6 +6,7 @@ import {
 } from "@/lib/editor/crop";
 import type { EditorElement } from "@/lib/editor/schema";
 import type { RenderableEditorElement } from "@/lib/editor/template-types";
+import ColorPicker from "./ColorPicker";
 
 interface PropertiesPanelProps {
   selectedElement: RenderableEditorElement | null;
@@ -395,23 +396,18 @@ export default function PropertiesPanel({
               </div>
               <div>
                 <FieldLabel>Color</FieldLabel>
-                <input
-                  type="color"
+                <ColorPicker
                   value={selectedElement.color}
-                  onChange={(event) => {
+                  onChange={(color) => {
                     onChangeElement(selectedElement.id, (element) =>
                       element.type === "text"
                         ? {
                           ...element,
-                          color: event.target.value,
+                          color: color,
                         }
                         : element);
                   }}
-                  className="h-11 w-full rounded-lg"
-                  style={{
-                    border: "1.5px solid var(--color-border-strong)",
-                    background: "var(--color-surface-raised)",
-                  }}
+                  className="w-full"
                 />
               </div>
             </div>
@@ -436,47 +432,37 @@ export default function PropertiesPanel({
 
             <div>
               <FieldLabel>Fill Color</FieldLabel>
-              <input
-                type="color"
+              <ColorPicker
                 value={selectedElement.fill === "transparent"
                   ? "#ffffff"
                   : selectedElement.fill}
-                onChange={(event) => {
+                onChange={(color) => {
                   onChangeElement(selectedElement.id, (element) =>
                     element.type === "shape"
                       ? {
                         ...element,
-                        fill: event.target.value,
+                        fill: color,
                       }
                       : element);
                 }}
-                className="h-11 w-full rounded-lg"
-                style={{
-                  border: "1.5px solid var(--color-border-strong)",
-                  background: "var(--color-surface-raised)",
-                }}
+                className="w-full"
               />
             </div>
 
             <div>
               <FieldLabel>Stroke Color</FieldLabel>
-              <input
-                type="color"
+              <ColorPicker
                 value={selectedElement.stroke ?? "#000000"}
-                onChange={(event) => {
+                onChange={(color) => {
                   onChangeElement(selectedElement.id, (element) =>
                     element.type === "shape"
                       ? {
                         ...element,
-                        stroke: event.target.value,
+                        stroke: color,
                       }
                       : element);
                 }}
-                className="h-11 w-full rounded-lg"
-                style={{
-                  border: "1.5px solid var(--color-border-strong)",
-                  background: "var(--color-surface-raised)",
-                }}
+                className="w-full"
               />
             </div>
 

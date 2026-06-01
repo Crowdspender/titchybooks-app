@@ -15,7 +15,7 @@ export default function RegisterPage() {
             className="inline-flex items-center gap-0.5 text-2xl font-semibold tracking-tight no-underline"
             style={{ color: "var(--color-text)" }}
           >
-            Titchybook
+            Titchybooks
             <span
               className="inline-block w-2 h-2 rounded-full mb-3"
               style={{ background: "var(--color-primary)" }}

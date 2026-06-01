@@ -24,7 +24,7 @@ export default function Header() {
           href="/"
           className="flex items-center gap-0.5 text-[1.1rem] font-semibold tracking-tight text-stone-900 no-underline"
         >
-          Titchybook
+          Titchybooks
           <span
             className="inline-block w-1.5 h-1.5 rounded-full mb-2"
             style={{ background: "var(--color-primary)" }}

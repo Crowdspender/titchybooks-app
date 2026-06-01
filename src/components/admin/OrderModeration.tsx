@@ -186,7 +186,7 @@ export default function OrderModeration() {
                                             User
                                         </th>
                                         <th className="text-left px-5 py-3 section-label">
-                                            Titchybook
+                                            Titchybooks
                                         </th>
                                         <th className="text-left px-5 py-3 section-label">
                                             Qty
@@ -253,7 +253,7 @@ export default function OrderModeration() {
                                                     }}
                                                 >
                                                     {order.submission?.title ||
-                                                        "Titchybook"}
+                                                        "Titchybooks"}
                                                     <div
                                                         className="text-xs"
                                                         style={{

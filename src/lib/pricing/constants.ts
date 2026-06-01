@@ -1,5 +1,5 @@
 /**
- * Titchybook pricing engine — default values and shared constants.
+ * Titchybooks pricing engine — default values and shared constants.
  *
  * These mirror the Magyar Posta weight bands and the default tier ladder
  * from the product spec. The actual values used at runtime always come

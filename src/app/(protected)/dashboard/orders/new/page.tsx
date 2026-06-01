@@ -53,7 +53,7 @@ export default async function NewOrderPage({
                         className="mt-1 text-sm"
                         style={{ color: "var(--color-text-muted)" }}
                     >
-                        {submission.title || "Titchybook"}
+                        {submission.title || "Titchybooks"}
                     </p>
                 </div>
                 <Link
@@ -72,7 +72,7 @@ export default async function NewOrderPage({
                         color: "#92400E",
                     }}
                 >
-                    This Titchybook isn&apos;t approved yet — you can preview
+                    This Titchybooks isn&apos;t approved yet — you can preview
                     pricing, but ordering will unlock once an admin approves it.
                 </p>
             )}

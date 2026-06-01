@@ -2,6 +2,7 @@
 
 import { signIn } from "next-auth/react";
 import { useRouter, useSearchParams } from "next/navigation";
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
@@ -12,10 +13,13 @@ export default function LoginForm() {
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
 
-  // Show success toast if redirected from registration
+  // Show success toast if redirected from registration or password reset
   useEffect(() => {
     if (searchParams.get("registered") === "true") {
       toast.success("Account created! Please sign in.");
+    }
+    if (searchParams.get("reset") === "success") {
+      toast.success("Password reset successfully! Please sign in.");
     }
   }, [searchParams]);
 
@@ -56,7 +60,16 @@ export default function LoginForm() {
       </div>
 
       <div>
-        <label htmlFor="password" className="label">Password</label>
+        <div className="flex items-center justify-between mb-2">
+          <label htmlFor="password" className="label mb-0">Password</label>
+          <Link
+            href="/forgot-password"
+            className="text-xs font-medium no-underline"
+            style={{ color: "var(--color-primary)" }}
+          >
+            Forgot password?
+          </Link>
+        </div>
         <input
           id="password"
           type="password"

@@ -52,7 +52,7 @@ export default function FooterCTA() {
                             Outernet Publishing
                         </span>
                         <span className="text-xl font-medium">
-                            Create a Titchybook →
+                            Create a Titchybooks →
                         </span>
                     </Link>
                 </div>
@@ -68,7 +68,7 @@ export default function FooterCTA() {
                     <span>
                         Titchybooks — Pocket publishing for the physical world.
                     </span>
-                    <span>© {new Date().getFullYear()} Titchybook</span>
+                    <span>© {new Date().getFullYear()} Titchybooks</span>
                 </div>
             </div>
         </section>

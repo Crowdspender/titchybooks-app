@@ -269,7 +269,7 @@ export default function OrderPanel({
         !calcError;
 
     const placeOrderDisabledReason = submission.status !== "APPROVED"
-        ? "Your Titchybook must be approved before printing."
+        ? "Your Titchybooks must be approved before printing."
         : !submission.pdfReady
         ? "Print-ready PDF is still being generated. Please try again shortly."
         : null;

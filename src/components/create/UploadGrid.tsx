@@ -66,7 +66,7 @@ export default function UploadGrid() {
         throw new Error(data.error || "Submission failed");
       }
 
-      toast.success("Titchybook submitted! PDF is being generated.");
+      toast.success("Titchybooks submitted! PDF is being generated.");
       router.push("/dashboard");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Submission failed");
@@ -79,7 +79,7 @@ export default function UploadGrid() {
     <div className="space-y-6">
       <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 text-sm text-blue-800">
         <p>
-          Upload 8 images for your Titchybook. The final page size is
+          Upload 8 images for your Titchybooks. The final page size is
           approximately A7 portrait. Images will be automatically resized and
           center-cropped to fit.
         </p>
@@ -106,7 +106,7 @@ export default function UploadGrid() {
           disabled={!allUploaded || submitting}
           className="px-6 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
         >
-          {submitting ? "Submitting..." : "Create Titchybook"}
+          {submitting ? "Submitting..." : "Create Titchybooks"}
         </button>
       </div>
     </div>

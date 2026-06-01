@@ -5,7 +5,7 @@ const business = [
     "Attach real-world perks — coffee, cakes, offers",
     "Create circulating physical marketing",
     "Funded promotions via the Outernet system",
-    "Example: buy coffee → receive free cake via Titchybook token",
+    "Example: buy coffee → receive free cake via Titchybooks token",
 ];
 
 const creator = [
@@ -69,7 +69,7 @@ export default function TwoWorlds() {
                                 color: "var(--color-text)",
                             }}
                         >
-                            Create a Business Titchybook →
+                            Create a Business Titchybooks →
                         </Link>
                     </div>
 
@@ -107,7 +107,7 @@ export default function TwoWorlds() {
                                 color: "var(--color-text)",
                             }}
                         >
-                            Create a Personal Titchybook →
+                            Create a Personal Titchybooks →
                         </Link>
                     </div>
                 </div>

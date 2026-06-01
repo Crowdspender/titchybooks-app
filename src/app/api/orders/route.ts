@@ -75,7 +75,7 @@ export async function POST(request: Request) {
   }
   if (!submission.pdfS3Key) {
     return NextResponse.json(
-      { error: "PDF is not yet ready for this Titchybook" },
+      { error: "PDF is not yet ready for this Titchybooks" },
       { status: 400 }
     );
   }

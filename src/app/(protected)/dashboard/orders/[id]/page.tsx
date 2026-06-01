@@ -57,7 +57,7 @@ export default async function OrderDetailPage({
                         value={order.status.replace("_", " ")}
                     />
                     <DetailRow
-                        label="Titchybook"
+                        label="Titchybooks"
                         value={order.submission?.title || "—"}
                     />
                     <DetailRow
