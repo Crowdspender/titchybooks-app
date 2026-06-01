@@ -41,7 +41,8 @@ export default function TwoWorlds() {
                         style={{
                             background: "var(--color-primary)",
                             color: "var(--color-text-inverse)",
-                            boxShadow: "0 8px 32px -8px rgba(39, 199, 249, 0.35)",
+                            boxShadow:
+                                "0 8px 32px -8px rgba(39, 199, 249, 0.35)",
                         }}
                     >
                         <div className="text-xs uppercase tracking-[0.2em] opacity-70 mb-4">

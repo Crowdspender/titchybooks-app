@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { randomBytes, createHash } from "crypto";
+import { sendPasswordResetEmail } from "@/lib/email";
 
 export async function POST(request: Request) {
   try {
@@ -38,23 +39,23 @@ export async function POST(request: Request) {
       },
     });
 
-    // In production, you would send an email here with the reset link
-    // For now, we'll log it (you should integrate with a service like Resend, SendGrid, etc.)
+    // Generate and send password reset email
     const resetUrl = `${process.env.NEXTAUTH_URL || "http://localhost:3000"}/reset-password?token=${resetToken}`;
     
-    // Only log reset URL in development environment - never in production
+    // Only log reset URL in development environment
     if (process.env.NODE_ENV === "development") {
       console.log("Password reset URL (for development):", resetUrl);
     }
     
-    // TODO: Send email with resetUrl
-    // Example with Resend:
-    // await resend.emails.send({
-    //   from: 'noreply@titchybook.com',
-    //   to: email,
-    //   subject: 'Reset your password',
-    //   html: `<p>Click <a href="${resetUrl}">here</a> to reset your password. This link expires in 1 hour.</p>`
-    // });
+    // Send password reset email
+    const emailSent = await sendPasswordResetEmail({
+      to: email,
+      resetUrl,
+    });
+    
+    if (!emailSent && process.env.NODE_ENV === "production") {
+      console.error("Failed to send password reset email to:", email);
+    }
 
     return NextResponse.json({ success: true });
   } catch {

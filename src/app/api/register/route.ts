@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { hash } from "bcryptjs";
 import { z } from "zod";
+import { sendWelcomeEmail } from "@/lib/email";
 
 const registerSchema = z.object({
   name: z.string().min(1, "Name is required"),
@@ -32,9 +33,20 @@ export async function POST(request: Request) {
     }
 
     const passwordHash = await hash(password, 12);
-    await prisma.user.create({
+    const user = await prisma.user.create({
       data: { name, email, passwordHash },
     });
+
+    // Send welcome email (non-blocking, don't fail registration if email fails)
+    try {
+      await sendWelcomeEmail({
+        to: email,
+        name: name || "User",
+      });
+    } catch (error) {
+      console.error("Failed to send welcome email:", error);
+      // Don't fail registration if email sending fails
+    }
 
     return NextResponse.json({ success: true }, { status: 201 });
   } catch {
