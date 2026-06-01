@@ -1,6 +1,9 @@
-import { NextResponse } from "next/server";
+﻿import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { generateTitchybookPdf } from "@/lib/pdf/generate";
+
+export const dynamic = "force-dynamic";
+
 
 export async function POST(
   _request: Request,

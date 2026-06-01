@@ -1,7 +1,10 @@
-import { NextResponse } from "next/server";
+﻿import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { loadPricingConfig, savePricingConfig } from "@/lib/pricing/config";
 import { pricingConfigInputSchema } from "@/lib/pricing/schema";
+
+export const dynamic = "force-dynamic";
+
 
 export async function GET() {
   const session = await auth();

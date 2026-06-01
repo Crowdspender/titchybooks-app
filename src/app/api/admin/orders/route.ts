@@ -3,6 +3,8 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { adminListOrdersQuerySchema } from "@/lib/pricing/schema";
 
+export const dynamic = "force-dynamic";
+
 export async function GET(request: NextRequest) {
   const session = await auth();
   if (!session?.user?.id || session.user.role !== "ADMIN") {

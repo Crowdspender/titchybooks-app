@@ -1,8 +1,11 @@
-import { NextResponse } from "next/server";
+﻿import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { SubmissionStatus } from "@/lib/constants";
 import type { EditorElement } from "@/lib/editor/schema";
+
+export const dynamic = "force-dynamic";
+
 
 interface TemplateAsset {
   id: string;

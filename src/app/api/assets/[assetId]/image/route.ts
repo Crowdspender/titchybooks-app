@@ -1,9 +1,12 @@
-import { NextResponse } from "next/server";
+﻿import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { SubmissionStatus } from "@/lib/constants";
 import { s3Client } from "@/lib/s3";
 import { GetObjectCommand } from "@aws-sdk/client-s3";
+
+export const dynamic = "force-dynamic";
+
 
 // Authorization ladder (any of the following grants access):
 //   1. Caller owns the asset.

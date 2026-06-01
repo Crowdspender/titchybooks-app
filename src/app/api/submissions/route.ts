@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+﻿import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { z } from "zod";
@@ -9,6 +9,9 @@ import {
   SubmissionStatus,
 } from "@/lib/constants";
 import { createEmptySubmissionPageSeeds } from "@/lib/editor/validation";
+
+export const dynamic = "force-dynamic";
+
 
 const imageEntrySchema = z.object({
   pageLabel: z.enum(PAGE_LABELS),

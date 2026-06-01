@@ -4,6 +4,8 @@ import { prisma } from "@/lib/prisma";
 import { ORDER_STATUS_TRANSITIONS, type OrderStatus } from "@/lib/pricing/constants";
 import { adminUpdateOrderSchema } from "@/lib/pricing/schema";
 
+export const dynamic = "force-dynamic";
+
 export async function GET(
   _request: Request,
   { params }: { params: Promise<{ id: string }> }

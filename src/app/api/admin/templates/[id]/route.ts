@@ -1,9 +1,12 @@
-import { NextResponse } from "next/server";
+﻿import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { SubmissionMode, SubmissionStatus } from "@/lib/constants";
 import { parseEditorScene } from "@/lib/editor/schema";
 import { z } from "zod";
+
+export const dynamic = "force-dynamic";
+
 
 const updateTemplateSchema = z.object({
   title: z.string().trim().max(120).nullable().optional(),

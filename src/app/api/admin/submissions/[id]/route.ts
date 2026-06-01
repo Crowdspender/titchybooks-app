@@ -1,8 +1,11 @@
-import { NextResponse } from "next/server";
+﻿import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { SubmissionStatus } from "@/lib/constants";
 import { z } from "zod";
+
+export const dynamic = "force-dynamic";
+
 
 const actionSchema = z.object({
   action: z.enum(["APPROVE", "REJECT"]),

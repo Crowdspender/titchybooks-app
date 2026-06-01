@@ -1,7 +1,10 @@
-import { NextResponse } from "next/server";
+﻿import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { SubmissionStatus } from "@/lib/constants";
+
+export const dynamic = "force-dynamic";
+
 
 // POST /api/admin/templates/[id]/publish - Publish a template
 export async function POST(

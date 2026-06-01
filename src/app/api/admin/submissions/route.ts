@@ -1,7 +1,10 @@
-import { NextRequest, NextResponse } from "next/server";
+﻿import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { getPresignedDownloadUrl } from "@/lib/s3";
+
+export const dynamic = "force-dynamic";
+
 
 export async function GET(request: NextRequest) {
   const session = await auth();

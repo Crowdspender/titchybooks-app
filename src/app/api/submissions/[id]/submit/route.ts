@@ -1,9 +1,12 @@
-import { NextResponse } from "next/server";
+﻿import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { SubmissionMode, SubmissionStatus } from "@/lib/constants";
 import { parseEditorScene } from "@/lib/editor/schema";
 import { prisma } from "@/lib/prisma";
 import { generateTitchybookPdf } from "@/lib/pdf/generate";
+
+export const dynamic = "force-dynamic";
+
 
 export async function POST(
   _request: Request,

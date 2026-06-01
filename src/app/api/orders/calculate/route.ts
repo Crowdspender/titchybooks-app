@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+﻿import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { loadPricingConfig } from "@/lib/pricing/config";
@@ -9,6 +9,9 @@ import {
 } from "@/lib/pricing/engine";
 import { calculateOrderInputSchema } from "@/lib/pricing/schema";
 import { DEFAULT_CURRENCY } from "@/lib/pricing/currency";
+
+export const dynamic = "force-dynamic";
+
 
 export async function POST(request: Request) {
   const session = await auth();

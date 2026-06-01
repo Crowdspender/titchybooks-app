@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+﻿import { NextResponse } from "next/server";
 import { z } from "zod";
 import { auth } from "@/auth";
 import { SubmissionMode } from "@/lib/constants";
@@ -11,6 +11,9 @@ import {
 import { validateEditorScene } from "@/lib/editor/validation";
 import { EDITOR_MAX_ELEMENTS_PER_PAGE } from "@/lib/editor/constants";
 import { prisma } from "@/lib/prisma";
+
+export const dynamic = "force-dynamic";
+
 
 const updateSubmissionPageSchema = z.object({
   scene: z.unknown(),

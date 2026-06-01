@@ -1,9 +1,12 @@
-import { NextResponse } from "next/server";
+﻿import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { getOpenAIClient, getOpenAIModel, isAIConfigured } from "@/lib/ai/client";
 import { buildSystemPrompt, type BookContext } from "@/lib/ai/system-prompt";
 import { PAGE_LABELS, type PageLabel } from "@/lib/constants";
 import { z } from "zod";
+
+export const dynamic = "force-dynamic";
+
 
 const chatMessageSchema = z.object({
   role: z.enum(["user", "assistant"]),

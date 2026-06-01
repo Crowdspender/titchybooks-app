@@ -1,6 +1,9 @@
-import { NextResponse } from "next/server";
+﻿import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { loadPricingConfig } from "@/lib/pricing/config";
+
+export const dynamic = "force-dynamic";
+
 
 /**
  * Returns the public-safe portion of the pricing config so the editor's

@@ -1,9 +1,12 @@
-import { NextResponse } from "next/server";
+﻿import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { SubmissionMode, SubmissionStatus } from "@/lib/constants";
 import { createEmptySubmissionPageSeeds } from "@/lib/editor/validation";
 import { z } from "zod";
+
+export const dynamic = "force-dynamic";
+
 
 const fromTemplateSchema = z.object({
   templateId: z.string().min(1),

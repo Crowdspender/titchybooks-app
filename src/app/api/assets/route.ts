@@ -1,9 +1,12 @@
-import { NextResponse } from "next/server";
+﻿import { NextResponse } from "next/server";
 import { z } from "zod";
 import { auth } from "@/auth";
 import { ACCEPTED_IMAGE_TYPES, MAX_FILE_SIZE } from "@/lib/constants";
 import { prisma } from "@/lib/prisma";
 import { getPresignedDownloadUrl } from "@/lib/s3";
+
+export const dynamic = "force-dynamic";
+
 
 const createAssetSchema = z.object({
   s3Key: z.string().min(1),

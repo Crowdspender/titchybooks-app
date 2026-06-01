@@ -1,8 +1,11 @@
-import { NextResponse } from "next/server";
+﻿import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { parseEditorScene } from "@/lib/editor/schema";
 import type { EditorElement } from "@/lib/editor/schema";
+
+export const dynamic = "force-dynamic";
+
 
 // POST /api/submissions/[id]/detach-from-template
 // Materializes template elements into the instance as user-owned elements,
