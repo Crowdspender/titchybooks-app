@@ -5,7 +5,14 @@ const resend = process.env.RESEND_API_KEY
   ? new Resend(process.env.RESEND_API_KEY)
   : null;
 
-const EMAIL_FROM = process.env.EMAIL_FROM || "noreply@titchybook.com";
+const EMAIL_FROM = process.env.EMAIL_FROM || "onboarding@resend.dev";
+
+// Log initialization status
+if (resend) {
+  console.log("✅ Resend client initialized successfully");
+} else {
+  console.warn("⚠️ Resend client NOT initialized - missing RESEND_API_KEY");
+}
 
 interface SendPasswordResetEmailParams {
   to: string;
@@ -33,7 +40,9 @@ export async function sendPasswordResetEmail({
   }
 
   try {
-    await resend.emails.send({
+    console.log(`📧 Attempting to send password reset email to ${to} from ${EMAIL_FROM}`);
+    
+    const { data, error } = await resend.emails.send({
       from: `Titchybooks <${EMAIL_FROM}>`,
       to,
       subject: "Reset your password",
@@ -70,10 +79,13 @@ export async function sendPasswordResetEmail({
       `,
     });
 
-    console.log(`✅ Password reset email sent to ${to}`);
+    console.log(`✅ Password reset email sent to ${to}`, data?.id);
     return true;
   } catch (error) {
     console.error("❌ Failed to send password reset email:", error);
+    if (error instanceof Error) {
+      console.error("Error details:", error.message);
+    }
     return false;
   }
 }
@@ -94,7 +106,9 @@ export async function sendWelcomeEmail({
   }
 
   try {
-    await resend.emails.send({
+    console.log(`📧 Attempting to send welcome email to ${to} from ${EMAIL_FROM}`);
+    
+    const { data, error } = await resend.emails.send({
       from: `Titchybooks <${EMAIL_FROM}>`,
       to,
       subject: "Welcome to Titchybooks!",
@@ -133,10 +147,13 @@ export async function sendWelcomeEmail({
       `,
     });
 
-    console.log(`✅ Welcome email sent to ${to}`);
+    console.log(`✅ Welcome email sent to ${to}`, data?.id);
     return true;
   } catch (error) {
     console.error("❌ Failed to send welcome email:", error);
+    if (error instanceof Error) {
+      console.error("Error details:", error.message);
+    }
     return false;
   }
 }

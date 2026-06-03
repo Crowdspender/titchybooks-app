@@ -189,18 +189,16 @@ export default function ColorPicker(
                                 className="w-8 h-8 rounded-lg cursor-pointer border-2 transition-all hover:scale-110 relative overflow-hidden"
                                 style={{
                                     backgroundColor: "transparent",
-                                    borderColor:
-                                        value &&
+                                    borderColor: value &&
                                             value.toLowerCase() ===
                                                 "transparent"
-                                            ? "var(--color-primary)"
-                                            : "var(--color-border-strong)",
-                                    boxShadow:
-                                        value &&
+                                        ? "var(--color-primary)"
+                                        : "var(--color-border-strong)",
+                                    boxShadow: value &&
                                             value.toLowerCase() ===
                                                 "transparent"
-                                            ? "0 0 0 2px var(--color-primary-light)"
-                                            : "none",
+                                        ? "0 0 0 2px var(--color-primary-light)"
+                                        : "none",
                                 }}
                             >
                                 {/* Diagonal line to indicate transparent/none */}
@@ -222,18 +220,16 @@ export default function ColorPicker(
                                 className="w-8 h-8 rounded-lg cursor-pointer border-2 transition-all hover:scale-110"
                                 style={{
                                     backgroundColor: color,
-                                    borderColor:
-                                        value && color &&
+                                    borderColor: value && color &&
                                             value.toLowerCase() ===
                                                 color.toLowerCase()
-                                            ? "var(--color-primary)"
-                                            : "transparent",
-                                    boxShadow:
-                                        value && color &&
+                                        ? "var(--color-primary)"
+                                        : "transparent",
+                                    boxShadow: value && color &&
                                             value.toLowerCase() ===
                                                 color.toLowerCase()
-                                            ? "0 0 0 2px var(--color-primary-light)"
-                                            : "none",
+                                        ? "0 0 0 2px var(--color-primary-light)"
+                                        : "none",
                                 }}
                             />
                         ))}
