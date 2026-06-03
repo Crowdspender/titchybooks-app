@@ -293,7 +293,7 @@ export default function EditorWorkspace({
   >(
     "idle",
   );
-  const [title, setTitle] = useState("Untitled Titchybooks");
+  const [title, setTitle] = useState("");
   const [assets, setAssets] = useState<AssetRecord[]>([]);
   const [assetUploading, setAssetUploading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -438,7 +438,7 @@ export default function EditorWorkspace({
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               mode: "EDITOR",
-              title: "Untitled Titchybooks",
+              title: "",
             }),
           });
 
@@ -637,7 +637,7 @@ export default function EditorWorkspace({
         setPagesByLabel(normalizePages([]));
         setActivePageLabel("FRONT_COVER");
         setSelectedElementId(null);
-        setTitle("Untitled Titchybooks");
+        setTitle("");
         setTemplateElements(
           Object.fromEntries(
             PAGE_LABELS.map((label) => [label, [] as EditorElement[]]),
@@ -648,7 +648,7 @@ export default function EditorWorkspace({
         setCanRedo(false);
         setSaveState("idle");
         submissionIdRef.current = null;
-        savedTitleRef.current = "Untitled Titchybooks";
+        savedTitleRef.current = "";
         savedPagesRef.current = {};
 
         await loadAssets();
