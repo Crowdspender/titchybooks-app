@@ -6,7 +6,7 @@ async function testEmails() {
   
   // Check environment variables
   console.log('Environment variables:');
-  console.log('RESEND_API_KEY:', process.env.RESEND_API_KEY ? `✅ Set (${process.env.RESEND_API_KEY.substring(0, 10)}...)` : '❌ Not set');
+  console.log('RESEND_API_KEY:', process.env.RESEND_API_KEY ? '✅ Set' : '❌ Not set');
   console.log('EMAIL_FROM:', process.env.EMAIL_FROM || '❌ Not set');
   console.log('NODE_ENV:', process.env.NODE_ENV);
   console.log('');

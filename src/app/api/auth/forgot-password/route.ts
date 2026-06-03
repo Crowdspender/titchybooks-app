@@ -5,9 +5,7 @@ import { sendPasswordResetEmail } from "@/lib/email";
 
 export async function POST(request: Request) {
   try {
-    console.log('\n🔵 [FORGOT-PASSWORD] Password reset request received');
     const body = await request.json();
-    console.log('🔵 [FORGOT-PASSWORD] Request body:', body);
     const { email } = body;
 
     if (!email) {
@@ -23,11 +21,9 @@ export async function POST(request: Request) {
 
     // Always return success to prevent email enumeration
     if (!user) {
-      console.log('⚠️ [FORGOT-PASSWORD] User not found (returning success to prevent enumeration):', email);
       return NextResponse.json({ success: true });
     }
 
-    console.log('🔵 [FORGOT-PASSWORD] User found, generating reset token...');
     // Generate reset token
     const resetToken = randomBytes(32).toString("hex");
     const resetExpiry = new Date(Date.now() + 3600000); // 1 hour from now
@@ -54,7 +50,6 @@ export async function POST(request: Request) {
     }
     
     // Send password reset email
-    console.log('🔵 [FORGOT-PASSWORD] Attempting to send password reset email...');
     const emailSent = await sendPasswordResetEmail({
       to: email,
       resetUrl,
@@ -63,10 +58,9 @@ export async function POST(request: Request) {
     if (emailSent) {
       console.log('✅ [FORGOT-PASSWORD] Password reset email sent successfully');
     } else {
-      console.error("❌ [FORGOT-PASSWORD] Failed to send password reset email to:", email);
+      console.error("❌ [FORGOT-PASSWORD] Failed to send password reset email");
     }
 
-    console.log('✅ [FORGOT-PASSWORD] Password reset request completed\n');
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error('❌ [FORGOT-PASSWORD] Unexpected error:', error);
