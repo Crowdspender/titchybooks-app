@@ -34,9 +34,10 @@ export interface CalculatedOrder {
   printCostHuf: number;
   handlingCostHuf: number;
   shippingCostHuf: number;
+  vaultFeeHuf: number;
   discountHuf: number;
   totalHuf: number;
-  /** (printCost + handling + shipping - discount) / quantity, rounded. */
+  /** (printCost + handling + shipping + vault - discount) / quantity, rounded. */
   costPerBookHuf: number;
   currency: "HUF";
 }
@@ -52,6 +53,7 @@ export interface DiscountInput {
 
 export interface CalculateOrderOptions {
   discount?: DiscountInput;
+  vaultAddOn?: boolean;
 }
 
 export function calculateWeight(
@@ -152,10 +154,11 @@ export function calculateOrder(
   const printCostHuf = unitPriceHuf * quantity;
   const handlingCostHuf = getHandlingCost(printCostHuf, cfg);
   const shippingCostHuf = getShippingCost(zone, quantity, cfg);
+  const vaultFeeHuf = options.vaultAddOn ? cfg.vaultFeeHuf : 0;
   const discountHuf = applyDiscount(printCostHuf, options.discount);
   const totalHuf = Math.max(
     0,
-    printCostHuf + handlingCostHuf + shippingCostHuf - discountHuf
+    printCostHuf + handlingCostHuf + shippingCostHuf + vaultFeeHuf - discountHuf
   );
   const costPerBookHuf = Math.round(totalHuf / quantity);
 
@@ -168,6 +171,7 @@ export function calculateOrder(
     printCostHuf,
     handlingCostHuf,
     shippingCostHuf,
+    vaultFeeHuf,
     discountHuf,
     totalHuf,
     costPerBookHuf,

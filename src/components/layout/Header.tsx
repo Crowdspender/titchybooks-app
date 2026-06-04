@@ -38,6 +38,7 @@ export default function Header() {
               <>
                 <NavLink href="/dashboard">Dashboard</NavLink>
                 <NavLink href="/create?new=true">New Book</NavLink>
+                <NavLink href="/vault">Vault</NavLink>
                 {session.user.role === "ADMIN" && (
                   <>
                     <NavDivider />
@@ -68,6 +69,7 @@ export default function Header() {
             : (
               <>
                 <NavLink href="/login">Sign in</NavLink>
+                <NavLink href="/vault">Vault</NavLink>
                 <Link
                   href="/register"
                   className="btn btn-primary btn-sm ml-2"
@@ -137,6 +139,12 @@ export default function Header() {
                   >
                     New Book
                   </MobileNavLink>
+                  <MobileNavLink
+                    href="/vault"
+                    onClick={() => setMobileOpen(false)}
+                  >
+                    Vault
+                  </MobileNavLink>
                   {session.user.role === "ADMIN" && (
                     <>
                       <div
@@ -191,6 +199,12 @@ export default function Header() {
                     onClick={() => setMobileOpen(false)}
                   >
                     Sign in
+                  </MobileNavLink>
+                  <MobileNavLink
+                    href="/vault"
+                    onClick={() => setMobileOpen(false)}
+                  >
+                    Vault
                   </MobileNavLink>
                   <Link
                     href="/register"

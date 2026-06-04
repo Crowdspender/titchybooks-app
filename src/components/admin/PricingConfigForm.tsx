@@ -28,6 +28,7 @@ interface PricingConfigState {
     shippingTable: Record<Zone, number[]>;
     priceTiers: PriceTier[];
     currencyRates: CurrencyRatesState;
+    vaultFeeHuf: number;
 }
 
 const EMPTY_TIER: PriceTier = { min: 1, max: 1, pricePerCopy: 0 };
@@ -67,6 +68,7 @@ export default function PricingConfigForm() {
                         GBP: cfg.currencyRates?.GBP ??
                             DEFAULT_CURRENCY_RATES.GBP,
                     },
+                    vaultFeeHuf: cfg.vaultFeeHuf ?? 2000,
                 });
             } finally {
                 if (!cancelled) setLoading(false);
@@ -107,6 +109,7 @@ export default function PricingConfigForm() {
             shippingTable: config.shippingTable,
             priceTiers: config.priceTiers,
             currencyRates: config.currencyRates,
+            vaultFeeHuf: config.vaultFeeHuf,
         };
         return {
             zone: previewZone,
@@ -697,6 +700,24 @@ export default function PricingConfigForm() {
                         </tr>
                     </tbody>
                 </table>
+            </section>
+
+            {/* Vault storage */}
+            <section className="card p-6">
+                <h2 className="section-label mb-4">Vault Storage</h2>
+                <p
+                    className="mb-3 text-xs"
+                    style={{ color: "var(--color-text-muted)" }}
+                >
+                    Flat fee (HUF) charged when a user opts to have 2 printed
+                    copies stored indefinitely in the Titchybook Vault. This fee
+                    is added to the order total.
+                </p>
+                <NumberField
+                    label="Vault add-on fee (HUF)"
+                    value={config.vaultFeeHuf}
+                    onChange={(v) => updateConfig({ vaultFeeHuf: v })}
+                />
             </section>
 
             <div className="flex justify-end">

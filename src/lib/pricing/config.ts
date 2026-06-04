@@ -10,6 +10,7 @@ import {
   DEFAULT_PRICE_TIERS,
   DEFAULT_RESOLVED_CONFIG,
   DEFAULT_SHIPPING_TABLE,
+  DEFAULT_VAULT_FEE_HUF,
   DEFAULT_WEIGHT_BANDS,
   DEFAULT_WEIGHT_PER_BOOK_GRAMS,
   ZONES,
@@ -46,6 +47,7 @@ function resolveRow(row: {
   shippingTable: string;
   priceTiers: string;
   currencyRates?: string | null;
+  vaultFeeHuf?: number | null;
 }): ResolvedPricingConfig {
   const enabledZones = parseJsonField<Zone[]>(row.enabledZones, [...ZONES]);
   const weightBands = parseJsonField<number[]>(row.weightBands, [
@@ -78,6 +80,7 @@ function resolveRow(row: {
     shippingTable,
     priceTiers,
     currencyRates,
+    vaultFeeHuf: row.vaultFeeHuf ?? DEFAULT_VAULT_FEE_HUF,
   };
 }
 
@@ -91,6 +94,7 @@ function serialiseForDb(cfg: PricingConfigInput) {
     shippingTable: JSON.stringify(cfg.shippingTable),
     priceTiers: JSON.stringify(cfg.priceTiers),
     currencyRates: JSON.stringify({ ...cfg.currencyRates, HUF: 1 }),
+    vaultFeeHuf: cfg.vaultFeeHuf,
   };
 }
 
@@ -155,5 +159,6 @@ export function defaultPricingConfigInput(): PricingConfigInput {
     ) as Record<Zone, number[]>,
     priceTiers: DEFAULT_PRICE_TIERS.map((tier) => ({ ...tier })),
     currencyRates: { ...DEFAULT_CURRENCY_RATES },
+    vaultFeeHuf: DEFAULT_VAULT_FEE_HUF,
   };
 }

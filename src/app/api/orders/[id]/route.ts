@@ -20,6 +20,9 @@ export async function GET(
     where: { id },
     include: {
       submission: { select: { id: true, title: true, status: true } },
+      vaultEntries: {
+        select: { id: true, title: true, authorName: true, status: true, storedAt: true },
+      },
     },
   });
 

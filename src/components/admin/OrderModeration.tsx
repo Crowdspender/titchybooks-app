@@ -14,6 +14,8 @@ interface AdminOrderRow {
     quantity: number;
     zone: string;
     totalHuf: number;
+    vaultAddOn: boolean;
+    vaultFeeHuf: number;
     createdAt: string;
     notes: string | null;
     recipientName: string;
@@ -198,6 +200,9 @@ export default function OrderModeration() {
                                             Total
                                         </th>
                                         <th className="text-left px-5 py-3 section-label">
+                                            Vault
+                                        </th>
+                                        <th className="text-left px-5 py-3 section-label">
                                             Status
                                         </th>
                                         <th className="text-left px-5 py-3 section-label">
@@ -283,6 +288,33 @@ export default function OrderModeration() {
                                                         .toLocaleString(
                                                             "en-US",
                                                         )} HUF
+                                                </td>
+                                                <td className="px-5 py-4">
+                                                    {order.vaultAddOn
+                                                        ? (
+                                                            <span
+                                                                className="badge text-[11px]"
+                                                                style={{
+                                                                    background:
+                                                                        "var(--color-primary-muted)",
+                                                                    color:
+                                                                        "var(--color-primary)",
+                                                                }}
+                                                            >
+                                                                Vault
+                                                            </span>
+                                                        )
+                                                        : (
+                                                            <span
+                                                                className="text-xs"
+                                                                style={{
+                                                                    color:
+                                                                        "var(--color-text-subtle)",
+                                                                }}
+                                                            >
+                                                                —
+                                                            </span>
+                                                        )}
                                                 </td>
                                                 <td className="px-5 py-4">
                                                     {isEditing

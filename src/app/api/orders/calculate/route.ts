@@ -34,8 +34,9 @@ export async function POST(request: Request) {
     );
   }
 
-  const { submissionId, zone, quantity, currency } = parsed.data;
+  const { submissionId, zone, quantity, currency, vaultAddOn } = parsed.data;
   const selectedCurrency = currency ?? DEFAULT_CURRENCY;
+  const wantsVault = vaultAddOn ?? false;
   const cfg = await loadPricingConfig();
 
   if (!cfg.enabledZones.includes(zone)) {
@@ -62,7 +63,7 @@ export async function POST(request: Request) {
   }
 
   try {
-    const order = calculateOrder(zone, quantity, cfg);
+    const order = calculateOrder(zone, quantity, cfg, { vaultAddOn: wantsVault });
     const suggestion = suggestOptimalQuantity(zone, quantity, cfg);
     const messages = buildUxMessages(zone, quantity, cfg);
 
@@ -78,6 +79,7 @@ export async function POST(request: Request) {
         weightPerBookGrams: cfg.weightPerBookGrams,
         currencyRates: cfg.currencyRates,
         pricingConfigVersion: cfg.version,
+        vaultFeeHuf: cfg.vaultFeeHuf,
       },
     });
   } catch (error) {

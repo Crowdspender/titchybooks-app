@@ -57,7 +57,13 @@ export async function PATCH(
     );
   }
 
-  const order = await prisma.order.findUnique({ where: { id } });
+  const order = await prisma.order.findUnique({
+    where: { id },
+    include: {
+      submission: { select: { id: true, title: true } },
+      user: { select: { id: true, name: true, email: true } },
+    },
+  });
   if (!order) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
@@ -83,6 +89,30 @@ export async function PATCH(
       notes: parsed.data.notes === undefined ? undefined : parsed.data.notes,
     },
   });
+
+  // Auto-create VaultEntry when order transitions to PAID with vault add-on.
+  if (
+    parsed.data.status === "PAID" &&
+    order.vaultAddOn &&
+    order.submission
+  ) {
+    // Avoid duplicates: check if a vault entry already exists for this order.
+    const existing = await prisma.vaultEntry.findFirst({
+      where: { orderItemId: order.id },
+    });
+    if (!existing) {
+      await prisma.vaultEntry.create({
+        data: {
+          orderItemId: order.id,
+          submissionId: order.submissionId,
+          title: order.submission.title || "Untitled",
+          authorName: order.user.name || order.user.email,
+          quantity: 2,
+          status: "STORED",
+        },
+      });
+    }
+  }
 
   return NextResponse.json({ order: updated });
 }

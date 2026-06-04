@@ -45,6 +45,7 @@ model Submission {
   images          SubmissionImage[]
   pages           SubmissionPage[]
   orders          Order[]
+  vaultEntries    VaultEntry[]
   templateElements TemplateElement[] @relation("TemplateElements")
   instances       Submission[]      @relation("TemplateInstances")
   template        Submission?       @relation("TemplateInstances", fields: [templateId], references: [id])
@@ -115,6 +116,10 @@ model Order {
   weightGrams           Int
   shippingBand          Int
 
+  // Vault storage add-on
+  vaultAddOn            Boolean  @default(false)
+  vaultFeeHuf           Int      @default(0)
+
   unitPriceHuf          Int
   printCostHuf          Int
   handlingCostHuf       Int        @default(0)
@@ -141,6 +146,7 @@ model Order {
   parentBatchId         String?
 
   notes                 String?
+  vaultEntries          VaultEntry[]
   createdAt             DateTime   @default(now())
   updatedAt             DateTime   @updatedAt
 
@@ -174,6 +180,26 @@ model PricingConfig {
   shippingTable       String   // JSON string
   priceTiers          String   // JSON string
   currencyRates       String   @default("{\"HUF\":1,\"EUR\":0.0026,\"GBP\":0.0022}") // JSON string: HUF→currency factors
+  vaultFeeHuf         Int      @default(2000) // Flat fee for 2-copy vault storage add-on
   updatedAt           DateTime @updatedAt
   updatedByUserId     String?
+}
+
+model VaultEntry {
+  id             String     @id @default(cuid())
+  orderItemId    String
+  orderItem      Order      @relation(fields: [orderItemId], references: [id])
+  submissionId   String
+  submission     Submission @relation(fields: [submissionId], references: [id])
+  title          String
+  authorName     String     // snapshot of user.name at vault time
+  quantity       Int        @default(2)
+  status         String     @default("STORED")  // STORED, WITHDRAWN, CANCELLED
+  storedAt       DateTime   @default(now())
+  withdrawnAt    DateTime?
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  @@index([submissionId])
+  @@index([status])
 }

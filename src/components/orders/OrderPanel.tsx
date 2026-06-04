@@ -59,6 +59,7 @@ interface ServerCalcResponse {
         weightPerBookGrams: number;
         currencyRates?: ResolvedPricingConfig["currencyRates"];
         pricingConfigVersion: number;
+        vaultFeeHuf?: number;
     };
 }
 
@@ -101,6 +102,7 @@ export default function OrderPanel({
     >(null);
     const [calcLoading, setCalcLoading] = useState(false);
     const [calcError, setCalcError] = useState<string | null>(null);
+    const [vaultAddOn, setVaultAddOn] = useState(false);
     const [showAddress, setShowAddress] = useState(false);
     const [address, setAddress] = useState<AddressForm>(EMPTY_ADDRESS);
     const [submitting, setSubmitting] = useState(false);
@@ -141,6 +143,8 @@ export default function OrderPanel({
                     priceTiers: data.priceTiers,
                     currencyRates: data.currencyRates ??
                         DEFAULT_RESOLVED_CONFIG.currencyRates,
+                    vaultFeeHuf: data.vaultFeeHuf ??
+                        DEFAULT_RESOLVED_CONFIG.vaultFeeHuf,
                 };
                 setConfig(next);
                 if (
@@ -176,11 +180,11 @@ export default function OrderPanel({
     // Instant client-side mirror so the UI never feels laggy.
     const clientCalc = useMemo(() => {
         try {
-            return calculateOrder(zone, quantity, config);
+            return calculateOrder(zone, quantity, config, { vaultAddOn });
         } catch {
             return null;
         }
-    }, [zone, quantity, config]);
+    }, [zone, quantity, config, vaultAddOn]);
 
     const clientMessages = useMemo(() => {
         try {
@@ -214,6 +218,7 @@ export default function OrderPanel({
                     zone,
                     quantity,
                     currency,
+                    vaultAddOn,
                 }),
             })
                 .then(async (res) => {
@@ -240,6 +245,8 @@ export default function OrderPanel({
                             enabledZones: payload.meta.enabledZones,
                             currencyRates: payload.meta.currencyRates ??
                                 prev.currencyRates,
+                            vaultFeeHuf: payload.meta.vaultFeeHuf ??
+                                prev.vaultFeeHuf,
                         }));
                     }
                 })
@@ -257,7 +264,7 @@ export default function OrderPanel({
                 window.clearTimeout(debounceTimer.current);
             }
         };
-    }, [submission.id, zone, quantity, currency]);
+    }, [submission.id, zone, quantity, currency, vaultAddOn]);
 
     const breakdown = serverCalc ?? clientCalc;
     const messages = serverMessages.length ? serverMessages : clientMessages;
@@ -302,6 +309,7 @@ export default function OrderPanel({
                     zone,
                     quantity,
                     currency,
+                    vaultAddOn,
                     shippingAddress: {
                         recipientName: address.recipientName.trim(),
                         line1: address.line1.trim(),
@@ -500,6 +508,65 @@ export default function OrderPanel({
                         </p>
                     </div>
 
+                    {/* Vault storage add-on */}
+                    <label
+                        className="flex items-start gap-3 rounded-xl p-4 cursor-pointer transition"
+                        style={{
+                            border: vaultAddOn
+                                ? "1.5px solid var(--color-primary)"
+                                : "1px solid var(--color-border)",
+                            background: vaultAddOn
+                                ? "var(--color-primary-muted)"
+                                : "var(--color-surface)",
+                        }}
+                    >
+                        <input
+                            type="checkbox"
+                            checked={vaultAddOn}
+                            onChange={(e) => setVaultAddOn(e.target.checked)}
+                            className="mt-0.5"
+                            style={{ accentColor: "var(--color-primary)" }}
+                        />
+                        <div>
+                            <span
+                                className="text-sm font-medium"
+                                style={{ color: "var(--color-text)" }}
+                            >
+                                Add 2 copies to the Titchybook Vault
+                            </span>
+                            <p
+                                className="mt-0.5 text-xs"
+                                style={{ color: "var(--color-text-muted)" }}
+                            >
+                                Two printed copies will be stored indefinitely in
+                                the Titchybook Vault, a long-term paper storage
+                                service. Your book will be catalogued with its
+                                title and author in the{" "}
+                                <a
+                                    href="/vault"
+                                    className="underline"
+                                    style={{ color: "var(--color-primary)" }}
+                                >
+                                    official directory
+                                </a>.
+                            </p>
+                            {config.vaultFeeHuf > 0 && (
+                                <p
+                                    className="mt-1 text-xs font-medium"
+                                    style={{ color: "var(--color-primary)" }}
+                                >
+                                    +{" "}
+                                    {formatMoney(
+                                        config.vaultFeeHuf,
+                                        currency,
+                                        config.currencyRates,
+                                    )}{" "}
+                                    flat fee
+                                </p>
+                            )}
+                        </div>
+                    </label>
+
                     {messages.length > 0 && (
                         <ul className="space-y-1">
                             {messages.map((msg, idx) => (
@@ -648,6 +715,16 @@ export default function OrderPanel({
                                         config.currencyRates,
                                     )}
                                 />
+                                {breakdown.vaultFeeHuf > 0 && (
+                                    <Row
+                                        label="Vault storage (2 copies)"
+                                        value={formatMoney(
+                                            breakdown.vaultFeeHuf,
+                                            currency,
+                                            config.currencyRates,
+                                        )}
+                                    />
+                                )}
                                 {breakdown.discountHuf > 0 && (
                                     <Row
                                         label="Discount"

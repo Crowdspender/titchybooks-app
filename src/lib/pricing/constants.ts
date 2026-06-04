@@ -58,6 +58,9 @@ export const DEFAULT_PRICE_TIERS: readonly PriceTier[] = [
 export const DEFAULT_WEIGHT_PER_BOOK_GRAMS = 6;
 export const MAX_SHIPMENT_WEIGHT_GRAMS = 2000;
 
+/** Default flat fee (HUF) for the 2-copy vault storage add-on. */
+export const DEFAULT_VAULT_FEE_HUF = 2000;
+
 /** Admin-tunable order status lifecycle. */
 export const ORDER_STATUSES = [
   "PENDING_PAYMENT",
@@ -113,6 +116,7 @@ export interface ResolvedPricingConfig {
   shippingTable: Record<Zone, number[]>;
   priceTiers: PriceTier[];
   currencyRates: { HUF: number; EUR: number; GBP: number };
+  vaultFeeHuf: number;
 }
 
 /** In-memory defaults for tests / client mirror when no DB is available. */
@@ -128,4 +132,5 @@ export const DEFAULT_RESOLVED_CONFIG: ResolvedPricingConfig = {
   ) as Record<Zone, number[]>,
   priceTiers: DEFAULT_PRICE_TIERS.map((tier) => ({ ...tier })),
   currencyRates: { ...DEFAULT_CURRENCY_RATES },
+  vaultFeeHuf: DEFAULT_VAULT_FEE_HUF,
 };

@@ -37,6 +37,7 @@ export const pricingConfigInputSchema = z
     shippingTable: z.record(zoneEnum, z.array(z.number().int().min(0)).length(6)),
     priceTiers: z.array(priceTierSchema).min(1),
     currencyRates: currencyRatesSchema,
+    vaultFeeHuf: z.number().int().min(0).default(2000),
   })
   .refine(
     (cfg) =>
@@ -64,6 +65,7 @@ export const calculateOrderInputSchema = z.object({
   zone: zoneEnum,
   quantity: z.number().int().min(1).max(333),
   currency: currencyEnum.optional(),
+  vaultAddOn: z.boolean().optional(),
 });
 
 export const shippingAddressSchema = z.object({
@@ -84,6 +86,7 @@ export const createOrderInputSchema = z.object({
   quantity: z.number().int().min(1).max(333),
   currency: currencyEnum.optional(),
   shippingAddress: shippingAddressSchema,
+  vaultAddOn: z.boolean().optional(),
 });
 
 export const adminUpdateOrderSchema = z.object({

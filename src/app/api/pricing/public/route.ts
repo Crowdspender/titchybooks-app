@@ -28,6 +28,7 @@ export async function GET() {
     handlingFixedHuf: cfg.handlingFixedHuf,
     handlingPercent: cfg.handlingPercent,
     currencyRates: cfg.currencyRates,
+    vaultFeeHuf: cfg.vaultFeeHuf,
     pricingConfigVersion: cfg.version,
   });
 }

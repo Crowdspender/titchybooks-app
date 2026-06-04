@@ -48,8 +48,9 @@ export async function POST(request: Request) {
     );
   }
 
-  const { submissionId, zone, quantity, currency, shippingAddress } = parsed.data;
+  const { submissionId, zone, quantity, currency, shippingAddress, vaultAddOn } = parsed.data;
   const selectedCurrency = currency ?? DEFAULT_CURRENCY;
+  const wantsVault = vaultAddOn ?? false;
 
   const submission = await prisma.submission.findUnique({
     where: { id: submissionId },
@@ -91,7 +92,7 @@ export async function POST(request: Request) {
 
   let calc;
   try {
-    calc = calculateOrder(zone, quantity, cfg);
+    calc = calculateOrder(zone, quantity, cfg, { vaultAddOn: wantsVault });
   } catch (error) {
     return NextResponse.json(
       {
@@ -110,6 +111,8 @@ export async function POST(request: Request) {
       zone: calc.zone,
       weightGrams: calc.weightGrams,
       shippingBand: calc.shippingBand,
+      vaultAddOn: wantsVault,
+      vaultFeeHuf: calc.vaultFeeHuf,
       unitPriceHuf: calc.unitPriceHuf,
       printCostHuf: calc.printCostHuf,
       handlingCostHuf: calc.handlingCostHuf,
