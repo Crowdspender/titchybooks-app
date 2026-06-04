@@ -96,21 +96,32 @@ export async function PATCH(
     order.vaultAddOn &&
     order.submission
   ) {
-    // Avoid duplicates: check if a vault entry already exists for this order.
-    const existing = await prisma.vaultEntry.findFirst({
-      where: { orderItemId: order.id },
-    });
-    if (!existing) {
-      await prisma.vaultEntry.create({
-        data: {
-          orderItemId: order.id,
-          submissionId: order.submissionId,
-          title: order.submission.title || "Untitled",
-          authorName: order.user.name || order.user.email,
-          quantity: 2,
-          status: "STORED",
-        },
+    try {
+      // Avoid duplicates: check if a vault entry already exists for this order.
+      const existing = await prisma.vaultEntry.findFirst({
+        where: { orderId: order.id },
       });
+      if (!existing) {
+        // Require explicit name for public vault listing; fall back to "Anonymous" to protect privacy.
+        const authorName = order.user.name || "Anonymous";
+        await prisma.vaultEntry.create({
+          data: {
+            orderId: order.id,
+            submissionId: order.submissionId,
+            title: order.submission.title || "Untitled",
+            authorName,
+            quantity: 2,
+            status: "STORED",
+          },
+        });
+      }
+    } catch (error) {
+      // Log error with context for recovery
+      console.error(
+        `[VaultEntry] Failed to create vault entry for order ${order.id}, submission ${order.submissionId}:`,
+        error
+      );
+      // TODO: Enqueue admin alert for manual recovery
     }
   }
 

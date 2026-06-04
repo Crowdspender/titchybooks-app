@@ -1670,7 +1670,7 @@ export default function EditorWorkspace({
                 Titchybooks Studio
               </p>
               <input
-                value={title}
+                value={title === "Untitled Titchybooks" ? "" : title}
                 onChange={(event) => setTitle(event.target.value)}
                 placeholder="Enter your book title"
                 className="w-full max-w-xl border-none bg-transparent p-0 text-3xl font-semibold tracking-tight outline-none"

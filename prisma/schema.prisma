@@ -187,8 +187,8 @@ model PricingConfig {
 
 model VaultEntry {
   id             String     @id @default(cuid())
-  orderItemId    String
-  orderItem      Order      @relation(fields: [orderItemId], references: [id])
+  orderId        String
+  order          Order      @relation(fields: [orderId], references: [id])
   submissionId   String
   submission     Submission @relation(fields: [submissionId], references: [id])
   title          String

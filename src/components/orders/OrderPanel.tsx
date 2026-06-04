@@ -546,6 +546,7 @@ export default function OrderPanel({
                                     href="/vault"
                                     className="underline"
                                     style={{ color: "var(--color-primary)" }}
+                                    onClick={(e) => e.stopPropagation()}
                                 >
                                     official directory
                                 </a>.

@@ -8,7 +8,7 @@ ALTER TABLE "PricingConfig" ADD COLUMN     "vaultFeeHuf" INTEGER NOT NULL DEFAUL
 -- CreateTable
 CREATE TABLE "VaultEntry" (
     "id" TEXT NOT NULL,
-    "orderItemId" TEXT NOT NULL,
+    "orderId" TEXT NOT NULL,
     "submissionId" TEXT NOT NULL,
     "title" TEXT NOT NULL,
     "authorName" TEXT NOT NULL,
@@ -29,7 +29,7 @@ CREATE INDEX "VaultEntry_submissionId_idx" ON "VaultEntry"("submissionId");
 CREATE INDEX "VaultEntry_status_idx" ON "VaultEntry"("status");
 
 -- AddForeignKey
-ALTER TABLE "VaultEntry" ADD CONSTRAINT "VaultEntry_orderItemId_fkey" FOREIGN KEY ("orderItemId") REFERENCES "Order"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "VaultEntry" ADD CONSTRAINT "VaultEntry_orderId_fkey" FOREIGN KEY ("orderId") REFERENCES "Order"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "VaultEntry" ADD CONSTRAINT "VaultEntry_submissionId_fkey" FOREIGN KEY ("submissionId") REFERENCES "Submission"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
