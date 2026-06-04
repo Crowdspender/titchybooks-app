@@ -8,7 +8,23 @@ const registerSchema = z.object({
   name: z.string().min(1, "Name is required"),
   email: z.string().email("Invalid email"),
   password: z.string().min(8, "Password must be at least 8 characters"),
-});
+  audience: z.enum(["creator", "business"]).optional().default("creator"),
+  businessName: z.string().optional(),
+  businessType: z.string().optional(),
+  companySize: z.string().optional(),
+}).refine(
+  (data) => {
+    // If audience is business, businessName is required
+    if (data.audience === "business") {
+      return data.businessName && data.businessName.trim().length > 0;
+    }
+    return true;
+  },
+  {
+    message: "Business name is required for business accounts",
+    path: ["businessName"],
+  }
+);
 
 export async function POST(request: Request) {
   try {
@@ -26,8 +42,8 @@ export async function POST(request: Request) {
       );
     }
 
-    const { name, email, password } = parsed.data;
-    console.log('🔵 [REGISTER] Creating user:', { name, email });
+    const { name, email, password, audience, businessName, businessType, companySize } = parsed.data;
+    console.log('🔵 [REGISTER] Creating user:', { name, email, audience });
 
     const existing = await prisma.user.findUnique({ where: { email } });
     if (existing) {
@@ -40,9 +56,17 @@ export async function POST(request: Request) {
 
     const passwordHash = await hash(password, 12);
     const user = await prisma.user.create({
-      data: { name, email, passwordHash },
+      data: {
+        name,
+        email,
+        passwordHash,
+        audience,
+        businessName: audience === "business" ? businessName : null,
+        businessType: audience === "business" ? businessType : null,
+        companySize: audience === "business" ? companySize : null,
+      },
     });
-    console.log('✅ [REGISTER] User created successfully:', user.id);
+    console.log('✅ [REGISTER] User created successfully:', user.id, `(${audience})`);
 
     // Send welcome email (non-blocking, don't fail registration if email fails)
     console.log('🔵 [REGISTER] Attempting to send welcome email...');

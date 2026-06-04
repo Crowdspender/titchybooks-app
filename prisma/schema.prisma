@@ -15,6 +15,13 @@ model User {
   role                    String       @default("USER")
   passwordResetToken      String?
   passwordResetExpires    DateTime?
+  
+  // Business registration fields
+  audience                String       @default("creator") // "creator" or "business"
+  businessName            String?      // Required for business accounts
+  businessType            String?      // e.g., "cafe", "retail", "restaurant", "other"
+  companySize             String?      // e.g., "1-10", "11-50", "51-200", "200+"
+  
   assets                  Asset[]
   submissions             Submission[]
   orders                  Order[]
