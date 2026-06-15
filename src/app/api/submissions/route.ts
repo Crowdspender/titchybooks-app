@@ -2,7 +2,7 @@
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { z } from "zod";
-import { generateTitchybookPdf } from "@/lib/pdf/generate";
+import { enqueueRenderJob } from "@/lib/pdf/render-job";
 import {
   PAGE_LABELS,
   SubmissionMode,
@@ -131,9 +131,9 @@ export async function POST(request: Request) {
       include: { images: true },
     });
 
-    // Generate PDF asynchronously (don't await - let it run in background)
-    generateTitchybookPdf(submission.id).catch((err) => {
-      console.error(`PDF generation failed for submission ${submission.id}:`, err);
+    // Generate PDF via render job (don't await - let it run in background)
+    enqueueRenderJob(submission.id).catch((err: unknown) => {
+      console.error(`Failed to enqueue render job for submission ${submission.id}:`, err);
     });
 
     return NextResponse.json(

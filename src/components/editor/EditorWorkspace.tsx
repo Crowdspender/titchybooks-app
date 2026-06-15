@@ -24,6 +24,7 @@ import AiChatPanel from "./AiChatPanel";
 import ColorPicker from "./ColorPicker";
 import type { BookContext } from "@/lib/ai/system-prompt";
 import type { AiSuggestion } from "@/lib/ai/protocol";
+import { PANELS } from "@/lib/pdf/layout";
 
 const EditorCanvas = dynamic(() => import("./EditorCanvas"), {
   ssr: false,
@@ -346,6 +347,25 @@ export default function EditorWorkspace({
     () => activePage.scene.templateTextOverrides ?? {},
     [activePage.scene.templateTextOverrides],
   );
+
+  // Asset dimensions map for DPI calculations
+  const assetDimensionsMap = useMemo(
+    () => {
+      const map = new Map<string, { width: number; height: number }>();
+      for (const asset of assets) {
+        if (asset.width != null && asset.height != null) {
+          map.set(asset.id, { width: asset.width, height: asset.height });
+        }
+      }
+      return map;
+    },
+    [assets],
+  );
+
+  // Physical dimensions of the active page in mm (from PANELS layout)
+  const activePanel = PANELS.find((p) => p.pageLabel === activePageLabel);
+  const physicalWidthMm = activePanel?.width ?? 69.3;
+  const physicalHeightMm = activePanel?.height ?? 98;
 
   // Template elements with user-level text overrides applied. Only the
   // `text` field of text-type template elements is overridable; all other
@@ -1518,7 +1538,7 @@ export default function EditorWorkspace({
     setSelectedElementId(null);
   }
 
-  async function handleSubmit() {
+  async function handleSubmit(force = false) {
     if (!submission || submitting) {
       return;
     }
@@ -1531,15 +1551,63 @@ export default function EditorWorkspace({
 
       const response = await fetch(`/api/submissions/${submission.id}/submit`, {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ force }),
       });
 
       if (!response.ok) {
-        const data = (await response.json()) as { error?: string };
+        const data = (await response.json()) as {
+          error?: string;
+          dpiWarnings?: Array<
+            {
+              elementId: string;
+              pageLabel: string;
+              dpi: number;
+              severity: string;
+            }
+          >;
+          canForce?: boolean;
+        };
+
+        // DPI hard errors: offer the user a chance to force-submit
+        if (response.status === 422 && data.canForce && !force) {
+          const warningCount = data.dpiWarnings?.filter((w) =>
+            w.severity === "error"
+          ).length ?? 0;
+          const proceed = confirm(
+            `${warningCount} image(s) have very low resolution and may print poorly.\n\n` +
+              "Submit anyway?",
+          );
+          if (proceed) {
+            setSubmitting(false);
+            return handleSubmit(true);
+          }
+          setSaveState("idle");
+          return;
+        }
+
         throw new Error(data.error || "Could not submit Titchybooks");
       }
 
+      const result = (await response.json()) as {
+        dpiWarnings?: Array<{ severity: string }>;
+      };
+
       localStorage.removeItem(ACTIVE_DRAFT_STORAGE_KEY);
-      toast.success("Titchybooks submitted. PDF generation is now processing.");
+
+      const softWarnings = result.dpiWarnings?.filter((w) =>
+        w.severity === "warning"
+      ).length ?? 0;
+      if (softWarnings > 0) {
+        toast.warning(
+          `Titchybooks submitted. ${softWarnings} image(s) have low resolution and may not print sharply.`,
+        );
+      } else {
+        toast.success(
+          "Titchybooks submitted. PDF generation is now processing.",
+        );
+      }
+
       router.push("/dashboard");
       router.refresh();
     } catch (error) {
@@ -2144,6 +2212,9 @@ export default function EditorWorkspace({
                 })()
                 : undefined}
               onResetTemplateText={clearTemplateTextOverride}
+              assetDimensions={assetDimensionsMap}
+              physicalWidthMm={physicalWidthMm}
+              physicalHeightMm={physicalHeightMm}
             />
             <LayerPanel
               elements={activePage.scene.elements}

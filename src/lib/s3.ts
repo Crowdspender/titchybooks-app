@@ -88,6 +88,14 @@ export function buildPdfKey(
   return `pdfs/${userId}/${submissionId}/titchybook.pdf`;
 }
 
+export function buildPagePreviewKey(
+  userId: string,
+  submissionId: string,
+  pageLabel: string
+): string {
+  return `previews/${userId}/${submissionId}/${pageLabel}.png`;
+}
+
 export async function deleteS3Object(s3Key: string): Promise<void> {
   const command = new DeleteObjectCommand({
     Bucket: BUCKET,

@@ -6,6 +6,11 @@ import {
 } from "@/lib/editor/crop";
 import type { EditorElement } from "@/lib/editor/schema";
 import type { RenderableEditorElement } from "@/lib/editor/template-types";
+import {
+  DPI_HARD_THRESHOLD,
+  DPI_WARNING_THRESHOLD,
+  getElementDpi,
+} from "@/lib/editor/validation";
 import ColorPicker from "./ColorPicker";
 
 interface PropertiesPanelProps {
@@ -25,6 +30,11 @@ interface PropertiesPanelProps {
   templateTextOriginal?: string;
   /** Clears the per-instance text override, restoring template default. */
   onResetTemplateText?: (elementId: string) => void;
+  /** Asset native dimensions map: assetId -> { width, height } */
+  assetDimensions?: Map<string, { width: number; height: number }>;
+  /** Current page physical dimensions in mm */
+  physicalWidthMm?: number;
+  physicalHeightMm?: number;
 }
 
 function FieldLabel({
@@ -59,6 +69,9 @@ export default function PropertiesPanel({
   isInstanceMode = false,
   templateTextOriginal,
   onResetTemplateText,
+  assetDimensions,
+  physicalWidthMm,
+  physicalHeightMm,
 }: PropertiesPanelProps) {
   // If in instance mode and the selected element is a template TEXT element,
   // show a simplified editor that only allows editing the text content.
@@ -495,6 +508,69 @@ export default function PropertiesPanel({
       {selectedElement.type === "image"
         ? (
           <>
+            {/* DPI indicator */}
+            {(() => {
+              if (
+                !assetDimensions || !physicalWidthMm || !physicalHeightMm
+              ) return null;
+              const dims = assetDimensions.get(selectedElement.assetId);
+              if (!dims) return null;
+              const dpi = getElementDpi(
+                selectedElement,
+                dims.width,
+                dims.height,
+                physicalWidthMm,
+                physicalHeightMm,
+              );
+              const isLow = dpi < DPI_HARD_THRESHOLD;
+              const isWarning = dpi >= DPI_HARD_THRESHOLD &&
+                dpi < DPI_WARNING_THRESHOLD;
+              return (
+                <div
+                  className="flex items-center gap-2 rounded-lg px-3 py-2"
+                  style={{
+                    background: isLow
+                      ? "var(--color-error-light, #FEE2E2)"
+                      : isWarning
+                      ? "var(--color-accent-light, #FEF3C7)"
+                      : "var(--color-success-light, #DCFCE7)",
+                    border: `1px solid ${
+                      isLow ? "#FCA5A5" : isWarning ? "#FCD34D" : "#86EFAC"
+                    }`,
+                  }}
+                >
+                  <span
+                    className="text-xs font-bold"
+                    style={{
+                      color: isLow
+                        ? "#991B1B"
+                        : isWarning
+                        ? "#92400E"
+                        : "#065F46",
+                    }}
+                  >
+                    ~{dpi} DPI
+                  </span>
+                  <span
+                    className="text-xs"
+                    style={{
+                      color: isLow
+                        ? "#B91C1C"
+                        : isWarning
+                        ? "#B45309"
+                        : "#047857",
+                    }}
+                  >
+                    {isLow
+                      ? "Very low resolution — may print poorly"
+                      : isWarning
+                      ? "Low resolution — may not be sharp"
+                      : "Good print quality"}
+                  </span>
+                </div>
+              );
+            })()}
+
             <div>
               <p
                 className="text-sm font-semibold"
@@ -622,21 +698,24 @@ export default function PropertiesPanel({
       <div className="grid grid-cols-3 gap-2">
         <button
           type="button"
-          onClick={() => onDuplicateElement(selectedElement.id)}
+          onClick={() =>
+            onDuplicateElement(selectedElement.id)}
           className={selectBtnClass}
         >
           Duplicate
         </button>
         <button
           type="button"
-          onClick={() => onSendBackward(selectedElement.id)}
+          onClick={() =>
+            onSendBackward(selectedElement.id)}
           className={selectBtnClass}
         >
           Send Back
         </button>
         <button
           type="button"
-          onClick={() => onBringForward(selectedElement.id)}
+          onClick={() =>
+            onBringForward(selectedElement.id)}
           className={selectBtnClass}
         >
           Bring Front
@@ -645,7 +724,8 @@ export default function PropertiesPanel({
 
       <button
         type="button"
-        onClick={() => onDeleteElement(selectedElement.id)}
+        onClick={() =>
+          onDeleteElement(selectedElement.id)}
         className="btn btn-danger w-full"
       >
         Delete Element

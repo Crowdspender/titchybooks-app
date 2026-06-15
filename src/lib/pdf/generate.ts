@@ -1,7 +1,7 @@
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import sharp from "sharp";
 import { prisma } from "@/lib/prisma";
-import { downloadFromS3, uploadToS3, buildPdfKey } from "@/lib/s3";
+import { downloadFromS3, uploadToS3, buildPdfKey, buildPagePreviewKey } from "@/lib/s3";
 import { SubmissionMode, SubmissionStatus } from "@/lib/constants";
 import { parseEditorScene } from "@/lib/editor/schema";
 import {
@@ -23,9 +23,12 @@ import {
 /**
  * Generate the Titchybooks PDF for a submission.
  *
- * 1. Fetch submission images from DB
- * 2. Download all 8 images from S3
- * 3. Process each image (resize/crop/rotate) with sharp
+ * When VECTOR_RENDER env var is set to "true", uses the vector pipeline
+ * for sharper text output. Otherwise uses the raster (SVG→PNG) pipeline.
+ *
+ * 1. Fetch submission images/pages from DB
+ * 2. Download all source assets from S3
+ * 3. Render each panel (raster or vector)
  * 4. Compose into a single A4 landscape PDF with pdf-lib
  * 5. Upload PDF to S3
  * 6. Update submission record with pdfS3Key
@@ -33,6 +36,12 @@ import {
 export async function generateTitchybookPdf(
   submissionId: string
 ): Promise<string> {
+  // Route to vector renderer when enabled via environment variable
+  if (process.env.VECTOR_RENDER === "true") {
+    const { generateTitchybookPdfVector } = await import("./generate-vector");
+    return generateTitchybookPdfVector(submissionId);
+  }
+
   await prisma.submission.update({
     where: { id: submissionId },
     data: { status: SubmissionStatus.PROCESSING },
@@ -198,6 +207,42 @@ export async function generateTitchybookPdf(
     const pageHeight = mmToPoints(A4_LANDSCAPE_HEIGHT_MM);
     const page = pdfDoc.addPage([pageWidth, pageHeight]);
     const brandFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+
+    // Generate and upload page preview thumbnails (small PNG for admin UI)
+    if (submission.mode === SubmissionMode.EDITOR) {
+      await Promise.all(
+        processed.map(async ({ panel, processed: pngBuffer }) => {
+          try {
+            const thumbnailBuffer = await sharp(pngBuffer)
+              .resize(200, null, { withoutEnlargement: true })
+              .png({ quality: 80 })
+              .toBuffer();
+
+            const previewKey = buildPagePreviewKey(
+              submission.userId,
+              submissionId,
+              panel.pageLabel,
+            );
+            await uploadToS3(previewKey, thumbnailBuffer, "image/png");
+
+            // Save preview S3 key on the SubmissionPage record
+            await prisma.submissionPage.updateMany({
+              where: {
+                submissionId,
+                pageLabel: panel.pageLabel,
+              },
+              data: { previewS3Key: previewKey },
+            });
+          } catch (thumbnailError) {
+            // Non-fatal: preview generation failure should not block PDF generation
+            console.error(
+              `Preview thumbnail failed for ${panel.pageLabel}:`,
+              thumbnailError,
+            );
+          }
+        }),
+      );
+    }
 
     for (const { panel, processed: pngBuffer } of processed) {
       const image = await pdfDoc.embedPng(pngBuffer);

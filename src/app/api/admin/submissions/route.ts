@@ -22,18 +22,34 @@ export async function GET(request: NextRequest) {
     include: {
       user: { select: { id: true, email: true, name: true } },
       images: { orderBy: { order: "asc" } },
+      pages: { orderBy: { order: "asc" }, select: { pageLabel: true, order: true, previewS3Key: true } },
     },
     orderBy: { createdAt: "desc" },
   });
 
-  // Generate presigned URLs for PDFs
+  // Generate presigned URLs for PDFs and page previews
   const submissionsWithUrls = await Promise.all(
-    submissions.map(async (sub) => ({
-      ...sub,
-      pdfDownloadUrl: sub.pdfS3Key
+    submissions.map(async (sub) => {
+      const pdfDownloadUrl = sub.pdfS3Key
         ? await getPresignedDownloadUrl(sub.pdfS3Key)
-        : null,
-    }))
+        : null;
+
+      const pagePreviews = await Promise.all(
+        sub.pages.map(async (page) => ({
+          pageLabel: page.pageLabel,
+          order: page.order,
+          previewUrl: page.previewS3Key
+            ? await getPresignedDownloadUrl(page.previewS3Key)
+            : null,
+        }))
+      );
+
+      return {
+        ...sub,
+        pdfDownloadUrl,
+        pagePreviews,
+      };
+    })
   );
 
   return NextResponse.json({ submissions: submissionsWithUrls });

@@ -73,7 +73,7 @@ export default function RegisterForm() {
       toast.success(
         isBusiness
           ? "Business account created! Please sign in."
-          : "Account created! Please sign in."
+          : "Account created! Please sign in.",
       );
       router.push("/login?registered=true");
     } catch {
@@ -129,7 +129,8 @@ export default function RegisterForm() {
       {isBusiness && (
         <div>
           <label htmlFor="businessName" className="label">
-            Business Name <span style={{ color: "var(--color-error, #ef4444)" }}>*</span>
+            Business Name{" "}
+            <span style={{ color: "var(--color-error, #ef4444)" }}>*</span>
           </label>
           <input
             id="businessName"
