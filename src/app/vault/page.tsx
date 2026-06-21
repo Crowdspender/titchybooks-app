@@ -1,6 +1,8 @@
 import { prisma } from "@/lib/prisma";
 import Link from "next/link";
 
+export const dynamic = "force-dynamic";
+
 const PAGE_SIZE = 24;
 
 export default async function VaultDirectoryPage({
@@ -14,22 +16,74 @@ export default async function VaultDirectoryPage({
 
   const where = { status: "STORED" };
 
-  const [entries, total] = await Promise.all([
-    prisma.vaultEntry.findMany({
-      where,
-      orderBy: { storedAt: "desc" },
-      take: PAGE_SIZE,
-      skip: offset,
-      select: {
-        id: true,
-        title: true,
-        authorName: true,
-        quantity: true,
-        storedAt: true,
-      },
-    }),
-    prisma.vaultEntry.count({ where }),
-  ]);
+  let entries: {
+    id: string;
+    title: string;
+    authorName: string;
+    quantity: number;
+    storedAt: Date;
+  }[] = [];
+  let total = 0;
+
+  try {
+    [entries, total] = await Promise.all([
+      prisma.vaultEntry.findMany({
+        where,
+        orderBy: { storedAt: "desc" },
+        take: PAGE_SIZE,
+        skip: offset,
+        select: {
+          id: true,
+          title: true,
+          authorName: true,
+          quantity: true,
+          storedAt: true,
+        },
+      }),
+      prisma.vaultEntry.count({ where }),
+    ]);
+  } catch (err) {
+    console.error("Vault directory query failed:", err);
+    return (
+      <div className="page-container py-16 flex flex-col items-center text-center">
+        <div
+          className="inline-flex items-center justify-center w-16 h-16 rounded-2xl mb-4"
+          style={{ background: "var(--color-primary-muted)" }}
+        >
+          <svg
+            width="32"
+            height="32"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="var(--color-primary)"
+            strokeWidth="1.5"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              d="M12 6.042A8.967 8.967 0 006 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 016 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 016-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0018 18a8.967 8.967 0 00-6 2.292m0-14.25v14.25"
+            />
+          </svg>
+        </div>
+        <h1
+          className="text-2xl font-semibold tracking-tight mb-2"
+          style={{ color: "var(--color-text)" }}
+        >
+          Vault temporarily unavailable
+        </h1>
+        <p
+          className="text-sm max-w-sm mb-6"
+          style={{ color: "var(--color-text-muted)" }}
+        >
+          We couldn&apos;t load the vault directory right now. Please try
+          again in a moment.
+        </p>
+        <Link href="/vault" className="btn btn-primary">
+          Retry
+        </Link>
+      </div>
+    );
+  }
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
