@@ -2,11 +2,11 @@
 
 /* ── Design System Tokens ─────────────────────────────────────────────────── */
 :root {
-  /* Primary palette - Titchybooks brand cyan */
-  --color-primary: #27c7f9;
-  --color-primary-hover: #1fb3e0;
-  --color-primary-light: #d6f4fe;
-  --color-primary-muted: #eaf9fe;
+  /* Primary palette - Titchybooks brand cyan (WCAG AA compliant) */
+  --color-primary: #0891b2;
+  --color-primary-hover: #0e7490;
+  --color-primary-light: #cffafe;
+  --color-primary-muted: #ecfeff;
 
   /* Secondary palette - Deep navy */
   --color-secondary: #1a1f2e;
