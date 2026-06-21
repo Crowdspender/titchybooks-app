@@ -45,6 +45,8 @@ export default function GlobalError({
               strokeWidth="1.5"
               strokeLinecap="round"
               strokeLinejoin="round"
+              role="img"
+              aria-label="Error icon"
             >
               <circle cx="12" cy="12" r="10" />
               <path d="M12 8v4M12 16h.01" />

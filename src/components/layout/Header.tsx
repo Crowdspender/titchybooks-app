@@ -1,6 +1,7 @@
 "use client";
 
 import { signOut, useSession } from "next-auth/react";
+import Image from "next/image";
 import Link from "next/link";
 import { useState } from "react";
 
@@ -22,12 +23,15 @@ export default function Header() {
         {/* Brand */}
         <Link
           href="/"
-          className="flex items-center gap-0.5 text-[1.1rem] font-semibold tracking-tight text-stone-900 no-underline"
+          className="flex items-center no-underline"
         >
-          Titchybooks
-          <span
-            className="inline-block w-1.5 h-1.5 rounded-full mb-2"
-            style={{ background: "var(--color-primary)" }}
+          <Image
+            src="/titchybooks-logo.png"
+            alt="Titchybooks"
+            width={36}
+            height={36}
+            className="h-9 w-auto"
+            priority
           />
         </Link>
 

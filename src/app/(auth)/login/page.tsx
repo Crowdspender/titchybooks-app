@@ -1,4 +1,5 @@
 import LoginForm from "@/components/auth/LoginForm";
+import Image from "next/image";
 import Link from "next/link";
 import { Suspense } from "react";
 
@@ -13,13 +14,15 @@ export default function LoginPage() {
         <div className="text-center mb-8">
           <Link
             href="/"
-            className="inline-flex items-center gap-0.5 text-2xl font-semibold tracking-tight no-underline"
-            style={{ color: "var(--color-text)" }}
+            className="inline-flex items-center justify-center no-underline"
           >
-            Titchybooks
-            <span
-              className="inline-block w-2 h-2 rounded-full mb-3"
-              style={{ background: "var(--color-primary)" }}
+            <Image
+              src="/titchybooks-logo.png"
+              alt="Titchybooks"
+              width={56}
+              height={56}
+              className="h-14 w-auto"
+              priority
             />
           </Link>
           <p
