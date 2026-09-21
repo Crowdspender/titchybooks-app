@@ -7,12 +7,24 @@
 - [prisma/schema.prisma](file://prisma/schema.prisma)
 - [src/lib/prisma.ts](file://src/lib/prisma.ts)
 - [src/lib/s3.ts](file://src/lib/s3.ts)
+- [src/lib/email.ts](file://src/lib/email.ts)
+- [src/lib/pdf/generate.ts](file://src/lib/pdf/generate.ts)
+- [src/lib/pdf/generate-vector.ts](file://src/lib/pdf/generate-vector.ts)
 - [src/app/api/upload/presign/route.ts](file://src/app/api/upload/presign/route.ts)
 - [src/app/api/auth/[...nextauth]/route.ts](file://src/app/api/auth/[...nextauth]/route.ts)
 - [src/middleware.ts](file://src/middleware.ts)
 - [src/components/Providers.tsx](file://src/components/Providers.tsx)
 - [src/components/create/ImageUploader.tsx](file://src/components/create/ImageUploader.tsx)
+- [test-email.ts](file://test-email.ts)
 </cite>
+
+## Update Summary
+**Changes Made**
+- Added comprehensive documentation for new email system integration with RESEND_API_KEY and EMAIL_FROM
+- Added VECTOR_RENDER environment variable for optional vector PDF rendering
+- Enhanced security guidance for email service credentials
+- Updated troubleshooting section with email-specific debugging techniques
+- Added examples for email testing and configuration validation
 
 ## Table of Contents
 1. [Introduction](#introduction)
@@ -29,11 +41,15 @@
 ## Introduction
 This document explains how environment variables and secrets are used in Titchybook Creator. It covers required variables, naming conventions, data types, validation requirements, security best practices, and operational differences between local development and production. It also provides examples of .env file structure, Docker environment configuration, CI/CD variable management, and common configuration pitfalls with debugging guidance.
 
+**Updated** Added comprehensive coverage of the new email system integration and vector rendering capabilities.
+
 ## Project Structure
 The application relies on environment variables for:
 - Authentication via NextAuth (external provider configuration is present but does not read secret values from environment in the current code)
 - Database connectivity (SQLite via Prisma)
 - AWS S3 integration (region, credentials, bucket)
+- Email system integration (Resend API for password reset and welcome emails)
+- Vector PDF rendering (optional high-quality text rendering)
 
 ```mermaid
 graph TB
@@ -42,33 +58,44 @@ APP["Next.js App"]
 AUTH["NextAuth Handlers"]
 PRISMA["Prisma Client"]
 S3LIB["S3 Client Library"]
+EMAIL["Email Service"]
+PDF["PDF Renderer"]
 end
 subgraph "External Services"
 DB["SQLite Database"]
 S3["AWS S3"]
+RESEND["Resend Email API"]
 end
 APP --> AUTH
 APP --> PRISMA
 APP --> S3LIB
+APP --> EMAIL
+APP --> PDF
 PRISMA --> DB
 S3LIB --> S3
+EMAIL --> RESEND
+PDF --> S3
 ```
 
 **Diagram sources**
 - [src/lib/prisma.ts:1-10](file://src/lib/prisma.ts#L1-L10)
 - [src/lib/s3.ts:1-81](file://src/lib/s3.ts#L1-L81)
+- [src/lib/email.ts:1-160](file://src/lib/email.ts#L1-L160)
+- [src/lib/pdf/generate.ts:23-43](file://src/lib/pdf/generate.ts#L23-L43)
 - [prisma/schema.prisma:5-8](file://prisma/schema.prisma#L5-L8)
 
 **Section sources**
 - [package.json:1-43](file://package.json#L1-L43)
-- [next.config.ts:1-8](file://next.config.ts#L1-L8)
+- [next.config.ts:1-12](file://next.config.ts#L1-L12)
 - [prisma/schema.prisma:1-48](file://prisma/schema.prisma#L1-L48)
 - [src/lib/prisma.ts:1-10](file://src/lib/prisma.ts#L1-L10)
 - [src/lib/s3.ts:1-81](file://src/lib/s3.ts#L1-L81)
+- [src/lib/email.ts:1-160](file://src/lib/email.ts#L1-L160)
 
 ## Core Components
 This section enumerates the environment variables used by the application and their roles.
 
+### Database Connectivity
 - DATABASE_URL
   - Purpose: Prisma datasource URL for SQLite
   - Type: String (URL)
@@ -76,6 +103,7 @@ This section enumerates the environment variables used by the application and th
   - Validation: Must be a valid SQLite connection URL
   - Notes: Used in Prisma schema via environment variable substitution
 
+### AWS S3 Integration
 - AWS_REGION
   - Purpose: AWS region for S3 client initialization
   - Type: String (region identifier)
@@ -111,6 +139,7 @@ This section enumerates the environment variables used by the application and th
   - Validation: Must be a valid HTTPS URL pointing to the bucket
   - Notes: Used by the frontend to resolve public URLs
 
+### Authentication
 - NEXTAUTH_URL
   - Purpose: Base URL for NextAuth routes and redirects
   - Type: String (HTTP/HTTPS URL)
@@ -125,11 +154,52 @@ This section enumerates the environment variables used by the application and th
   - Validation: Must be sufficiently long and random
   - Notes: Used by NextAuth to sign and encrypt sessions
 
+### Email System Integration
+- RESEND_API_KEY
+  - Purpose: API key for Resend email service integration
+  - Type: String (API key)
+  - Required: No (optional - email functionality gracefully degrades without it)
+  - Validation: Must be a valid Resend API key
+  - Notes: Enables password reset and welcome email functionality
+
+- EMAIL_FROM
+  - Purpose: Sender email address for outgoing emails
+  - Type: String (email address)
+  - Required: No (defaults to "onboarding@resend.dev" if not set)
+  - Validation: Must be a valid email address format
+  - Notes: Used as the sender address in all outgoing emails
+
+### PDF Rendering
+- VECTOR_RENDER
+  - Purpose: Toggle between raster and vector PDF rendering pipelines
+  - Type: Boolean string ("true" or other)
+  - Required: No (defaults to raster rendering when not set)
+  - Validation: Only "true" enables vector rendering; any other value uses raster
+  - Notes: Provides sharper text output for editor-mode submissions
+
+### AI Integration
+- OPENAI_API_KEY
+  - Purpose: API key for OpenAI chat functionality
+  - Type: String (API key)
+  - Required: No (optional - AI features disabled without it)
+  - Validation: Must be a valid OpenAI API key
+  - Notes: Enables AI-powered chat assistance in the editor
+
+- OPENAI_MODEL
+  - Purpose: OpenAI model to use for AI interactions
+  - Type: String (model name)
+  - Required: No (defaults to "gpt-4o" if not set)
+  - Validation: Must be a valid OpenAI model identifier
+  - Notes: Allows switching between different AI models
+
 Security note: The current NextAuth configuration uses a credentials provider and does not read external provider secrets from environment variables. However, the JWT signing secret and base URL remain mandatory.
 
 **Section sources**
 - [prisma/schema.prisma:5-8](file://prisma/schema.prisma#L5-L8)
 - [src/lib/s3.ts:8-16](file://src/lib/s3.ts#L8-L16)
+- [src/lib/email.ts:4-8](file://src/lib/email.ts#L4-L8)
+- [src/lib/pdf/generate.ts:40-43](file://src/lib/pdf/generate.ts#L40-L43)
+- [src/lib/ai/client.ts:7-25](file://src/lib/ai/client.ts#L7-L25)
 - [src/app/api/upload/presign/route.ts:1-37](file://src/app/api/upload/presign/route.ts#L1-L37)
 - [src/app/api/auth/[...nextauth]/route.ts](file://src/app/api/auth/[...nextauth]/route.ts#L1-L4)
 - [src/middleware.ts:1-6](file://src/middleware.ts#L1-L6)
@@ -140,6 +210,8 @@ The runtime reads environment variables to configure:
 - Prisma client for SQLite
 - AWS SDK S3 client for uploads/downloads
 - NextAuth for authentication
+- Resend email service for password reset and welcome emails
+- Optional vector PDF rendering pipeline
 
 ```mermaid
 sequenceDiagram
@@ -147,6 +219,7 @@ participant Client as "Browser"
 participant App as "Next.js App"
 participant Auth as "NextAuth Handlers"
 participant Presign as "Presign API"
+participant Email as "Email Service"
 participant S3Lib as "S3 Client Library"
 participant S3 as "AWS S3"
 Client->>App : "GET /api/upload/presign?filename=...&contentType=...&submissionId=...&pageLabel=..."
@@ -159,11 +232,13 @@ S3-->>S3Lib : "Signed URL"
 S3Lib-->>Presign : "Signed URL"
 Presign-->>App : "{ uploadUrl, s3Key }"
 App-->>Client : "JSON response"
+Note over Email : Password reset/welcome emails sent via Resend API
 ```
 
 **Diagram sources**
 - [src/app/api/upload/presign/route.ts:1-37](file://src/app/api/upload/presign/route.ts#L1-L37)
 - [src/lib/s3.ts:18-28](file://src/lib/s3.ts#L18-L28)
+- [src/lib/email.ts:31-91](file://src/lib/email.ts#L31-L91)
 - [src/middleware.ts:1-6](file://src/middleware.ts#L1-L6)
 
 ## Detailed Component Analysis
@@ -220,6 +295,68 @@ Presign --> Return["Return { uploadUrl, s3Key }"]
 - [src/app/api/upload/presign/route.ts:1-37](file://src/app/api/upload/presign/route.ts#L1-L37)
 - [src/components/create/ImageUploader.tsx:1-148](file://src/components/create/ImageUploader.tsx#L1-L148)
 
+### Email System Integration
+- Variables: RESEND_API_KEY, EMAIL_FROM
+- Role: Enable password reset and welcome email functionality via Resend API
+- Behavior:
+  - Email service initializes only when RESEND_API_KEY is configured
+  - Falls back gracefully with warnings when email service is unavailable
+  - Uses EMAIL_FROM as sender address (defaults to Resend's default if not set)
+  - Supports both password reset and welcome email templates
+
+```mermaid
+flowchart TD
+Init["Initialize Email Service"] --> CheckKey{"RESEND_API_KEY set?"}
+CheckKey --> |No| Warn["Log warning about missing API key"]
+CheckKey --> |Yes| InitResend["Create Resend client"]
+Warn --> Ready["Service ready (disabled)"]
+InitResend --> FromCheck{"EMAIL_FROM set?"}
+FromCheck --> |No| UseDefault["Use default sender"]
+FromCheck --> |Yes| UseCustom["Use custom sender"]
+UseDefault --> Ready
+UseCustom --> Ready
+```
+
+**Diagram sources**
+- [src/lib/email.ts:4-15](file://src/lib/email.ts#L4-L15)
+
+**Section sources**
+- [src/lib/email.ts:1-160](file://src/lib/email.ts#L1-L160)
+- [test-email.ts:1-51](file://test-email.ts#L1-L51)
+
+### PDF Rendering Pipeline
+- Variable: VECTOR_RENDER
+- Role: Control PDF rendering quality and performance characteristics
+- Behavior:
+  - When set to "true", uses vector rendering pipeline for sharper text output
+  - Defaults to raster rendering (SVG→PNG→PDF) when not set or set to other values
+  - Vector rendering only supports editor-mode submissions
+  - Provides better text quality and smaller file sizes for vector content
+
+```mermaid
+flowchart TD
+Start["Generate PDF"] --> CheckVector{"VECTOR_RENDER === 'true'?"}
+CheckVector --> |Yes| Vector["Use vector rendering pipeline"]
+CheckVector --> |No| Raster["Use raster rendering pipeline"]
+Vector --> EditorCheck{"Editor mode?"}
+Raster --> Process["Process images/pages"]
+EditorCheck --> |Yes| VectorRender["Render with pdf-lib"]
+EditorCheck --> |No| Error["Throw error: vector only for editor mode"]
+VectorRender --> Upload["Upload to S3"]
+Process --> Compose["Compose PDF"]
+Compose --> Upload
+Upload --> Complete["Complete"]
+Error --> Fail["Fail"]
+```
+
+**Diagram sources**
+- [src/lib/pdf/generate.ts:39-43](file://src/lib/pdf/generate.ts#L39-L43)
+- [src/lib/pdf/generate-vector.ts:51-55](file://src/lib/pdf/generate-vector.ts#L51-L55)
+
+**Section sources**
+- [src/lib/pdf/generate.ts:23-43](file://src/lib/pdf/generate.ts#L23-L43)
+- [src/lib/pdf/generate-vector.ts:28-55](file://src/lib/pdf/generate-vector.ts#L28-L55)
+
 ### NextAuth Configuration
 - Variables: NEXTAUTH_URL, NEXTAUTH_SECRET
 - Role: Configure NextAuth base URL and JWT signing secret
@@ -259,19 +396,27 @@ graph LR
 ENV["Environment Variables"] --> PRISMA["Prisma Client"]
 ENV --> S3LIB["S3 Client Library"]
 ENV --> NEXTAUTH["NextAuth"]
+ENV --> EMAIL["Email Service"]
+ENV --> PDF["PDF Renderer"]
 PRISMA --> DB["SQLite"]
 S3LIB --> S3["AWS S3"]
 NEXTAUTH --> APP["Next.js App"]
+EMAIL --> RESEND["Resend API"]
+PDF --> S3
 ```
 
 **Diagram sources**
 - [prisma/schema.prisma:5-8](file://prisma/schema.prisma#L5-L8)
 - [src/lib/s3.ts:8-16](file://src/lib/s3.ts#L8-L16)
+- [src/lib/email.ts:4-8](file://src/lib/email.ts#L4-L8)
+- [src/lib/pdf/generate.ts:40-43](file://src/lib/pdf/generate.ts#L40-L43)
 - [src/app/api/auth/[...nextauth]/route.ts](file://src/app/api/auth/[...nextauth]/route.ts#L1-L4)
 
 **Section sources**
 - [prisma/schema.prisma:5-8](file://prisma/schema.prisma#L5-L8)
 - [src/lib/s3.ts:1-81](file://src/lib/s3.ts#L1-L81)
+- [src/lib/email.ts:1-160](file://src/lib/email.ts#L1-L160)
+- [src/lib/pdf/generate.ts:23-43](file://src/lib/pdf/generate.ts#L23-L43)
 - [src/app/api/auth/[...nextauth]/route.ts](file://src/app/api/auth/[...nextauth]/route.ts#L1-L4)
 
 ## Performance Considerations
@@ -279,6 +424,8 @@ NEXTAUTH --> APP["Next.js App"]
 - Avoid frequent re-initialization of AWS SDK clients; reuse instances where possible
 - Use short-lived pre-signed URLs to reduce exposure windows
 - Keep bucket policies restrictive to limit access surface
+- **New**: Vector rendering produces higher quality PDFs but may have longer processing times; consider enabling only for critical submissions
+- **New**: Email sending is asynchronous and non-blocking; failures don't prevent core functionality
 
 ## Troubleshooting Guide
 Common configuration errors and resolutions:
@@ -306,20 +453,41 @@ Common configuration errors and resolutions:
   - Symptom: NextAuth callback failures or JWT signing errors
   - Resolution: Set NEXTAUTH_URL to the reachable base URL and NEXTAUTH_SECRET to a strong secret
 
+- **New**: Missing RESEND_API_KEY
+  - Symptom: Email functionality disabled; logs show "Resend client NOT initialized"
+  - Resolution: Set RESEND_API_KEY to a valid Resend API key for email functionality
+  - Impact: Password reset and welcome emails will not be sent
+
+- **New**: Invalid EMAIL_FROM
+  - Symptom: Emails sent from unexpected default address
+  - Resolution: Set EMAIL_FROM to your verified sender email address
+  - Note: If not set, defaults to "onboarding@resend.dev"
+
+- **New**: VECTOR_RENDER issues
+  - Symptom: Vector rendering errors or falls back to raster automatically
+  - Resolution: Ensure VECTOR_RENDER is set to exactly "true" (case-sensitive); verify submission is in editor mode
+  - Debug: Check logs for "vector rendering is only supported for editor-mode submissions"
+
 Debugging techniques:
 - Log environment variables during startup to confirm values are loaded
 - Test pre-signed URL generation independently to isolate S3 configuration issues
 - Validate NextAuth callbacks using a simple test route
 - Use AWS CLI or SDK to verify credentials and bucket access outside the app
+- **New**: Use the provided test-email.ts script to validate email configuration: `node test-email.ts`
+- **New**: Check console logs for email service initialization status and error messages
+- **New**: Monitor vector rendering performance and quality differences between render modes
 
 **Section sources**
 - [prisma/schema.prisma:5-8](file://prisma/schema.prisma#L5-L8)
 - [src/lib/s3.ts:8-16](file://src/lib/s3.ts#L8-L16)
+- [src/lib/email.ts:11-15](file://src/lib/email.ts#L11-L15)
+- [src/lib/pdf/generate.ts:40-43](file://src/lib/pdf/generate.ts#L40-L43)
 - [src/app/api/upload/presign/route.ts:1-37](file://src/app/api/upload/presign/route.ts#L1-L37)
 - [src/app/api/auth/[...nextauth]/route.ts](file://src/app/api/auth/[...nextauth]/route.ts#L1-L4)
+- [test-email.ts:1-51](file://test-email.ts#L1-L51)
 
 ## Conclusion
-Titchybook Creator requires a small set of environment variables to connect to the database, integrate with AWS S3, and secure NextAuth operations. Correctly setting and validating these variables is essential for reliable operation. Follow the security and operational guidance herein to maintain safe and robust deployments across environments.
+Titchybook Creator requires a small set of environment variables to connect to the database, integrate with AWS S3, secure NextAuth operations, enable email functionality, and control PDF rendering quality. Correctly setting and validating these variables is essential for reliable operation. The new email system integration provides robust password reset and welcome email capabilities, while the optional vector rendering enhances PDF quality for editor-mode submissions. Follow the security and operational guidance herein to maintain safe and robust deployments across environments.
 
 ## Appendices
 
@@ -332,28 +500,65 @@ Titchybook Creator requires a small set of environment variables to connect to t
 - NEXT_PUBLIC_AWS_BUCKET_URL: Public HTTPS URL for S3 objects
 - NEXTAUTH_URL: Base URL for NextAuth
 - NEXTAUTH_SECRET: Secret for signing JWTs
+- **New**: RESEND_API_KEY: API key for Resend email service
+- **New**: EMAIL_FROM: Sender email address for outgoing emails
+- **New**: VECTOR_RENDER: Toggle vector PDF rendering ("true" to enable)
+- **New**: OPENAI_API_KEY: API key for OpenAI chat functionality
+- **New**: OPENAI_MODEL: OpenAI model identifier (defaults to gpt-4o)
 
 ### Example .env File Structure
-- DATABASE_URL=...
-- AWS_REGION=...
-- AWS_ACCESS_KEY_ID=...
-- AWS_SECRET_ACCESS_KEY=...
-- S3_BUCKET_NAME=...
-- NEXT_PUBLIC_AWS_BUCKET_URL=https://your-bucket.s3.amazonaws.com
-- NEXTAUTH_URL=https://yourdomain.com
-- NEXTAUTH_SECRET=...
+```bash
+# Database
+DATABASE_URL=sqlite:./dev.db
+
+# AWS S3
+AWS_REGION=us-east-1
+AWS_ACCESS_KEY_ID=your-access-key
+AWS_SECRET_ACCESS_KEY=your-secret-key
+S3_BUCKET_NAME=your-bucket-name
+NEXT_PUBLIC_AWS_BUCKET_URL=https://your-bucket.s3.amazonaws.com
+
+# Authentication
+NEXTAUTH_URL=https://yourdomain.com
+NEXTAUTH_SECRET=your-jwt-secret
+
+# Email System
+RESEND_API_KEY=re_your-resend-api-key
+EMAIL_FROM=noreply@yourdomain.com
+
+# PDF Rendering
+VECTOR_RENDER=false
+
+# AI Features
+OPENAI_API_KEY=sk-your-openai-api-key
+OPENAI_MODEL=gpt-4o
+```
 
 ### Docker Environment Configuration
 - Define environment variables in the container or compose file
 - Mount secrets via secure mechanisms (e.g., Docker secrets or Kubernetes secrets)
 - Ensure NEXT_PUBLIC_* variables are available to the frontend build/runtime
+- **New**: Include email service credentials for production deployments
+- **New**: Configure VECTOR_RENDER based on deployment requirements
 
 ### CI/CD Pipeline Variable Management
-- Store secrets in your CI/CD system’s secret storage
+- Store secrets in your CI/CD system's secret storage
 - Inject variables at build and deploy time
 - Use separate variables for development, staging, and production
 - Rotate secrets regularly and update CI/CD variables accordingly
+- **New**: Implement email testing in CI/CD pipeline using test-email.ts
+- **New**: Validate vector rendering configuration in staging environments
 
 ### Local Development vs Production Differences
 - Local: Use local SQLite via DATABASE_URL; ensure AWS credentials are valid for testing
 - Production: Use managed database and S3; restrict IAM policies; enforce HTTPS for NEXTAUTH_URL and NEXT_PUBLIC_AWS_BUCKET_URL
+- **New**: Local development can run without email service; production should always have RESEND_API_KEY configured
+- **New**: Enable VECTOR_RENDER in production for optimal PDF quality; disable in development for faster iteration
+- **New**: Use TEST_EMAIL environment variable in test-email.ts to specify recipient for email testing
+
+### Email Testing and Validation
+- Use the provided test-email.ts script to validate email configuration
+- Set TEST_EMAIL environment variable to specify test recipient
+- Verify both password reset and welcome email functionality
+- Check console logs for email service initialization status
+- **New**: Email functionality gracefully degrades when RESEND_API_KEY is missing

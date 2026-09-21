@@ -2,7 +2,8 @@
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { z } from "zod";
-import { enqueueRenderJob } from "@/lib/pdf/render-job";
+import { enqueueInTransaction } from "@/lib/pdf/render-job";
+import { errorResponse, SubmissionError } from "@/lib/editor/submission-store";
 import {
   PAGE_LABELS,
   SubmissionMode,
@@ -114,10 +115,15 @@ export async function POST(request: Request) {
       );
     }
 
-    // Create submission with images in a transaction
-    const submission = await prisma.submission.create({
+    if (images.some(image => !image.s3Key.startsWith(`uploads/${session.user.id}/`))) {
+      throw new SubmissionError(403, "An uploaded image belongs to another account");
+    }
+    const actor = { id: session.user.id, role: session.user.role };
+    const result = await prisma.$transaction(async (tx) => {
+    const submission = await tx.submission.create({
       data: {
-        userId: session.user.id,
+        userId: actor.id,
+        status: SubmissionStatus.DRAFT,
         images: {
           create: images.map((img) => ({
             pageLabel: img.pageLabel,
@@ -131,19 +137,11 @@ export async function POST(request: Request) {
       include: { images: true },
     });
 
-    // Generate PDF via render job (don't await - let it run in background)
-    enqueueRenderJob(submission.id).catch((err: unknown) => {
-      console.error(`Failed to enqueue render job for submission ${submission.id}:`, err);
+    return enqueueInTransaction(tx, submission.id, actor);
     });
 
-    return NextResponse.json(
-      { submission: { id: submission.id, status: submission.status } },
-      { status: 201 }
-    );
-  } catch {
-    return NextResponse.json(
-      { error: "Internal server error" },
-      { status: 500 }
-    );
+    return NextResponse.json(result, { status: 202 });
+  } catch (error) {
+    return errorResponse(error);
   }
 }

@@ -3,6 +3,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { SubmissionStatus } from "@/lib/constants";
 import { z } from "zod";
+import { errorResponse, lockSubmission, SubmissionError } from "@/lib/editor/submission-store";
 
 export const dynamic = "force-dynamic";
 
@@ -36,15 +37,12 @@ export async function PATCH(
 
     const { action, rejectionReason } = parsed.data;
 
-    const submission = await prisma.submission.findUnique({
-      where: { id },
-    });
-
-    if (!submission) {
-      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    const updated = await prisma.$transaction(async (tx) => {
+    const submission = await lockSubmission(tx, id);
+    if (submission.status !== "PENDING" || !submission.pdfS3Key) {
+      throw new SubmissionError(409, "Only rendered submissions awaiting review can be moderated");
     }
-
-    const updated = await prisma.submission.update({
+    return tx.submission.update({
       where: { id },
       data: {
         status:
@@ -54,12 +52,10 @@ export async function PATCH(
         rejectionReason: action === "REJECT" ? rejectionReason : null,
       },
     });
+    });
 
     return NextResponse.json({ submission: updated });
-  } catch {
-    return NextResponse.json(
-      { error: "Internal server error" },
-      { status: 500 }
-    );
+  } catch (error) {
+    return errorResponse(error);
   }
 }

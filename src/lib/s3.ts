@@ -81,6 +81,10 @@ export function buildAssetUploadKey(
   return `assets/${userId}/${assetId}.${ext}`;
 }
 
+export function buildRenderAttemptPrefix(userId: string, submissionId: string, jobId: string, attempt: number, token: string): string {
+  return `renders/${userId}/${submissionId}/${jobId}/${attempt}-${token}`;
+}
+
 export function buildPdfKey(
   userId: string,
   submissionId: string

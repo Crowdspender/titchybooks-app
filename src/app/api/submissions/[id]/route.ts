@@ -5,12 +5,14 @@ import { getPresignedDownloadUrl } from "@/lib/s3";
 import { z } from "zod";
 import { SubmissionMode } from "@/lib/constants";
 import { parseEditorScene } from "@/lib/editor/schema";
+import { errorResponse, lockSubmission, saveTitle, SubmissionError } from "@/lib/editor/submission-store";
 
 export const dynamic = "force-dynamic";
 
 
 const updateSubmissionSchema = z.object({
-  title: z.string().trim().max(120).nullable().optional(),
+  title: z.string().trim().max(120).nullable(),
+  revision: z.number().int().nonnegative(),
 });
 
 export async function GET(
@@ -41,7 +43,7 @@ export async function GET(
   }
 
   let pdfDownloadUrl: string | null = null;
-  if (submission.pdfS3Key) {
+  if (submission.pdfS3Key && (submission.status === "APPROVED" || session.user.role === "ADMIN")) {
     pdfDownloadUrl = await getPresignedDownloadUrl(submission.pdfS3Key);
   }
 
@@ -100,26 +102,11 @@ export async function PATCH(
       );
     }
 
-    const submission = await prisma.submission.update({
-      where: { id },
-      data: {
-        title:
-          parsed.data.title === undefined
-            ? undefined
-            : parsed.data.title || null,
-      },
-      include: {
-        images: { orderBy: { order: "asc" } },
-        pages: { orderBy: { order: "asc" } },
-      },
-    });
+    const submission = await saveTitle(id, { id: session.user.id, role: session.user.role }, parsed.data.title || null, parsed.data.revision);
 
     return NextResponse.json({ submission });
-  } catch {
-    return NextResponse.json(
-      { error: "Internal server error" },
-      { status: 500 }
-    );
+  } catch (error) {
+    return errorResponse(error);
   }
 }
 
@@ -159,21 +146,14 @@ export async function DELETE(
   }
 
   try {
-    // Delete related pages first
-    await prisma.submissionPage.deleteMany({
-      where: { submissionId: id },
-    });
-
-    // Delete the submission
-    await prisma.submission.delete({
-      where: { id },
+    await prisma.$transaction(async (tx) => {
+      const current = await lockSubmission(tx, id, { id: session.user.id!, role: session.user.role });
+      if (current.status !== "DRAFT") throw new SubmissionError(409, "Only drafts can be deleted");
+      await tx.submission.delete({ where: { id } });
     });
 
     return NextResponse.json({ success: true });
-  } catch {
-    return NextResponse.json(
-      { error: "Internal server error" },
-      { status: 500 }
-    );
+  } catch (error) {
+    return errorResponse(error);
   }
 }

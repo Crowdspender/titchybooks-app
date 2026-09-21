@@ -79,6 +79,7 @@ export async function sendPasswordResetEmail({
       `,
     });
 
+    if (error) return false;
     console.log(`✅ Password reset email sent to ${to}`, data?.id);
     return true;
   } catch (error) {
@@ -147,6 +148,7 @@ export async function sendWelcomeEmail({
       `,
     });
 
+    if (error) return false;
     console.log(`✅ Welcome email sent to ${to}`, data?.id);
     return true;
   } catch (error) {

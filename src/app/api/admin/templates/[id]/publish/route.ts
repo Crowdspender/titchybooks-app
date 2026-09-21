@@ -32,7 +32,7 @@ export async function POST(
     data: {
       status: SubmissionStatus.APPROVED,
       publishedAt: new Date(),
-      version: existing.version + 1,
+      version: { increment: 1 },
     },
   });
 

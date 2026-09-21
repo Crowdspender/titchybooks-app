@@ -25,7 +25,7 @@ interface AiChatPanelProps {
         targetPage: PageLabel,
         text: string,
         style?: AiSuggestion["style"],
-    ) => void;
+    ) => Promise<boolean>;
 }
 
 export default function AiChatPanel({
@@ -194,7 +194,7 @@ export default function AiChatPanel({
 
     function handleApplySuggestion(suggestion: AiSuggestion) {
         const sanitized = sanitizeAiText(suggestion.text);
-        onApplyText(
+        return onApplyText(
             suggestion.targetPage as PageLabel,
             sanitized,
             suggestion.style,
@@ -587,7 +587,7 @@ function MessageBubble({
     onApplySuggestion,
 }: {
     message: ChatMessage;
-    onApplySuggestion: (suggestion: AiSuggestion) => void;
+    onApplySuggestion: (suggestion: AiSuggestion) => Promise<boolean>;
 }) {
     if (message.role === "user") {
         return (
@@ -645,13 +645,15 @@ function SuggestionCard({
     onApply,
 }: {
     suggestion: AiSuggestion;
-    onApply: () => void;
+    onApply: () => Promise<boolean>;
 }) {
     const [applied, setApplied] = useState(false);
+    const [applying, setApplying] = useState(false);
 
-    function handleApply() {
-        onApply();
-        setApplied(true);
+    async function handleApply() {
+        setApplying(true);
+        try { setApplied(await onApply()); }
+        finally { setApplying(false); }
     }
 
     const pageDisplayName =
@@ -684,7 +686,7 @@ function SuggestionCard({
                 <button
                     type="button"
                     onClick={handleApply}
-                    disabled={applied}
+                    disabled={applied || applying}
                     className="btn btn-sm shrink-0"
                     style={{
                         borderRadius: "var(--radius-full)",
@@ -699,7 +701,7 @@ function SuggestionCard({
                         border: "none",
                     }}
                 >
-                    {applied ? "Applied" : "Apply"}
+                    {applied ? "Applied" : applying ? "Applying…" : "Apply"}
                 </button>
             </div>
             <p

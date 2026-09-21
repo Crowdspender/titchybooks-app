@@ -34,13 +34,6 @@ const FONT_MAP: Record<string, keyof typeof StandardFonts> = {
   "cursive": "TimesRoman",
 };
 
-interface FontCache {
-  regular: PDFFont;
-  bold: PDFFont;
-  italic: PDFFont;
-  boldItalic: PDFFont;
-}
-
 /**
  * Resolve a CSS font-family string to a pdf-lib StandardFonts key.
  */
@@ -222,9 +215,7 @@ async function drawTextElement(
 
   const { font } = await loadFonts(pdfDoc, element.fontFamily, element.fontWeight);
   const fontSizePts = element.fontSize * t.scaleY;
-  const lineHeightPts = fontSizePts * element.lineHeight;
   const letterSpacingPts = element.letterSpacing * t.scaleX;
-  const maxWidthPts = element.width * t.scaleX;
 
   const lines = wrapTextLines(
     element.text,
@@ -340,12 +331,6 @@ async function drawImageElement(
   // and embed the result. This is a pragmatic middle ground.
   const sharp = (await import("sharp")).default;
 
-  const scale = Math.max(
-    element.width / cropRect.width,
-    element.height / cropRect.height,
-  );
-  const renderedWidth = Math.round(asset.width * scale);
-  const renderedHeight = Math.round(asset.height * scale);
   const extractLeft = Math.round(cropRect.x);
   const extractTop = Math.round(cropRect.y);
   const extractWidth = Math.round(cropRect.width);
@@ -405,6 +390,7 @@ export async function renderSceneToPdfPage(
   assets: Map<string, AssetSource>,
   rotation?: number,
 ): Promise<{ pdfDoc: PDFDocument; page: PDFPage }> {
+  void rotation;
   const pdfDoc = await PDFDocument.create();
   const page = pdfDoc.addPage([targetWidthPts, targetHeightPts]);
 
@@ -438,12 +424,11 @@ export async function renderSceneToPdfPage(
         await drawTextElement(page, pdfDoc, element, t);
       } else if (element.type === "image") {
         const asset = assets.get(element.assetId);
-        if (asset) {
-          await drawImageElement(page, pdfDoc, element, asset, t);
-        }
+        if (!asset) throw new Error('Missing source image');
+        await drawImageElement(page, pdfDoc, element, asset, t);
       }
     } catch (err) {
-      console.error(`Failed to render element ${element.id}:`, err);
+      throw new Error(`Failed to render element ${element.id}`, { cause: err });
     }
   }
 

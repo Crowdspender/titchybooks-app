@@ -1,44 +1,47 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
+import { draftPointerStorage } from "@/lib/editor/persistence";
 import Link from "next/link";
 
 const ACTIVE_DRAFT_STORAGE_KEY = "titchybook-active-editor-draft";
 
+const subscribe = (callback: () => void) => {
+  window.addEventListener('storage', callback);
+  return () => window.removeEventListener('storage', callback);
+};
+const getSnapshot = () => draftPointerStorage.getItem(ACTIVE_DRAFT_STORAGE_KEY);
+
 export default function ContinueEditingButton() {
-  const [draftId, setDraftId] = useState<string | null>(null);
+  const draftId = useSyncExternalStore(subscribe, getSnapshot, () => null);
   const [isValidDraft, setIsValidDraft] = useState<boolean>(false);
   const [checking, setChecking] = useState<boolean>(true);
 
   useEffect(() => {
-    const storedId = localStorage.getItem(ACTIVE_DRAFT_STORAGE_KEY);
-    if (!storedId) {
-      setChecking(false);
-      return;
-    }
-
-    setDraftId(storedId);
-
-    fetch(`/api/submissions/${storedId}`)
+    if (!draftId) return;
+    const controller = new AbortController();
+    fetch(`/api/submissions/${draftId}`, { signal: controller.signal })
       .then((res) => {
         if (!res.ok) return false;
         return res.json();
       })
       .then((data) => {
+        if (controller.signal.aborted) return;
         if (data?.submission?.status === "DRAFT") {
           setIsValidDraft(true);
         } else {
-          localStorage.removeItem(ACTIVE_DRAFT_STORAGE_KEY);
+          draftPointerStorage.removeItem(ACTIVE_DRAFT_STORAGE_KEY);
           setIsValidDraft(false);
         }
       })
       .catch(() => {
-        setIsValidDraft(false);
+        if (!controller.signal.aborted) setIsValidDraft(false);
       })
       .finally(() => {
-        setChecking(false);
+        if (!controller.signal.aborted) setChecking(false);
       });
-  }, []);
+    return () => controller.abort();
+  }, [draftId]);
 
   if (checking || !draftId || !isValidDraft) {
     return null;

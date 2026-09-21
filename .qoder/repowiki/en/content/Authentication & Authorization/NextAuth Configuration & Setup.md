@@ -4,6 +4,7 @@
 **Referenced Files in This Document**
 - [auth.ts](file://src/auth.ts)
 - [middleware.ts](file://src/middleware.ts)
+- [route.ts](file://src/app/api/auth/[...nextauth]/route.ts)
 - [LoginForm.tsx](file://src/components/auth/LoginForm.tsx)
 - [RegisterForm.tsx](file://src/components/auth/RegisterForm.tsx)
 - [LoginPage.tsx](file://src/app/(auth)/login/page.tsx)
@@ -11,7 +12,15 @@
 - [prisma.ts](file://src/lib/prisma.ts)
 - [schema.prisma](file://prisma/schema.prisma)
 - [package.json](file://package.json)
+- [next.config.ts](file://next.config.ts)
 </cite>
+
+## Update Summary
+**Changes Made**
+- Updated NextAuth v5 trustHost configuration section to reflect proper production URL resolution
+- Added documentation for force-dynamic rendering implementation across API routes
+- Enhanced security considerations with updated configuration details
+- Updated architecture diagrams to include route handler patterns
 
 ## Table of Contents
 1. [Introduction](#introduction)
@@ -25,12 +34,13 @@
 9. [Conclusion](#conclusion)
 
 ## Introduction
-This document explains the NextAuth configuration in Titchybook Creator, focusing on the JWT strategy, custom credentials provider, TypeScript module augmentation, and callback functions for token-to-session mapping and user role propagation. It also covers the NextAuth configuration object structure, provider credentials definition, authentication pages setup, and security considerations for JWT implementation.
+This document explains the NextAuth configuration in Titchybook Creator, focusing on the JWT strategy, custom credentials provider, TypeScript module augmentation, and callback functions for token-to-session mapping and user role propagation. It also covers the NextAuth configuration object structure, provider credentials definition, authentication pages setup, and security considerations for JWT implementation with NextAuth v5 trustHost configuration and force-dynamic rendering.
 
 ## Project Structure
 The authentication system spans several layers:
-- NextAuth configuration and callbacks
+- NextAuth configuration with v5 trustHost settings and callbacks
 - Middleware for protected routes
+- Route handlers with force-dynamic rendering
 - Client-side login form using next-auth/react
 - Registration API endpoint
 - Prisma integration for user lookup and persistence
@@ -43,8 +53,9 @@ UI_Login["LoginForm.tsx"]
 UI_Register["RegisterForm.tsx"]
 end
 subgraph "Server"
-NA_Config["auth.ts<br/>NextAuth config"]
+NA_Config["auth.ts<br/>NextAuth v5 config"]
 MW["middleware.ts<br/>Protected routes"]
+API_Auth["/api/auth/[...nextauth]<br/>Route Handler"]
 API_Reg["/api/register<br/>POST"]
 end
 subgraph "Data"
@@ -53,6 +64,7 @@ SCHEMA["schema.prisma<br/>User model"]
 end
 UI_Login --> |"Credentials provider"| NA_Config
 UI_Register --> API_Reg
+API_Auth --> NA_Config
 API_Reg --> PRISMA_LIB
 PRISMA_LIB --> SCHEMA
 NA_Config --> PRISMA_LIB
@@ -60,46 +72,52 @@ MW --> NA_Config
 ```
 
 **Diagram sources**
-- [auth.ts:27-79](file://src/auth.ts#L27-L79)
-- [middleware.ts:1-5](file://src/middleware.ts#L1-L5)
+- [auth.ts:27-89](file://src/auth.ts#L27-L89)
+- [middleware.ts:1-15](file://src/middleware.ts#L1-L15)
+- [route.ts:1-4](file://src/app/api/auth/[...nextauth]/route.ts#L1-L4)
 - [RegisterForm.tsx:14-39](file://src/components/auth/RegisterForm.tsx#L14-L39)
 - [prisma.ts:1-10](file://src/lib/prisma.ts#L1-L10)
 - [schema.prisma:10-19](file://prisma/schema.prisma#L10-L19)
 
 **Section sources**
-- [auth.ts:27-79](file://src/auth.ts#L27-L79)
-- [middleware.ts:1-5](file://src/middleware.ts#L1-L5)
+- [auth.ts:27-89](file://src/auth.ts#L27-L89)
+- [middleware.ts:1-15](file://src/middleware.ts#L1-L15)
+- [route.ts:1-4](file://src/app/api/auth/[...nextauth]/route.ts#L1-L4)
 - [RegisterForm.tsx:14-39](file://src/components/auth/RegisterForm.tsx#L14-L39)
 - [prisma.ts:1-10](file://src/lib/prisma.ts#L1-L10)
 - [schema.prisma:10-19](file://prisma/schema.prisma#L10-L19)
 
 ## Core Components
-- NextAuth configuration with JWT strategy and credentials provider
+- NextAuth configuration with JWT strategy, credentials provider, and v5 trustHost settings
 - Module augmentation for TypeScript to include user role in Session and JWT
 - Callbacks for JWT and session mapping
 - Middleware enforcing protected routes
+- Route handlers with force-dynamic rendering for API endpoints
 - Client login form invoking the credentials provider
 - Registration API endpoint with Zod validation and bcrypt hashing
 
 **Section sources**
 - [auth.ts:6-25](file://src/auth.ts#L6-L25)
-- [auth.ts:27-79](file://src/auth.ts#L27-L79)
-- [middleware.ts:1-5](file://src/middleware.ts#L1-L5)
+- [auth.ts:27-89](file://src/auth.ts#L27-L89)
+- [middleware.ts:1-15](file://src/middleware.ts#L1-L15)
+- [route.ts:1-4](file://src/app/api/auth/[...nextauth]/route.ts#L1-L4)
 - [LoginForm.tsx:14-33](file://src/components/auth/LoginForm.tsx#L14-L33)
 - [RegisterForm.tsx:14-39](file://src/components/auth/RegisterForm.tsx#L14-L39)
 
 ## Architecture Overview
-The authentication flow integrates client-side login, NextAuth’s credentials provider, and server-side user validation via Prisma. Roles are propagated from the database through the JWT to the session.
+The authentication flow integrates client-side login, NextAuth's credentials provider with v5 trustHost configuration, server-side user validation via Prisma, and force-dynamic rendering for API routes. Roles are propagated from the database through the JWT to the session.
 
 ```mermaid
 sequenceDiagram
 participant C as "Client Browser"
 participant L as "LoginForm.tsx"
+participant RH as "Route Handler<br/>[...nextauth]"
 participant N as "NextAuth (auth.ts)"
 participant P as "Prisma (prisma.ts)"
 participant D as "SQLite (schema.prisma)"
 C->>L : Submit credentials
-L->>N : signIn("credentials", {email,password})
+L->>RH : signIn("credentials", {email,password})
+RH->>N : Process auth request
 N->>P : Find user by email
 P->>D : SELECT user WHERE email
 D-->>P : User row
@@ -116,17 +134,18 @@ end
 
 **Diagram sources**
 - [LoginForm.tsx:19-32](file://src/components/auth/LoginForm.tsx#L19-L32)
-- [auth.ts:35-58](file://src/auth.ts#L35-L58)
-- [auth.ts:65-78](file://src/auth.ts#L65-L78)
+- [route.ts:1-4](file://src/app/api/auth/[...nextauth]/route.ts#L1-L4)
+- [auth.ts:35-89](file://src/auth.ts#L35-L89)
 - [prisma.ts:1-10](file://src/lib/prisma.ts#L1-L10)
 - [schema.prisma:10-19](file://prisma/schema.prisma#L10-L19)
 
 ## Detailed Component Analysis
 
-### NextAuth Configuration and JWT Strategy
+### NextAuth Configuration and JWT Strategy with v5 TrustHost
 - Provider: Credentials provider with explicit credential fields for email and password.
 - Strategy: JWT-based session strategy.
 - Pages: Sign-in page mapped to the login route.
+- **Updated**: TrustHost configuration set to `true` for proper production URL resolution in NextAuth v5.
 - Callbacks:
   - jwt: Attach user id and role to the token when a user logs in.
   - session: Map token fields to session.user for client-side consumption.
@@ -135,9 +154,10 @@ Security considerations:
 - JWT strategy avoids server-side session storage.
 - Token size is minimized by storing only essential fields (id, role).
 - Password verification uses bcrypt comparison against stored passwordHash.
+- TrustHost configuration ensures proper URL handling in production environments.
 
 **Section sources**
-- [auth.ts:27-79](file://src/auth.ts#L27-L79)
+- [auth.ts:27-89](file://src/auth.ts#L27-L89)
 - [schema.prisma:10-19](file://prisma/schema.prisma#L10-L19)
 
 ### Module Augmentation for TypeScript Types
@@ -175,14 +195,16 @@ Token-to-session mapping and role propagation:
 - Role flows from database through authorize → jwt → session → client.
 
 **Section sources**
-- [auth.ts:65-78](file://src/auth.ts#L65-L78)
+- [auth.ts:65-89](file://src/auth.ts#L65-L89)
 
 ### Authentication Pages Setup
 - Sign-in page: mapped to the login route.
 - Login UI: LoginForm component posts credentials to the credentials provider.
+- Route handler: Uses NextAuth v5 pattern with exported handlers.
 
 **Section sources**
 - [auth.ts:62-64](file://src/auth.ts#L62-L64)
+- [route.ts:1-4](file://src/app/api/auth/[...nextauth]/route.ts#L1-L4)
 - [LoginPage.tsx:1-13](file://src/app/(auth)/login/page.tsx#L1-L13)
 - [LoginForm.tsx:19-32](file://src/components/auth/LoginForm.tsx#L19-L32)
 
@@ -231,21 +253,39 @@ BuildUser --> End
 **Section sources**
 - [auth.ts:61](file://src/auth.ts#L61)
 
+### Force-Dynamic Rendering for API Routes
+- All API routes implement `export const dynamic = "force-dynamic"` to ensure runtime execution.
+- This prevents static generation and ensures proper authentication checks at request time.
+- Applied consistently across all API endpoints including orders, submissions, assets, and admin routes.
+
+Security benefits:
+- Prevents caching of authenticated responses
+- Ensures fresh session validation on each request
+- Maintains proper authorization checks for protected endpoints
+
+**Section sources**
+- [route.ts:6](file://src/app/api/admin/orders/route.ts#L6)
+- [route.ts:8](file://src/app/api/assets/route.ts#L8)
+- [route.ts:10](file://src/app/api/orders/route.ts#L10)
+- [route.ts:13](file://src/app/api/submissions/route.ts#L13)
+- [route.ts:4](file://src/app/api/vault/route.ts#L4)
+
 ### Security Considerations for JWT Implementation
 - Keep payload minimal (id, role) to reduce token size.
 - Avoid storing sensitive data in JWT claims.
 - Ensure HTTPS in production to protect cookies/tokens.
 - Consider setting maxAge and rotating tokens for stronger security.
-
-[No sources needed since this section provides general guidance]
+- **Updated**: TrustHost configuration enables proper URL resolution in production environments.
+- **Updated**: Force-dynamic rendering ensures runtime authentication checks for all API routes.
 
 ## Dependency Analysis
 - NextAuth depends on:
   - Prisma for user lookup
   - bcryptjs for password hashing/verification
   - Zod for registration validation
-- Middleware enforces protected routes using NextAuth’s auth export.
+- Middleware enforces protected routes using NextAuth's auth export.
 - Client components depend on next-auth/react for sign-in actions.
+- Route handlers use NextAuth v5 pattern with exported handlers.
 
 ```mermaid
 graph LR
@@ -256,6 +296,7 @@ REG_API["/api/register/route.ts"] --> PRISMA
 REG_API --> BC
 LOGIN_UI["LoginForm.tsx"] --> AUTH
 MW["middleware.ts"] --> AUTH
+ROUTE_HANDLER["[/...nextauth] route.ts"] --> AUTH
 ```
 
 **Diagram sources**
@@ -264,6 +305,7 @@ MW["middleware.ts"] --> AUTH
 - [RegisterForm.tsx:14-39](file://src/components/auth/RegisterForm.tsx#L14-L39)
 - [LoginForm.tsx:3,19-32](file://src/components/auth/LoginForm.tsx#L3,L19-L32)
 - [middleware.ts:1](file://src/middleware.ts#L1)
+- [route.ts:1-4](file://src/app/api/auth/[...nextauth]/route.ts#L1-L4)
 
 **Section sources**
 - [auth.ts:1-4](file://src/auth.ts#L1-L4)
@@ -271,14 +313,14 @@ MW["middleware.ts"] --> AUTH
 - [RegisterForm.tsx:14-39](file://src/components/auth/RegisterForm.tsx#L14-L39)
 - [LoginForm.tsx:3,19-32](file://src/components/auth/LoginForm.tsx#L3,L19-L32)
 - [middleware.ts:1](file://src/middleware.ts#L1)
+- [route.ts:1-4](file://src/app/api/auth/[...nextauth]/route.ts#L1-L4)
 
 ## Performance Considerations
 - JWT strategy reduces server-side session storage overhead.
 - Keep token payload small to minimize network overhead.
 - Consider adding rate limiting for authentication endpoints.
 - Use database indexes on email for efficient user lookup.
-
-[No sources needed since this section provides general guidance]
+- **Updated**: Force-dynamic rendering ensures optimal performance for authenticated API routes while maintaining security.
 
 ## Troubleshooting Guide
 Common issues and resolutions:
@@ -291,6 +333,9 @@ Common issues and resolutions:
   - bcrypt compare fails, authorize returns null.
 - Registration conflicts:
   - Duplicate email triggers a 400 response with an error message.
+- **Updated**: Production URL issues:
+  - Ensure NEXTAUTH_URL environment variable is properly configured.
+  - TrustHost configuration handles URL resolution in different deployment environments.
 
 **Section sources**
 - [LoginForm.tsx:27-32](file://src/components/auth/LoginForm.tsx#L27-L32)
@@ -299,4 +344,4 @@ Common issues and resolutions:
 - [RegisterForm.tsx:34-38](file://src/components/auth/RegisterForm.tsx#L34-L38)
 
 ## Conclusion
-Titchybook Creator implements a secure, JWT-backed authentication system using NextAuth. The credentials provider validates users against the database, and module augmentation ensures type-safe access to user roles. Middleware protects routes, while client components integrate seamlessly with the provider. For production, review token expiration and consider additional security measures such as maxAge and rotation.
+Titchybook Creator implements a secure, JWT-backed authentication system using NextAuth v5 with enhanced trustHost configuration for proper production URL resolution. The credentials provider validates users against the database, and module augmentation ensures type-safe access to user roles. Middleware protects routes, while route handlers with force-dynamic rendering ensure runtime authentication checks. Client components integrate seamlessly with the provider. For production, review token expiration and consider additional security measures such as maxAge and rotation. The combination of trustHost configuration and force-dynamic rendering provides robust security and reliability for authenticated API endpoints.

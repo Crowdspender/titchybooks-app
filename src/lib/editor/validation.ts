@@ -1,8 +1,5 @@
 import { PAGE_LABELS, type PageLabel } from "@/lib/constants";
-import {
-  EDITOR_PAGE_WIDTH_PX,
-  EDITOR_PAGE_HEIGHT_PX,
-} from "./constants";
+import { EDITOR_PAGE_WIDTH_PX } from "./constants";
 import {
   createEmptyEditorScene,
   editorSceneSchema,

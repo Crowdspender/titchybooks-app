@@ -37,6 +37,7 @@ export async function GET(
           attempts: true,
           maxAttempts: true,
           errorMessage: true,
+          nextAttemptAt: true,
           startedAt: true,
           completedAt: true,
           createdAt: true,
@@ -58,9 +59,11 @@ export async function GET(
   // If no job exists but we have a PDF, the submission was processed before
   // the job system was introduced.
   if (!job && submission.pdfS3Key) {
-    const pdfUrl = await getPresignedDownloadUrl(submission.pdfS3Key);
+    const pdfUrl = submission.status === 'APPROVED' || session.user.role === 'ADMIN' ? await getPresignedDownloadUrl(submission.pdfS3Key) : null;
     return NextResponse.json({
       status: "COMPLETED",
+      jobStatus: "COMPLETED",
+      submissionStatus: submission.status,
       pdfUrl,
       legacy: true,
     });
@@ -69,22 +72,27 @@ export async function GET(
   if (!job) {
     return NextResponse.json({
       status: submission.status,
+      jobStatus: null,
+      submissionStatus: submission.status,
       job: null,
     });
   }
 
   let pdfUrl: string | null = null;
-  if (job.status === "COMPLETED" && submission.pdfS3Key) {
+  if (job.status === "COMPLETED" && submission.pdfS3Key && (submission.status === 'APPROVED' || session.user.role === 'ADMIN')) {
     pdfUrl = await getPresignedDownloadUrl(submission.pdfS3Key);
   }
 
   return NextResponse.json({
     status: job.status,
+    jobStatus: job.status,
+    submissionStatus: submission.status,
     job: {
       id: job.id,
       attempts: job.attempts,
       maxAttempts: job.maxAttempts,
-      errorMessage: job.errorMessage,
+      errorMessage: job.errorMessage ? 'Rendering could not finish. You can retry safely.' : null,
+      nextAttemptAt: job.nextAttemptAt,
       startedAt: job.startedAt,
       completedAt: job.completedAt,
       createdAt: job.createdAt,

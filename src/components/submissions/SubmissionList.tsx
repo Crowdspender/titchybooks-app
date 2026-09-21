@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import RenderProgress from "./RenderProgress";
 import { toast } from "sonner";
 import StatusBadge from "./StatusBadge";
 
@@ -17,7 +17,6 @@ interface Submission {
 }
 
 export default function SubmissionList() {
-  const router = useRouter();
   const [submissions, setSubmissions] = useState<Submission[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -26,12 +25,11 @@ export default function SubmissionList() {
   }, []);
 
   async function fetchSubmissions() {
-    setLoading(true);
     try {
       const res = await fetch("/api/submissions");
       const data = await res.json();
       setSubmissions(data.submissions || []);
-    } finally {
+    } catch { toast.error('Could not refresh submissions'); } finally {
       setLoading(false);
     }
   }
@@ -145,7 +143,7 @@ export default function SubmissionList() {
   return (
     <div className="space-y-3">
       {submissions.map((sub) => (
-        <SubmissionCard key={sub.id} submission={sub} onDelete={handleDelete} />
+        <SubmissionCard key={sub.id} submission={sub} onDelete={handleDelete} onChange={() => { void fetchSubmissions(); }} />
       ))}
     </div>
   );
@@ -154,9 +152,11 @@ export default function SubmissionList() {
 function SubmissionCard({
   submission,
   onDelete,
+  onChange,
 }: {
   submission: Submission;
   onDelete: (id: string) => void;
+  onChange: () => void;
 }) {
   const [loadingPdf, setLoadingPdf] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -205,6 +205,7 @@ function SubmissionCard({
             year: "numeric",
           })}
         </p>
+        <RenderProgress submissionId={submission.id} status={submission.status} onChange={onChange} />
         {submission.status === "REJECTED" && submission.rejectionReason && (
           <div
             className="mt-2 flex items-center gap-1.5 text-xs p-2 rounded-md"

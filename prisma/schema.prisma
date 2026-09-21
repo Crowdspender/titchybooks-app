@@ -40,6 +40,7 @@ model Submission {
   previewS3Key    String?
   rejectionReason String?
   editorVersion   Int               @default(1)
+  revision        Int               @default(0)
   submittedAt     DateTime?
 
   // Template system fields
@@ -86,6 +87,7 @@ model SubmissionPage {
   pageLabel         String
   order             Int
   sceneJson         String     @default("{}")
+  revision          Int        @default(0)
   previewS3Key      String?
   renderedPageS3Key String?
   createdAt         DateTime   @default(now())
@@ -219,6 +221,10 @@ model RenderJob {
   status          String     @default("QUEUED")  // QUEUED, PROCESSING, COMPLETED, FAILED
   attempts        Int        @default(0)
   maxAttempts     Int        @default(3)
+  inputSnapshot   Json?
+  nextAttemptAt   DateTime   @default(now())
+  leaseExpiresAt  DateTime?
+  claimToken      String?
   errorMessage    String?
   pdfS3Key        String?
   startedAt       DateTime?
@@ -228,4 +234,6 @@ model RenderJob {
 
   @@index([submissionId])
   @@index([status])
+  @@index([status, nextAttemptAt])
+  @@index([status, leaseExpiresAt])
 }

@@ -67,7 +67,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
   trustHost: true,
   callbacks: {
     authorized({ auth }) {
-      // Middleware matcher limits this to protected paths, so any hit here
+      // Proxy matcher limits this to protected paths, so any hit here
       // requires an authenticated session. Returning false redirects to
       // pages.signIn ("/login") with a callbackUrl query param.
       return !!auth?.user;

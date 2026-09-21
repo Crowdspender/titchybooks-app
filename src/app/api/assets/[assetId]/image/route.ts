@@ -1,7 +1,7 @@
 ﻿import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
-import { SubmissionStatus } from "@/lib/constants";
+import { canAccessAssetViaTemplate as templateAssetAccess } from "@/lib/editor/submission-store";
 import { s3Client } from "@/lib/s3";
 import { GetObjectCommand } from "@aws-sdk/client-s3";
 
@@ -20,39 +20,7 @@ async function canAccessAssetViaTemplate(
   assetId: string,
   userId: string,
 ): Promise<boolean> {
-  // SQLite substring match on the JSON payload of TemplateElement.
-  const usages = await prisma.templateElement.findMany({
-    where: {
-      elementJson: { contains: `"assetId":"${assetId}"` },
-    },
-    select: {
-      templateId: true,
-      template: { select: { status: true, isTemplate: true } },
-    },
-  });
-
-  if (usages.length === 0) return false;
-
-  const templateIds = new Set<string>();
-  for (const usage of usages) {
-    if (!usage.template?.isTemplate) continue;
-    if (usage.template.status === SubmissionStatus.APPROVED) {
-      return true;
-    }
-    templateIds.add(usage.templateId);
-  }
-
-  if (templateIds.size === 0) return false;
-
-  const ownedInstance = await prisma.submission.findFirst({
-    where: {
-      userId,
-      templateId: { in: Array.from(templateIds) },
-    },
-    select: { id: true },
-  });
-
-  return !!ownedInstance;
+  return templateAssetAccess(prisma, assetId, userId);
 }
 
 export async function GET(

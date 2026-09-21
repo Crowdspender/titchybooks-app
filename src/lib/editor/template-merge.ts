@@ -56,7 +56,7 @@ export function extractUserElements(
 ): EditorElement[] {
   return mergedElements
     .filter((element) => element.layer === "user")
-    .map(({ layer: _layer, ...rest }) => rest);
+    .map(({ layer, ...rest }) => { void layer; return rest; });
 }
 
 /**

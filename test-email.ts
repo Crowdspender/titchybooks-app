@@ -26,8 +26,8 @@ async function testEmails() {
       name: 'Test User'
     });
     console.log('Welcome email result:', result ? '✅ Success' : '❌ Failed');
-  } catch (error: any) {
-    console.error('❌ Welcome email error:', error?.message || error);
+  } catch (error: unknown) {
+    console.error('❌ Welcome email error:', error instanceof Error ? error.message : error);
   }
   
   console.log('');
@@ -40,8 +40,8 @@ async function testEmails() {
       resetUrl: 'http://localhost:3000/reset-password?token=test123'
     });
     console.log('Password reset email result:', result ? '✅ Success' : '❌ Failed');
-  } catch (error: any) {
-    console.error('❌ Password reset email error:', error?.message || error);
+  } catch (error: unknown) {
+    console.error('❌ Password reset email error:', error instanceof Error ? error.message : error);
   }
   
   console.log('');

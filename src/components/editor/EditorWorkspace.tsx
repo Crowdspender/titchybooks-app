@@ -2,7 +2,9 @@
 
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
+import { DraftPersistence, browserStorage, draftPointerStorage, type DocumentSeed } from "@/lib/editor/persistence";
+import { undoHistory, redoHistory } from "@/lib/editor/history";
 import { toast } from "sonner";
 import {
   PAGE_LABEL_DISPLAY,
@@ -69,6 +71,7 @@ interface UndoRedoState {
 
 interface PageRecord {
   id?: string;
+  revision: number;
   pageLabel: PageLabel;
   order: number;
   scene: EditorScene;
@@ -77,6 +80,8 @@ interface PageRecord {
 
 interface SubmissionRecord {
   id: string;
+  userId: string;
+  revision: number;
   title: string | null;
   status: string;
   mode: string;
@@ -93,6 +98,7 @@ function normalizePages(
     order: number;
     scene?: EditorScene;
     sceneJson?: string;
+    revision?: number;
   }>,
 ): Record<PageLabel, PageRecord> {
   const fallbackPages = createEmptySubmissionPageSeeds();
@@ -102,6 +108,7 @@ function normalizePages(
       {
         pageLabel: page.pageLabel,
         order: page.order,
+        revision: 0,
         scene: page.scene,
         sceneJson: page.sceneJson,
       },
@@ -119,6 +126,7 @@ function normalizePages(
 
     baseRecord[page.pageLabel] = {
       id: page.id,
+      revision: page.revision ?? 0,
       pageLabel: page.pageLabel,
       order: page.order,
       scene,
@@ -298,6 +306,7 @@ export default function EditorWorkspace({
   const [assets, setAssets] = useState<AssetRecord[]>([]);
   const [assetUploading, setAssetUploading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [navigating, setNavigating] = useState(false);
   const [history, setHistory] = useState<UndoRedoState>({
     past: [],
     present: null,
@@ -331,8 +340,9 @@ export default function EditorWorkspace({
   // Derived mode flags
   const isInstanceMode = submission?.templateId != null;
 
-  const savedPagesRef = useRef<Partial<Record<PageLabel, string>>>({});
-  const savedTitleRef = useRef("Untitled Titchybooks");
+  const persistenceRef = useRef<DraftPersistence | null>(null);
+  const frozenRef = useRef(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const submissionIdRef = useRef<string | null>(null);
 
   const activePage = pagesByLabel[activePageLabel];
@@ -499,7 +509,7 @@ export default function EditorWorkspace({
 
       // Prevent loading a non-draft submission as an active draft
       // This prevents submitted/deleted submissions from being reused
-      if (nextSubmission.status !== "DRAFT") {
+      if (nextSubmission.status !== "DRAFT" && !nextSubmission.isTemplate) {
         throw new Error("Submission is no longer in draft status");
       }
 
@@ -539,6 +549,7 @@ export default function EditorWorkspace({
               }>;
             };
 
+            if (cancelled) return;
             // Merge template-referenced assets into the local assets state so
             // that image elements in the template layer can resolve their
             // `assetId` via assetMap. Admin-owned assets would otherwise be
@@ -611,27 +622,50 @@ export default function EditorWorkspace({
         }
       }
 
+      if (cancelled) return;
+      let nextTitle = nextSubmission.title ?? "Untitled Titchybooks";
+      const seed = Object.fromEntries(PAGE_LABELS.map(label => [label, { value: nextPages[label].sceneJson, revision: nextPages[label].revision }])) as DocumentSeed;
+      seed.title = { value: nextTitle, revision: nextSubmission.revision };
+      const storage = browserStorage();
+      const persistence = new DraftPersistence(nextSubmission.id, nextSubmission.userId, seed,
+        async (part, value, revision) => {
+          const response = await fetch(`/api/submissions/${nextSubmission.id}${part === 'title' ? '' : `/pages/${part}`}`, {
+            method: part === 'title' ? 'PATCH' : 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(part === 'title' ? { title: value, revision } : { scene: JSON.parse(value), revision }),
+          });
+          const result = await response.json();
+          if (!response.ok) throw new Error(result.error || 'Could not save your changes');
+          return part === 'title' ? result.submission.revision : result.page.revision;
+        }, state => { if (!cancelled) { setSaveState(state); if (state === 'saved') setSaveError(null); } }, storage,
+        () => toast.warning('Local recovery storage is unavailable. Keep this tab open until changes are saved.'));
+      persistenceRef.current = persistence;
+      if (!storage) toast.warning('Local recovery storage is unavailable. Keep this tab open until changes are saved.');
+      const recovery = persistence.readRecovery();
+      if (recovery && confirm('Unsaved local changes were found. Restore them? Cancel discards the local recovery copy.')) {
+        persistence.restore(recovery);
+        nextTitle = recovery.title?.value ?? nextTitle;
+        for (const label of PAGE_LABELS) {
+          const part = recovery[label];
+          if (part) nextPages[label] = { ...nextPages[label], scene: JSON.parse(part.value), sceneJson: part.value };
+        }
+      } else if (recovery) persistence.clearRecovery();
       setSubmission(nextSubmission);
-      setTitle(nextSubmission.title ?? "Untitled Titchybooks");
+      setTitle(nextTitle);
       setPagesByLabel(nextPages);
       setTemplateElements(nextTemplateElements);
       setActivePageLabel("FRONT_COVER");
       setSelectedElementId(null);
       submissionIdRef.current = nextSubmission.id;
-      savedTitleRef.current = nextSubmission.title ?? "Untitled Titchybooks";
-      savedPagesRef.current = Object.fromEntries(
-        PAGE_LABELS.map((
-          pageLabel,
-        ) => [pageLabel, nextPages[pageLabel].sceneJson]),
-      ) as Partial<Record<PageLabel, string>>;
-      localStorage.setItem(ACTIVE_DRAFT_STORAGE_KEY, nextSubmission.id);
+      frozenRef.current = false;
+      draftPointerStorage.setItem(ACTIVE_DRAFT_STORAGE_KEY, nextSubmission.id);
 
       // Initialize history
       const initialSnapshot: HistoryEntry = {
         pageScenes: Object.fromEntries(
           PAGE_LABELS.map((label) => [label, nextPages[label].sceneJson]),
         ) as Record<PageLabel, string>,
-        title: nextSubmission.title ?? "Untitled Titchybooks",
+        title: nextTitle,
       };
       setHistory({
         past: [],
@@ -641,10 +675,7 @@ export default function EditorWorkspace({
       setCanUndo(false);
       setCanRedo(false);
 
-      // Generate initial thumbnails after a short delay
-      setTimeout(() => {
-        updateThumbnails();
-      }, 300);
+
     }
 
     async function boot() {
@@ -667,23 +698,28 @@ export default function EditorWorkspace({
         setCanUndo(false);
         setCanRedo(false);
         setSaveState("idle");
+        setSaveError(null);
+        setNavigating(false);
+        setSubmitting(false);
+        frozenRef.current = false;
         submissionIdRef.current = null;
-        savedTitleRef.current = "";
-        savedPagesRef.current = {};
+        persistenceRef.current?.dispose();
+        persistenceRef.current = null;
 
         await loadAssets();
+        if (cancelled) return;
 
         // If forceNew is true, always create a new draft and ignore localStorage
         if (forceNew) {
-          localStorage.removeItem(ACTIVE_DRAFT_STORAGE_KEY);
+          draftPointerStorage.removeItem(ACTIVE_DRAFT_STORAGE_KEY);
           const nextId = await createDraft();
           await loadSubmission(nextId);
         } // If submissionId is provided via URL, use it and clear localStorage
         else if (submissionId) {
-          localStorage.removeItem(ACTIVE_DRAFT_STORAGE_KEY);
+          draftPointerStorage.removeItem(ACTIVE_DRAFT_STORAGE_KEY);
           await loadSubmission(submissionId);
         } else {
-          const storedSubmissionId = localStorage.getItem(
+          const storedSubmissionId = draftPointerStorage.getItem(
             ACTIVE_DRAFT_STORAGE_KEY,
           );
           if (storedSubmissionId) {
@@ -696,7 +732,7 @@ export default function EditorWorkspace({
                   "Previous draft was submitted. Creating a new draft...",
                 );
               }
-              localStorage.removeItem(ACTIVE_DRAFT_STORAGE_KEY);
+              draftPointerStorage.removeItem(ACTIVE_DRAFT_STORAGE_KEY);
               const nextId = await createDraft();
               await loadSubmission(nextId);
             }
@@ -728,169 +764,79 @@ export default function EditorWorkspace({
 
     return () => {
       cancelled = true;
-      // Clear pending draft creation on unmount to allow fresh starts
-      // This prevents edge cases where a user navigates away during draft creation
-      // and immediately returns, which would otherwise reuse the old promise
-      pendingDraftCreation = null;
+      // Keep pending draft creation shared until it settles; dispose only this editor's saves.
+      persistenceRef.current?.dispose();
+      persistenceRef.current = null;
     };
   }, [forceNew, submissionId]);
 
   useEffect(() => {
-    if (!submission) {
-      return;
-    }
-
-    if (title === savedTitleRef.current) {
-      return;
-    }
-
-    const timeout = window.setTimeout(async () => {
-      try {
-        setSaveState("saving");
-        const response = await fetch(`/api/submissions/${submission.id}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ title }),
-        });
-
-        if (!response.ok) {
-          throw new Error("Could not save title");
-        }
-
-        savedTitleRef.current = title;
-        setSaveState("saved");
-      } catch (error) {
-        setSaveState("error");
-        toast.error(
-          error instanceof Error ? error.message : "Title save failed",
-        );
-      }
-    }, 700);
-
+    const persistence = persistenceRef.current;
+    if (!submission || !persistence || persistence.id !== submission.id) return;
+    persistence.set('title', title);
+    const timeout = window.setTimeout(() => { void persistence.flush('title').catch(error => reportSaveError(error, persistence)); }, 700);
     return () => window.clearTimeout(timeout);
   }, [submission, title]);
 
-  // Keyboard shortcuts for undo/redo
-  useEffect(() => {
-    function handleKeyDown(event: KeyboardEvent) {
-      if ((event.metaKey || event.ctrlKey) && event.key === "z") {
-        if (event.shiftKey) {
-          event.preventDefault();
-          redo();
-        } else {
-          event.preventDefault();
-          undo();
-        }
-      }
-    }
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [history]);
-
-  // Update thumbnails when page changes
-  useEffect(() => {
-    const timeout = setTimeout(() => {
-      updateThumbnails();
-    }, 500);
-    return () => clearTimeout(timeout);
-  }, [activePageLabel, pagesByLabel]);
-
-  useEffect(() => {
-    if (!submission) {
-      return;
-    }
-
-    const currentPage = pagesByLabel[activePageLabel];
-    const savedSceneJson = savedPagesRef.current[activePageLabel];
-    if (!currentPage || currentPage.sceneJson === savedSceneJson) {
-      return;
-    }
-
-    const timeout = window.setTimeout(async () => {
-      try {
-        setSaveState("saving");
-        const response = await fetch(
-          `/api/submissions/${submission.id}/pages/${activePageLabel}`,
-          {
-            method: "PUT",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ scene: currentPage.scene }),
-          },
-        );
-
-        if (!response.ok) {
-          throw new Error("Could not save page");
-        }
-
-        savedPagesRef.current[activePageLabel] = currentPage.sceneJson;
-        setSaveState("saved");
-      } catch (error) {
-        setSaveState("error");
-        toast.error(
-          error instanceof Error ? error.message : "Page save failed",
-        );
-      }
-    }, 800);
-
-    return () => window.clearTimeout(timeout);
-  }, [activePageLabel, pagesByLabel, submission]);
-
-  async function persistTitleImmediately() {
-    const submissionId = submissionIdRef.current;
-    if (!submissionId || title === savedTitleRef.current) {
-      return;
-    }
-
-    const response = await fetch(`/api/submissions/${submissionId}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title }),
-    });
-
-    if (!response.ok) {
-      throw new Error("Could not save title");
-    }
-
-    savedTitleRef.current = title;
+  function reportSaveError(error: unknown, origin?: DraftPersistence) {
+    if (origin && persistenceRef.current !== origin) return;
+    const message = error instanceof Error ? error.message : 'Save failed';
+    setSaveError(message);
+    toast.error(message);
   }
 
-  async function persistPageImmediately(pageLabel: PageLabel) {
-    const submissionId = submissionIdRef.current;
-    const page = pagesByLabel[pageLabel];
-
-    if (!submissionId || !page) {
-      return;
+  const onHistoryKey = useEffectEvent((event: KeyboardEvent) => {
+    if (frozenRef.current || (event.target instanceof HTMLElement && event.target.closest('input, textarea, [contenteditable="true"]'))) return;
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'z') {
+      event.preventDefault();
+      if (event.shiftKey) redo(); else undo();
     }
+  });
+  // Keyboard shortcuts for undo/redo
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => onHistoryKey(event);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
-    if (page.sceneJson === savedPagesRef.current[pageLabel]) {
-      return;
-    }
+  const refreshThumbnails = useEffectEvent(() => updateThumbnails());
+  // Update thumbnails when page changes
+  useEffect(() => {
+    const timeout = setTimeout(() => refreshThumbnails(), 500);
+    return () => clearTimeout(timeout);
+  }, [pagesByLabel, assets]);
 
-    try {
-      setSaveState("saving");
-      const response = await fetch(
-        `/api/submissions/${submissionId}/pages/${pageLabel}`,
-        {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ scene: page.scene }),
-        },
-      );
+  useEffect(() => {
+    const persistence = persistenceRef.current;
+    if (!submission || !persistence || persistence.id !== submission.id) return;
+    for (const label of PAGE_LABELS) persistence.set(label, pagesByLabel[label].sceneJson);
+    const timeout = window.setTimeout(() => { void persistence.flushAll().catch(error => reportSaveError(error, persistence)); }, 800);
+    return () => window.clearTimeout(timeout);
+  }, [pagesByLabel, submission]);
 
-      if (!response.ok) {
-        throw new Error("Could not save page");
-      }
+  useEffect(() => {
+    const beforeUnload = (event: BeforeUnloadEvent) => {
+      if (persistenceRef.current?.dirty) { event.preventDefault(); event.returnValue = ''; }
+    };
+    const reconnect = () => {
+      const persistence = persistenceRef.current;
+      void persistence?.flushAll().catch(error => reportSaveError(error, persistence));
+    };
+    window.addEventListener('beforeunload', beforeUnload);
+    window.addEventListener('online', reconnect);
+    return () => { window.removeEventListener('beforeunload', beforeUnload); window.removeEventListener('online', reconnect); };
+  }, []);
 
-      savedPagesRef.current[pageLabel] = page.sceneJson;
-      setSaveState("saved");
-    } catch (error) {
-      setSaveState("error");
-      toast.error(error instanceof Error ? error.message : "Page save failed");
-    }
+  function syncDocument() {
+    const persistence = persistenceRef.current;
+    if (!persistence || persistence.id !== submission?.id) throw new Error('Draft is not ready');
+    persistence.set('title', title);
+    for (const label of PAGE_LABELS) persistence.set(label, pagesByLabel[label].sceneJson);
+    return persistence;
   }
 
   function updateScene(scene: EditorScene) {
+    if (frozenRef.current) return;
     const normalizedScene = normalizeSceneZIndexes(scene);
     const sceneJson = JSON.stringify(normalizedScene);
 
@@ -932,10 +878,11 @@ export default function EditorWorkspace({
   }
 
   function undo() {
-    if (history.past.length === 0 || !history.present) return;
-
-    const previous = history.past[history.past.length - 1];
-    const newPast = history.past.slice(0, -1);
+    if (frozenRef.current) return;
+    const nextHistory = undoHistory(history, createSnapshot());
+    if (!nextHistory?.present) return;
+    const previous = nextHistory.present;
+    const newPast = nextHistory.past;
 
     // Restore the previous scene
     const restoredPages = Object.fromEntries(
@@ -954,21 +901,18 @@ export default function EditorWorkspace({
 
     setPagesByLabel(restoredPages);
     setTitle(previous.title);
-    setHistory({
-      past: newPast,
-      present: previous,
-      future: [history.present, ...history.future],
-    });
+    setHistory(nextHistory);
 
     setCanUndo(newPast.length > 0);
     setCanRedo(true);
   }
 
   function redo() {
-    if (history.future.length === 0 || !history.present) return;
-
-    const next = history.future[0];
-    const newFuture = history.future.slice(1);
+    if (frozenRef.current) return;
+    const nextHistory = redoHistory(history, createSnapshot());
+    if (!nextHistory?.present) return;
+    const next = nextHistory.present;
+    const newFuture = nextHistory.future;
 
     // Restore the next scene
     const restoredPages = Object.fromEntries(
@@ -987,11 +931,7 @@ export default function EditorWorkspace({
 
     setPagesByLabel(restoredPages);
     setTitle(next.title);
-    setHistory({
-      past: [...history.past, history.present],
-      present: next,
-      future: newFuture,
-    });
+    setHistory(nextHistory);
 
     setCanUndo(true);
     setCanRedo(newFuture.length > 0);
@@ -1345,17 +1285,17 @@ export default function EditorWorkspace({
     setSelectedElementId(nextElement.id);
   }
 
-  function handleAiApplyText(
+  async function handleAiApplyText(
     targetPage: PageLabel,
     text: string,
     style?: AiSuggestion["style"],
   ) {
-    // Switch to the target page if needed
+    if (frozenRef.current) return false;
+    const origin = persistenceRef.current;
     if (targetPage !== activePageLabel) {
-      // Persist current page before switching
-      void persistPageImmediately(activePageLabel);
-      setActivePageLabel(targetPage);
+      if (!await handlePageSelect(targetPage)) return false;
     }
+    if (!origin || persistenceRef.current !== origin) return false;
 
     // Build the text element using the target page's scene
     const targetPageRecord = pagesByLabel[targetPage];
@@ -1413,6 +1353,7 @@ export default function EditorWorkspace({
     }
 
     toast.success(`Text added to ${PAGE_LABEL_DISPLAY[targetPage]}`);
+    return true;
   }
 
   async function handleAssetUpload(event: React.ChangeEvent<HTMLInputElement>) {
@@ -1529,25 +1470,34 @@ export default function EditorWorkspace({
   }
 
   async function handlePageSelect(pageLabel: PageLabel) {
-    if (pageLabel === activePageLabel) {
-      return;
+    if (frozenRef.current) return false;
+    if (pageLabel === activePageLabel) return true;
+    const persistence = syncDocument();
+    frozenRef.current = true;
+    setNavigating(true);
+    try {
+      await persistence.flush(activePageLabel);
+      if (persistenceRef.current !== persistence) return false;
+      setActivePageLabel(pageLabel);
+      setSelectedElementId(null);
+      return true;
+    } catch (error) { reportSaveError(error, persistence); return false; }
+    finally {
+      if (persistenceRef.current === persistence) { frozenRef.current = false; setNavigating(false); }
     }
-
-    await persistPageImmediately(activePageLabel);
-    setActivePageLabel(pageLabel);
-    setSelectedElementId(null);
   }
 
   async function handleSubmit(force = false) {
-    if (!submission || submitting) {
+    if (!submission || frozenRef.current) {
       return;
     }
 
+    const persistence = syncDocument();
     try {
+      frozenRef.current = true;
       setSubmitting(true);
-      setSaveState("saving");
-      await persistTitleImmediately();
-      await persistPageImmediately(activePageLabel);
+      await persistence.flushAll();
+      if (persistenceRef.current !== persistence) return;
 
       const response = await fetch(`/api/submissions/${submission.id}/submit`, {
         method: "POST",
@@ -1555,6 +1505,7 @@ export default function EditorWorkspace({
         body: JSON.stringify({ force }),
       });
 
+      if (persistenceRef.current !== persistence) return;
       if (!response.ok) {
         const data = (await response.json()) as {
           error?: string;
@@ -1579,8 +1530,9 @@ export default function EditorWorkspace({
               "Submit anyway?",
           );
           if (proceed) {
+            frozenRef.current = false;
             setSubmitting(false);
-            return handleSubmit(true);
+            return await handleSubmit(true);
           }
           setSaveState("idle");
           return;
@@ -1593,7 +1545,8 @@ export default function EditorWorkspace({
         dpiWarnings?: Array<{ severity: string }>;
       };
 
-      localStorage.removeItem(ACTIVE_DRAFT_STORAGE_KEY);
+      if (persistenceRef.current !== persistence) return;
+      draftPointerStorage.removeItem(ACTIVE_DRAFT_STORAGE_KEY);
 
       const softWarnings = result.dpiWarnings?.filter((w) =>
         w.severity === "warning"
@@ -1608,18 +1561,21 @@ export default function EditorWorkspace({
         );
       }
 
+      persistenceRef.current?.clearRecovery();
       router.push("/dashboard");
       router.refresh();
     } catch (error) {
-      setSaveState("error");
-      toast.error(error instanceof Error ? error.message : "Submit failed");
+      if (persistenceRef.current === persistence) {
+        setSaveState("error");
+        reportSaveError(error, persistence);
+      }
     } finally {
-      setSubmitting(false);
+      if (persistenceRef.current === persistence) { frozenRef.current = false; setSubmitting(false); }
     }
   }
 
   async function handleDetachFromTemplate() {
-    if (!submission) return;
+    if (!submission || frozenRef.current) return;
 
     if (
       !confirm(
@@ -1629,25 +1585,36 @@ export default function EditorWorkspace({
       return;
     }
 
+    const persistence = syncDocument();
     try {
+      frozenRef.current = true;
+      setSubmitting(true);
+      await persistence.flushAll();
+      if (persistenceRef.current !== persistence) return;
       const response = await fetch(
         `/api/submissions/${submission.id}/detach-from-template`,
         {
           method: "POST",
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ revision: persistence.revision('title'), pageRevisions: Object.fromEntries(PAGE_LABELS.map(label => [label, persistence.revision(label)])) }),
         },
       );
 
+      if (persistenceRef.current !== persistence) return;
       if (!response.ok) {
         throw new Error("Could not detach from template");
       }
 
       toast.success("Template elements unlocked! Reloading...");
       // Reload the submission to get updated state
-      localStorage.removeItem(ACTIVE_DRAFT_STORAGE_KEY);
-      router.push(`/create?submissionId=${submission.id}`);
-      router.refresh();
+      draftPointerStorage.removeItem(ACTIVE_DRAFT_STORAGE_KEY);
+      persistence.clearRecovery();
+      // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- Detach must reboot same-draft client state and revision tracking; router navigation preserves it.
+      window.location.assign(`/create?submissionId=${submission.id}`);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Detach failed");
+      reportSaveError(error, persistence);
+    } finally {
+      if (persistenceRef.current === persistence) { frozenRef.current = false; setSubmitting(false); }
     }
   }
 
@@ -1669,12 +1636,20 @@ export default function EditorWorkspace({
   return (
     <div
       className="min-h-[calc(100vh-3.5rem)] px-4 py-6"
+      inert={submitting || navigating}
+      aria-busy={submitting || navigating}
       style={{
         background:
           "linear-gradient(180deg, var(--color-primary-muted) 0%, var(--color-background) 40%)",
       }}
     >
       <div className="mx-auto flex max-w-[1500px] flex-col gap-5">
+        {saveError && (
+          <div role="alert" className="card p-4" style={{ color: 'var(--color-error)' }}>
+            <p>{saveError}</p>
+            <button className="btn btn-outline btn-sm mt-2" onClick={() => { const persistence = syncDocument(); void persistence.flushAll().catch(error => reportSaveError(error, persistence)); }}>Retry saving</button>
+          </div>
+        )}
         {/* Template instance banner */}
         {isInstanceMode && (
           <div
@@ -1739,7 +1714,9 @@ export default function EditorWorkspace({
               </p>
               <input
                 value={title === "Untitled Titchybooks" ? "" : title}
-                onChange={(event) => setTitle(event.target.value)}
+                onChange={(event) => { if (!frozenRef.current) { pushHistory(); setTitle(event.target.value); } }}
+                maxLength={120}
+                aria-label="Book title"
                 placeholder="Enter your book title"
                 className="w-full max-w-xl border-none bg-transparent p-0 text-3xl font-semibold tracking-tight outline-none"
                 style={{ color: "var(--color-text)" }}
@@ -1755,6 +1732,8 @@ export default function EditorWorkspace({
             <div className="flex flex-wrap items-center gap-3">
               <span
                 className="badge"
+                role="status"
+                aria-live="polite"
                 style={{
                   background: saveState === "saving"
                     ? "var(--color-accent-light)"
@@ -1915,6 +1894,8 @@ export default function EditorWorkspace({
                       key={pageLabel}
                       type="button"
                       onClick={() => void handlePageSelect(pageLabel)}
+                      aria-label={`Edit ${PAGE_LABEL_DISPLAY[pageLabel]}`}
+                      aria-current={isActive ? 'page' : undefined}
                       className="w-full rounded-xl p-3 text-left transition"
                       style={{
                         border: isActive
@@ -2259,6 +2240,7 @@ export default function EditorWorkspace({
       </div>
 
       <AiChatPanel
+        key={submission?.id ?? 'loading'}
         isOpen={aiPanelOpen}
         onToggle={() => setAiPanelOpen((prev) => !prev)}
         bookContext={aiBookContext}

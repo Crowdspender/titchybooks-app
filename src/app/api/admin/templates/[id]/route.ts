@@ -1,9 +1,9 @@
 ﻿import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
-import { SubmissionMode, SubmissionStatus } from "@/lib/constants";
 import { parseEditorScene } from "@/lib/editor/schema";
 import { z } from "zod";
+import { errorResponse, lockSubmission, SubmissionError } from "@/lib/editor/submission-store";
 
 export const dynamic = "force-dynamic";
 
@@ -111,6 +111,7 @@ export async function PUT(
             ? undefined
             : parsed.data.title || null,
         status: parsed.data.status,
+        revision: parsed.data.title === undefined ? undefined : { increment: 1 },
       },
     });
 
@@ -144,22 +145,14 @@ export async function DELETE(
     return NextResponse.json({ error: "Template not found" }, { status: 404 });
   }
 
-  // Check for instances
-  const instanceCount = await prisma.submission.count({
-    where: { templateId: id },
-  });
-
-  // Delete template elements first (cascade should handle this, but be explicit)
-  await prisma.templateElement.deleteMany({
-    where: { templateId: id },
-  });
-
-  await prisma.submission.delete({
-    where: { id },
-  });
-
-  return NextResponse.json({
-    success: true,
-    deletedInstanceCount: instanceCount,
-  });
+  try {
+    await prisma.$transaction(async tx => {
+      const template = await lockSubmission(tx, id);
+      if (!template.isTemplate) throw new SubmissionError(404, 'Template not found');
+      const instanceCount = await tx.submission.count({ where: { templateId: id } });
+      if (instanceCount) throw new SubmissionError(409, 'Templates with linked drafts cannot be deleted');
+      await tx.submission.delete({ where: { id } });
+    });
+    return NextResponse.json({ success: true, deletedInstanceCount: 0 });
+  } catch (error) { return errorResponse(error); }
 }

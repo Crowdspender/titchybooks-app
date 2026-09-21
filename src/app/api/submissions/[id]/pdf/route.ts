@@ -1,6 +1,7 @@
 ﻿import { NextResponse } from "next/server";
 import { auth } from "@/auth";
-import { generateTitchybookPdf } from "@/lib/pdf/generate";
+import { enqueueRenderJob } from "@/lib/pdf/render-job";
+import { errorResponse } from "@/lib/editor/submission-store";
 
 export const dynamic = "force-dynamic";
 
@@ -17,13 +18,9 @@ export async function POST(
   const { id } = await params;
 
   try {
-    const pdfS3Key = await generateTitchybookPdf(id);
-    return NextResponse.json({ success: true, pdfS3Key });
-  } catch (err) {
-    console.error("PDF generation error:", err);
-    return NextResponse.json(
-      { error: "PDF generation failed" },
-      { status: 500 }
-    );
+    const result = await enqueueRenderJob(id, { id: session.user.id, role: session.user.role }, { retry: true });
+    return NextResponse.json({ success: true, ...result }, { status: 202 });
+  } catch (error) {
+    return errorResponse(error);
   }
 }

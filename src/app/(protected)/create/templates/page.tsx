@@ -160,6 +160,8 @@ export default function TemplateGallery() {
                                 >
                                     {template.previewImage
                                         ? (
+                                            // Signed preview URLs must bypass the image optimization proxy.
+                                            // eslint-disable-next-line @next/next/no-img-element
                                             <img
                                                 src={template.previewImage}
                                                 alt={template.title ||

@@ -115,6 +115,7 @@ export default function PropertiesPanel({
         <div>
           <FieldLabel>Text</FieldLabel>
           <textarea
+            aria-label="Element text"
             value={selectedElement.text}
             onChange={(event) => {
               onChangeElement(selectedElement.id, (element) =>
@@ -370,6 +371,7 @@ export default function PropertiesPanel({
             <div>
               <FieldLabel>Text</FieldLabel>
               <textarea
+                aria-label="Element text"
                 value={selectedElement.text}
                 onChange={(event) => {
                   onChangeElement(selectedElement.id, (element) =>

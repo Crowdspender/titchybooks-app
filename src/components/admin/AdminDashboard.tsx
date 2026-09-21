@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import StatusBadge from "@/components/submissions/StatusBadge";
+import RenderProgress from "@/components/submissions/RenderProgress";
 
 interface PagePreview {
   pageLabel: string;
@@ -94,7 +95,7 @@ export default function AdminDashboard() {
         className="flex gap-2 mb-6 pb-6"
         style={{ borderBottom: "1px solid var(--color-border)" }}
       >
-        {["", "PENDING", "APPROVED", "REJECTED"].map((s) => (
+        {["", "PROCESSING", "FAILED", "PENDING", "APPROVED", "REJECTED"].map((s) => (
           <button
             key={s}
             onClick={() => setFilter(s)}
@@ -232,6 +233,7 @@ export default function AdminDashboard() {
                         </td>
                         <td className="px-5 py-4">
                           <StatusBadge status={sub.status} />
+                                                    <RenderProgress submissionId={sub.id} status={sub.status} onChange={() => setRefreshKey(k => k + 1)} />
                         </td>
                         <td className="px-5 py-4">
                           {sub.pdfDownloadUrl
@@ -322,6 +324,8 @@ export default function AdminDashboard() {
                                   >
                                     {page.previewUrl
                                       ? (
+                                        // Signed preview URLs are fetched directly without an image optimizer.
+                                        // eslint-disable-next-line @next/next/no-img-element
                                         <img
                                           src={page.previewUrl}
                                           alt={page.pageLabel}
