@@ -283,7 +283,7 @@ RG --> PR
 - [route.ts (reset-password):1-65](file://src/app/api/auth/reset-password/route.ts#L1-L65)
 
 ## Performance Considerations
-- Email sending is synchronous within each route handler; consider offloading to a background job queue for high-throughput scenarios to reduce latency.
+- Email sending is awaited inside the routes that call it (register and forgot-password), but provider failures are handled independently of the route response: the register route wraps `sendWelcomeEmail` in try/catch and still returns 201 on failure, and the forgot-password route logs a failed `sendPasswordResetEmail` call and still returns success. The reset-password route sends no email. Consider offloading to a background job queue for high-throughput scenarios to reduce handler latency.
 - Avoid heavy template rendering inside hot paths; pre-rendering or caching can help if templates grow complex.
 - Use connection pooling and efficient queries in database interactions already managed by Prisma.
 

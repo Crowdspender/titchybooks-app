@@ -1,7 +1,6 @@
 "use client";
 
 export default function GlobalError({
-  error,
   reset,
 }: {
   error: Error & { digest?: string };
@@ -72,7 +71,8 @@ export default function GlobalError({
               lineHeight: 1.6,
             }}
           >
-            {error.message || "An unexpected error occurred. Please try again."}
+            {/* Fixed user-safe copy; raw error details stay in server logs (digest) */}
+            An unexpected error occurred. Please try again.
           </p>
 
           <button

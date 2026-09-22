@@ -3,12 +3,15 @@
 <cite>
 **Referenced Files in This Document**
 - [auth.ts](file://src/auth.ts)
-- [middleware.ts](file://src/middleware.ts)
+- [proxy.ts](file://src/proxy.ts)
 - [route.ts](file://src/app/api/auth/[...nextauth]/route.ts)
 - [LoginForm.tsx](file://src/components/auth/LoginForm.tsx)
 - [RegisterForm.tsx](file://src/components/auth/RegisterForm.tsx)
 - [LoginPage.tsx](file://src/app/(auth)/login/page.tsx)
 - [RegisterPage.tsx](file://src/app/(auth)/register/page.tsx)
+- [DashboardPage.tsx](file://src/app/(protected)/dashboard/page.tsx)
+- [CreatePage.tsx](file://src/app/(protected)/create/page.tsx)
+- [AdminPage.tsx](file://src/app/(admin)/admin/page.tsx)
 - [prisma.ts](file://src/lib/prisma.ts)
 - [schema.prisma](file://prisma/schema.prisma)
 - [package.json](file://package.json)
@@ -17,10 +20,11 @@
 
 ## Update Summary
 **Changes Made**
-- Updated NextAuth v5 trustHost configuration section to reflect proper production URL resolution
-- Added documentation for force-dynamic rendering implementation across API routes
-- Enhanced security considerations with updated configuration details
-- Updated architecture diagrams to include route handler patterns
+- Updated authentication guard implementation from middleware.ts to proxy.ts for Next.js 16 compatibility
+- Enhanced documentation for NextAuth v5 proxy-based route protection
+- Updated architecture diagrams to reflect the new proxy pattern
+- Added comprehensive coverage of protected route configuration and behavior
+- Updated troubleshooting guide with proxy-specific considerations
 
 ## Table of Contents
 1. [Introduction](#introduction)
@@ -34,12 +38,12 @@
 9. [Conclusion](#conclusion)
 
 ## Introduction
-This document explains the NextAuth configuration in Titchybook Creator, focusing on the JWT strategy, custom credentials provider, TypeScript module augmentation, and callback functions for token-to-session mapping and user role propagation. It also covers the NextAuth configuration object structure, provider credentials definition, authentication pages setup, and security considerations for JWT implementation with NextAuth v5 trustHost configuration and force-dynamic rendering.
+This document explains the NextAuth configuration in Titchybook Creator, focusing on the JWT strategy, custom credentials provider, TypeScript module augmentation, and callback functions for token-to-session mapping and user role propagation. It covers the NextAuth configuration object structure, provider credentials definition, authentication pages setup, and security considerations for JWT implementation with NextAuth v5 trustHost configuration and Next.js 16 proxy-based route protection.
 
 ## Project Structure
 The authentication system spans several layers:
 - NextAuth configuration with v5 trustHost settings and callbacks
-- Middleware for protected routes
+- Proxy-based route protection for Next.js 16 compatibility
 - Route handlers with force-dynamic rendering
 - Client-side login form using next-auth/react
 - Registration API endpoint
@@ -54,7 +58,7 @@ UI_Register["RegisterForm.tsx"]
 end
 subgraph "Server"
 NA_Config["auth.ts<br/>NextAuth v5 config"]
-MW["middleware.ts<br/>Protected routes"]
+PROXY["proxy.ts<br/>Route Protection"]
 API_Auth["/api/auth/[...nextauth]<br/>Route Handler"]
 API_Reg["/api/register<br/>POST"]
 end
@@ -68,12 +72,12 @@ API_Auth --> NA_Config
 API_Reg --> PRISMA_LIB
 PRISMA_LIB --> SCHEMA
 NA_Config --> PRISMA_LIB
-MW --> NA_Config
+PROXY --> NA_Config
 ```
 
 **Diagram sources**
 - [auth.ts:27-89](file://src/auth.ts#L27-L89)
-- [middleware.ts:1-15](file://src/middleware.ts#L1-L15)
+- [proxy.ts:1-15](file://src/proxy.ts#L1-L15)
 - [route.ts:1-4](file://src/app/api/auth/[...nextauth]/route.ts#L1-L4)
 - [RegisterForm.tsx:14-39](file://src/components/auth/RegisterForm.tsx#L14-L39)
 - [prisma.ts:1-10](file://src/lib/prisma.ts#L1-L10)
@@ -81,7 +85,7 @@ MW --> NA_Config
 
 **Section sources**
 - [auth.ts:27-89](file://src/auth.ts#L27-L89)
-- [middleware.ts:1-15](file://src/middleware.ts#L1-L15)
+- [proxy.ts:1-15](file://src/proxy.ts#L1-L15)
 - [route.ts:1-4](file://src/app/api/auth/[...nextauth]/route.ts#L1-L4)
 - [RegisterForm.tsx:14-39](file://src/components/auth/RegisterForm.tsx#L14-L39)
 - [prisma.ts:1-10](file://src/lib/prisma.ts#L1-L10)
@@ -89,9 +93,9 @@ MW --> NA_Config
 
 ## Core Components
 - NextAuth configuration with JWT strategy, credentials provider, and v5 trustHost settings
+- Proxy-based route protection for Next.js 16 compatibility
 - Module augmentation for TypeScript to include user role in Session and JWT
 - Callbacks for JWT and session mapping
-- Middleware enforcing protected routes
 - Route handlers with force-dynamic rendering for API endpoints
 - Client login form invoking the credentials provider
 - Registration API endpoint with Zod validation and bcrypt hashing
@@ -99,18 +103,19 @@ MW --> NA_Config
 **Section sources**
 - [auth.ts:6-25](file://src/auth.ts#L6-L25)
 - [auth.ts:27-89](file://src/auth.ts#L27-L89)
-- [middleware.ts:1-15](file://src/middleware.ts#L1-L15)
+- [proxy.ts:1-15](file://src/proxy.ts#L1-L15)
 - [route.ts:1-4](file://src/app/api/auth/[...nextauth]/route.ts#L1-L4)
 - [LoginForm.tsx:14-33](file://src/components/auth/LoginForm.tsx#L14-L33)
 - [RegisterForm.tsx:14-39](file://src/components/auth/RegisterForm.tsx#L14-L39)
 
 ## Architecture Overview
-The authentication flow integrates client-side login, NextAuth's credentials provider with v5 trustHost configuration, server-side user validation via Prisma, and force-dynamic rendering for API routes. Roles are propagated from the database through the JWT to the session.
+The authentication flow integrates client-side login, NextAuth's credentials provider with v5 trustHost configuration, server-side user validation via Prisma, and proxy-based route protection for Next.js 16 compatibility. Roles are propagated from the database through the JWT to the session.
 
 ```mermaid
 sequenceDiagram
 participant C as "Client Browser"
 participant L as "LoginForm.tsx"
+participant P as "Proxy (proxy.ts)"
 participant RH as "Route Handler<br/>[...nextauth]"
 participant N as "NextAuth (auth.ts)"
 participant P as "Prisma (prisma.ts)"
@@ -130,10 +135,12 @@ N-->>C : JWT in cookie/session
 else Error
 N-->>L : {error}
 end
+Note over P : Protected routes (/dashboard,<br/>/create, /admin) require<br/>authenticated session
 ```
 
 **Diagram sources**
 - [LoginForm.tsx:19-32](file://src/components/auth/LoginForm.tsx#L19-L32)
+- [proxy.ts:3-14](file://src/proxy.ts#L3-L14)
 - [route.ts:1-4](file://src/app/api/auth/[...nextauth]/route.ts#L1-L4)
 - [auth.ts:35-89](file://src/auth.ts#L35-L89)
 - [prisma.ts:1-10](file://src/lib/prisma.ts#L1-L10)
@@ -253,22 +260,49 @@ BuildUser --> End
 **Section sources**
 - [auth.ts:61](file://src/auth.ts#L61)
 
-### Force-Dynamic Rendering for API Routes
-- All API routes implement `export const dynamic = "force-dynamic"` to ensure runtime execution.
-- This prevents static generation and ensures proper authentication checks at request time.
-- Applied consistently across all API endpoints including orders, submissions, assets, and admin routes.
+### Next.js 16 Proxy-Based Route Protection
+**Updated** The authentication system now uses NextAuth v5's built-in proxy functionality instead of traditional middleware.ts for Next.js 16 compatibility.
 
-Security benefits:
-- Prevents caching of authenticated responses
-- Ensures fresh session validation on each request
-- Maintains proper authorization checks for protected endpoints
+Key features:
+- **Proxy Configuration**: Routes are protected via the `proxy.ts` file using NextAuth's `auth` export as a proxy.
+- **Protected Routes**: The following routes require authentication:
+  - `/dashboard` and all nested paths (`/dashboard/:path*`)
+  - `/create` and all nested paths (`/create/:path*`)
+  - `/admin` and all nested paths (`/admin/:path*`)
+- **Automatic Redirection**: Unauthenticated requests are redirected to `/login` with the original path preserved in `callbackUrl`.
+- **Prefetch Support**: Works correctly with Next.js prefetch requests and RSC (React Server Components).
+
+How it works:
+- The proxy intercepts requests to protected routes before they reach the page components.
+- If no authenticated session exists, returns a 307 redirect to `/login?callbackUrl=/original-path`.
+- If authenticated, allows the request to proceed to the protected page.
+- Maintains full compatibility with Next.js routing patterns and prefetch optimization.
+
+```mermaid
+sequenceDiagram
+participant B as "Browser"
+participant P as "Proxy (proxy.ts)"
+participant A as "NextAuth (auth.ts)"
+participant PG as "Protected Page"
+B->>P : Request /dashboard
+P->>A : Check authentication
+alt No Session
+A-->>P : Unauthorized
+P-->>B : 307 Redirect to /login?callbackUrl=/dashboard
+else Has Session
+A-->>P : Authorized
+P-->>B : Continue to /dashboard
+B->>PG : Render dashboard page
+end
+```
+
+**Diagram sources**
+- [proxy.ts:1-15](file://src/proxy.ts#L1-L15)
+- [auth.ts:68-74](file://src/auth.ts#L68-L74)
 
 **Section sources**
-- [route.ts:6](file://src/app/api/admin/orders/route.ts#L6)
-- [route.ts:8](file://src/app/api/assets/route.ts#L8)
-- [route.ts:10](file://src/app/api/orders/route.ts#L10)
-- [route.ts:13](file://src/app/api/submissions/route.ts#L13)
-- [route.ts:4](file://src/app/api/vault/route.ts#L4)
+- [proxy.ts:1-15](file://src/proxy.ts#L1-L15)
+- [auth.ts:68-74](file://src/auth.ts#L68-L74)
 
 ### Security Considerations for JWT Implementation
 - Keep payload minimal (id, role) to reduce token size.
@@ -276,14 +310,14 @@ Security benefits:
 - Ensure HTTPS in production to protect cookies/tokens.
 - Consider setting maxAge and rotating tokens for stronger security.
 - **Updated**: TrustHost configuration enables proper URL resolution in production environments.
-- **Updated**: Force-dynamic rendering ensures runtime authentication checks for all API routes.
+- **Updated**: Proxy-based route protection provides robust security for Next.js 16 applications.
 
 ## Dependency Analysis
 - NextAuth depends on:
   - Prisma for user lookup
   - bcryptjs for password hashing/verification
   - Zod for registration validation
-- Middleware enforces protected routes using NextAuth's auth export.
+- Proxy enforces protected routes using NextAuth's auth export.
 - Client components depend on next-auth/react for sign-in actions.
 - Route handlers use NextAuth v5 pattern with exported handlers.
 
@@ -295,24 +329,24 @@ REG_FORM["RegisterForm.tsx"] --> ZOD["Zod schema"]
 REG_API["/api/register/route.ts"] --> PRISMA
 REG_API --> BC
 LOGIN_UI["LoginForm.tsx"] --> AUTH
-MW["middleware.ts"] --> AUTH
+PROXY["proxy.ts"] --> AUTH
 ROUTE_HANDLER["[/...nextauth] route.ts"] --> AUTH
 ```
 
 **Diagram sources**
 - [auth.ts:1-4](file://src/auth.ts#L1-L4)
+- [proxy.ts:1-15](file://src/proxy.ts#L1-L15)
 - [prisma.ts:1-10](file://src/lib/prisma.ts#L1-L10)
 - [RegisterForm.tsx:14-39](file://src/components/auth/RegisterForm.tsx#L14-L39)
 - [LoginForm.tsx:3,19-32](file://src/components/auth/LoginForm.tsx#L3,L19-L32)
-- [middleware.ts:1](file://src/middleware.ts#L1)
 - [route.ts:1-4](file://src/app/api/auth/[...nextauth]/route.ts#L1-L4)
 
 **Section sources**
 - [auth.ts:1-4](file://src/auth.ts#L1-L4)
+- [proxy.ts:1-15](file://src/proxy.ts#L1-L15)
 - [prisma.ts:1-10](file://src/lib/prisma.ts#L1-L10)
 - [RegisterForm.tsx:14-39](file://src/components/auth/RegisterForm.tsx#L14-L39)
 - [LoginForm.tsx:3,19-32](file://src/components/auth/LoginForm.tsx#L3,L19-L32)
-- [middleware.ts:1](file://src/middleware.ts#L1)
 - [route.ts:1-4](file://src/app/api/auth/[...nextauth]/route.ts#L1-L4)
 
 ## Performance Considerations
@@ -320,7 +354,8 @@ ROUTE_HANDLER["[/...nextauth] route.ts"] --> AUTH
 - Keep token payload small to minimize network overhead.
 - Consider adding rate limiting for authentication endpoints.
 - Use database indexes on email for efficient user lookup.
-- **Updated**: Force-dynamic rendering ensures optimal performance for authenticated API routes while maintaining security.
+- **Updated**: Proxy-based route protection provides optimal performance for Next.js 16 while maintaining security.
+- **Updated**: Built-in proxy eliminates middleware overhead and improves request processing speed.
 
 ## Troubleshooting Guide
 Common issues and resolutions:
@@ -336,12 +371,17 @@ Common issues and resolutions:
 - **Updated**: Production URL issues:
   - Ensure NEXTAUTH_URL environment variable is properly configured.
   - TrustHost configuration handles URL resolution in different deployment environments.
+- **Updated**: Proxy-related issues:
+  - Protected routes returning 307 redirects: Ensure user is authenticated before accessing protected routes.
+  - Prefetch requests being blocked: The proxy correctly handles Next.js prefetch requests with proper redirect responses.
+  - Route matching issues: Verify that protected routes match the exact patterns defined in proxy.ts matcher array.
 
 **Section sources**
 - [LoginForm.tsx:27-32](file://src/components/auth/LoginForm.tsx#L27-L32)
 - [auth.ts:35-58](file://src/auth.ts#L35-L58)
 - [RegisterForm.tsx:28-32](file://src/components/auth/RegisterForm.tsx#L28-L32)
-- [RegisterForm.tsx:34-38](file://src/components/auth/RegisterForm.tsx#L34-L38)
+- [RegisterForm.tsx:34-38](file://src/components/auth/RegisterForm.tsx#L34-38)
+- [proxy.ts:3-14](file://src/proxy.ts#L3-L14)
 
 ## Conclusion
-Titchybook Creator implements a secure, JWT-backed authentication system using NextAuth v5 with enhanced trustHost configuration for proper production URL resolution. The credentials provider validates users against the database, and module augmentation ensures type-safe access to user roles. Middleware protects routes, while route handlers with force-dynamic rendering ensure runtime authentication checks. Client components integrate seamlessly with the provider. For production, review token expiration and consider additional security measures such as maxAge and rotation. The combination of trustHost configuration and force-dynamic rendering provides robust security and reliability for authenticated API endpoints.
+Titchybook Creator implements a secure, JWT-backed authentication system using NextAuth v5 with enhanced trustHost configuration for proper production URL resolution and Next.js 16 proxy-based route protection. The credentials provider validates users against the database, and module augmentation ensures type-safe access to user roles. The proxy-based approach provides robust route protection for `/dashboard`, `/create`, and `/admin` routes while maintaining full compatibility with Next.js 16 features including prefetch requests and React Server Components. Client components integrate seamlessly with the provider. For production, review token expiration and consider additional security measures such as maxAge and rotation. The combination of trustHost configuration and proxy-based route protection provides robust security and reliability for authenticated API endpoints and protected routes.

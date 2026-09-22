@@ -99,7 +99,7 @@ async function frozenInput(job: ClaimedJob) {
     if (!await fence(tx, job)) throw new Error('Lease lost');
     const submission = await tx.submission.findUniqueOrThrow({ where: { id: job.submissionId } });
     const owner = await tx.user.findUniqueOrThrow({ where: { id: submission.userId } });
-    const { input } = await captureSnapshot(tx, submission, { id: owner.id, role: owner.role });
+    const { input } = await captureSnapshot(tx, submission, { id: owner.id, role: owner.role }, true);
     await tx.renderJob.update({ where: { id: job.id }, data: { inputSnapshot: input } });
     return input;
   }, { timeout: 20000 });

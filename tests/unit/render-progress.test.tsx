@@ -50,6 +50,7 @@ it('pauses offline/hidden, resumes, and aborts on unmount', async () => {
     options.signal.addEventListener('abort', () => reject(new Error('aborted')));
   }));
   fireEvent(document, new Event('visibilitychange'));
+  await tick();
   const signal = fetch.mock.calls.at(-1)![1].signal as AbortSignal;
   view.unmount();
   expect(signal.aborted).toBe(true);

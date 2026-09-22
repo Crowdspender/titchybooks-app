@@ -41,7 +41,7 @@ Each `error.tsx` is a client component that catches render/async errors and show
 | `src/app/(admin)/admin/error.tsx` | Covers all admin routes |
 | `src/app/vault/error.tsx` | Covers vault route |
 
-Each shows: icon, "Something went wrong" heading, the `error.message` in muted text, and a "Try again" button.
+Each shows: icon, "Something went wrong" heading, fixed user-safe copy (never the raw `error.message`, which can leak internals), and a "Try again" button. Diagnostic details stay out of the rendered UI — they are confined to secured server-side logging/monitoring (Next.js surfaces the error `digest` for correlation).
 
 ## Task 5: Add `not-found.tsx` custom 404 page
 

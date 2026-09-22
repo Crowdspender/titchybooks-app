@@ -1,10 +1,8 @@
 "use client";
 
 export default function ErrorDisplay({
-  error,
   reset,
 }: {
-  error: Error & { digest?: string };
   reset: () => void;
 }) {
   return (
@@ -41,7 +39,8 @@ export default function ErrorDisplay({
         className="text-sm max-w-sm mb-6"
         style={{ color: "var(--color-text-muted)" }}
       >
-        {error.message || "We couldn't load this page. Please try again."}
+        {/* Fixed user-safe copy; raw error details stay in server logs (digest) */}
+        We couldn&rsquo;t load this page. Please try again.
       </p>
 
       <button

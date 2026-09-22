@@ -1714,7 +1714,8 @@ export default function EditorWorkspace({
               </p>
               <input
                 value={title === "Untitled Titchybooks" ? "" : title}
-                onChange={(event) => { if (!frozenRef.current) { pushHistory(); setTitle(event.target.value); } }}
+                onFocus={() => { if (!frozenRef.current) pushHistory(); }}
+                onChange={(event) => { if (!frozenRef.current) { setTitle(event.target.value); } }}
                 maxLength={120}
                 aria-label="Book title"
                 placeholder="Enter your book title"

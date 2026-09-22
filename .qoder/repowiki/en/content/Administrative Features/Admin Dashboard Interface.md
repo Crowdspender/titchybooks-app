@@ -13,7 +13,7 @@
 - [Root Layout](file://src/app/layout.tsx)
 - [Providers Component](file://src/components/Providers.tsx)
 - [Auth Configuration](file://src/auth.ts)
-- [Middleware](file://src/middleware.ts)
+- [Proxy Route Guard](file://src/proxy.ts)
 - [Prisma Schema](file://prisma/schema.prisma)
 - [Constants](file://src/lib/constants.ts)
 - [Pricing Constants](file://src/lib/pricing/constants.ts)
@@ -75,7 +75,7 @@ SubmissionAPI["/api/submissions/*"]
 end
 subgraph "Infrastructure"
 AuthConfig["auth.ts"]
-Middleware["middleware.ts"]
+Proxy["proxy.ts"]
 Prisma["prisma/schema.prisma"]
 Providers["Providers.tsx"]
 PricingConstants["pricing/constants.ts"]
@@ -267,7 +267,7 @@ AllowAccess --> AdminPage["/admin Page"]
 AllowAccess --> OrdersPage["/admin/orders Page"]
 DenyAccess --> Dashboard["/dashboard Page"]
 end
-subgraph "Middleware Protection"
+subgraph "Route Protection (proxy.ts)"
 Route["Protected Routes"] --> Matcher["Matcher: /admin/*"]
 Matcher --> AuthGuard["Auth Guard"]
 AuthGuard --> Session["Verify Session"]
@@ -280,13 +280,13 @@ end
 **Diagram sources**
 - [Admin Page:5-12](file://src/app/(admin)/admin/page.tsx#L5-L12)
 - [Admin Orders Page:6-11](file://src/app/(admin)/admin/orders/page.tsx#L6-L11)
-- [Middleware:1-6](file://src/middleware.ts#L1-L6)
+- [Proxy Route Guard:1-15](file://src/proxy.ts#L1-L15)
 
 **Section sources**
 - [Admin Page:5-12](file://src/app/(admin)/admin/page.tsx#L5-L12)
 - [Admin Orders Page:6-11](file://src/app/(admin)/admin/orders/page.tsx#L6-L11)
 - [Auth Configuration:27-79](file://src/auth.ts#L27-L79)
-- [Middleware:1-6](file://src/middleware.ts#L1-L6)
+- [Proxy Route Guard:1-15](file://src/proxy.ts#L1-L15)
 
 ### API Integration and Data Management
 The dashboard integrates with multiple API endpoints for comprehensive functionality with enhanced order management:
@@ -452,12 +452,14 @@ Header["Header.tsx"]
 StatusBadge["StatusBadge.tsx"]
 Providers["Providers.tsx"]
 AuthConfig["auth.ts"]
-Middleware["middleware.ts"]
+ProxyGuard["proxy.ts"]
 PricingConstants["pricing/constants.ts"]
+ApiBoundary["/api/admin/* routes"]
 end
 subgraph "Data Layer"
 PrismaSchema["prisma/schema.prisma"]
 Constants["lib/constants.ts"]
+PrismaApi["Prisma client API"]
 end
 AdminDashboard --> NextAuth
 AdminDashboard --> Sonner
@@ -469,11 +471,12 @@ Header --> NextAuth
 AuthConfig --> Prisma
 AuthConfig --> Bcrypt
 AuthConfig --> Zod
-AdminDashboard --> Prisma
-OrderModeration --> Prisma
 AdminDashboard --> Constants
 Providers --> NextAuth
-Middleware --> AuthConfig
+ProxyGuard --> AuthConfig
+AdminDashboard --> ApiBoundary
+OrderModeration --> ApiBoundary
+ApiBoundary --> PrismaApi
 ```
 
 **Diagram sources**
@@ -595,7 +598,7 @@ To implement additional administrative capabilities:
 #### Authentication Problems
 - **Issue**: Users redirected to dashboard despite ADMIN role
 - **Solution**: Verify JWT callback implementation and session storage
-- **Location**: Check auth.ts callbacks and middleware configuration
+- **Location**: Check auth.ts callbacks and proxy (src/proxy.ts) configuration
 
 #### API Access Denied
 - **Issue**: 403 Forbidden errors on admin endpoints
