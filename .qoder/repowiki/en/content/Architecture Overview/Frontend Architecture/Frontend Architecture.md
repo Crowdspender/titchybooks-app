@@ -29,16 +29,20 @@
 - [src/app/(protected)/create/templates/page.tsx](file://src/app/(protected)/create/templates/page.tsx)
 - [package.json](file://package.json)
 - [next.config.ts](file://next.config.ts)
+- [src/components/ui/ErrorDisplay.tsx](file://src/components/ui/ErrorDisplay.tsx)
+- [src/app/(admin)/admin/error.tsx](file://src/app/(admin)/admin/error.tsx)
+- [src/app/(protected)/dashboard/error.tsx](file://src/app/(protected)/dashboard/error.tsx)
+- [src/app/vault/error.tsx](file://src/app/vault/error.tsx)
+- [src/app/global-error.tsx](file://src/app/global-error.tsx)
 </cite>
 
 ## Update Summary
 **Changes Made**
-- Added comprehensive documentation for the new EditorWorkspace component and its sophisticated state management
-- Documented the EditorCanvas component with Konva integration and advanced editing capabilities
-- Added LayerPanel and PropertiesPanel documentation with template system integration
-- Integrated AI chat panel documentation with real-time streaming and suggestion system
-- Updated component architecture diagrams to reflect the new editor ecosystem
-- Enhanced state management patterns and real-time collaboration features documentation
+- Enhanced error handling security across the application with user-friendly error messages
+- Refactored ErrorDisplay component to prevent information leakage by not displaying raw error objects
+- Updated all error boundary components (admin, dashboard, vault, global) to use simplified user-safe messages
+- Maintained technical error details in server logs via digest property for debugging purposes
+- Added comprehensive error handling documentation section
 
 ## Table of Contents
 1. [Introduction](#introduction)
@@ -48,20 +52,22 @@
 5. [Detailed Component Analysis](#detailed-component-analysis)
 6. [Editor Component System](#editor-component-system)
 7. [AI Integration and State Management](#ai-integration-and-state-management)
-8. [Dependency Analysis](#dependency-analysis)
-9. [Performance Considerations](#performance-considerations)
-10. [Troubleshooting Guide](#troubleshooting-guide)
-11. [Conclusion](#conclusion)
+8. [Enhanced Error Handling Security](#enhanced-error-handling-security)
+9. [Dependency Analysis](#dependency-analysis)
+10. [Performance Considerations](#performance-considerations)
+11. [Troubleshooting Guide](#troubleshooting-guide)
+12. [Conclusion](#conclusion)
 
 ## Introduction
-This document describes the frontend architecture of Titchybook Creator's Next.js application, with comprehensive coverage of the new sophisticated editor component system. The architecture now includes EditorWorkspace, EditorCanvas, LayerPanel, PropertiesPanel, and AI chat integration, featuring advanced state management, real-time collaboration capabilities, and template-based editing workflows.
+This document describes the frontend architecture of Titchybook Creator's Next.js application, with comprehensive coverage of the new sophisticated editor component system and enhanced security measures. The architecture now includes EditorWorkspace, EditorCanvas, LayerPanel, PropertiesPanel, and AI chat integration, featuring advanced state management, real-time collaboration capabilities, template-based editing workflows, and robust error handling that prevents information leakage to end users.
 
 ## Project Structure
-The application follows Next.js App Router conventions with route groups to organize pages by responsibility and access control, now enhanced with a comprehensive editor ecosystem:
+The application follows Next.js App Router conventions with route groups to organize pages by responsibility and access control, now enhanced with a comprehensive editor ecosystem and enhanced security measures:
 - Public home page and marketing content
 - Authentication route group for login/register
 - Protected route group for authenticated user dashboards, creation flows, and the sophisticated editor
 - Admin route group for administrative views and moderation
+- Centralized error handling with user-friendly interfaces
 
 Key files:
 - Root layout initializes fonts, global styles, Providers, and shared header
@@ -69,6 +75,7 @@ Key files:
 - Route group pages render page-specific content and delegate to domain components
 - Shared UI components encapsulate presentation and interactions
 - Editor components provide professional-grade book creation capabilities
+- Error boundaries provide consistent, secure error handling across all routes
 
 ```mermaid
 graph TB
@@ -83,6 +90,9 @@ H --> I["Editor Canvas<br/>src/components/editor/EditorCanvas.tsx"]
 H --> J["Layer Panel<br/>src/components/editor/LayerPanel.tsx"]
 H --> K["Properties Panel<br/>src/components/editor/PropertiesPanel.tsx"]
 H --> L["AI Chat Panel<br/>src/components/editor/AiChatPanel.tsx"]
+F --> M["Dashboard Error Boundary<br/>src/app/(protected)/dashboard/error.tsx"]
+G --> N["Admin Error Boundary<br/>src/app/(admin)/admin/error.tsx"]
+O["Global Error Handler<br/>src/app/global-error.tsx"] --> P["User-Friendly Messages<br/>src/components/ui/ErrorDisplay.tsx"]
 ```
 
 **Diagram sources**
@@ -98,6 +108,10 @@ H --> L["AI Chat Panel<br/>src/components/editor/AiChatPanel.tsx"]
 - [src/components/editor/LayerPanel.tsx:30-40](file://src/components/editor/LayerPanel.tsx#L30-L40)
 - [src/components/editor/PropertiesPanel.tsx:41-53](file://src/components/editor/PropertiesPanel.tsx#L41-L53)
 - [src/components/editor/AiChatPanel.tsx:31-36](file://src/components/editor/AiChatPanel.tsx#L31-L36)
+- [src/app/(protected)/dashboard/error.tsx:1-13](file://src/app/(protected)/dashboard/error.tsx#L1-L13)
+- [src/app/(admin)/admin/error.tsx:1-13](file://src/app/(admin)/admin/error.tsx#L1-L13)
+- [src/app/global-error.tsx:1-101](file://src/app/global-error.tsx#L1-L101)
+- [src/components/ui/ErrorDisplay.tsx:1-55](file://src/components/ui/ErrorDisplay.tsx#L1-L55)
 
 **Section sources**
 - [src/app/layout.tsx:18-41](file://src/app/layout.tsx#L18-L41)
@@ -121,6 +135,7 @@ The frontend architecture centers on:
 - Strict client–server boundary: client components use hooks and state; server components and API handlers manage authentication and data access
 - Providers pattern for session propagation and shared state
 - Comprehensive editor ecosystem with sophisticated state management and real-time collaboration
+- Enhanced error handling security with user-friendly interfaces and secure technical logging
 - Tailwind CSS for styling with theme tokens and responsive design
 - Component composition: page components orchestrate domain components (e.g., EditorWorkspace)
 
@@ -132,7 +147,7 @@ participant Providers as "Providers"
 participant Header as "Header"
 participant CreatePage as "Create Page"
 participant EditorWorkspace as "EditorWorkspace"
-participant EditorCanvas as "EditorCanvas"
+participant ErrorBoundary as "Error Boundaries"
 participant API as "API Handlers"
 Browser->>Layout : Request "/"
 Layout->>Providers : Wrap children
@@ -141,10 +156,10 @@ Header-->>Layout : Navigation rendered
 Layout-->>Browser : Rendered page content
 Browser->>CreatePage : Navigate to "/create"
 CreatePage->>EditorWorkspace : Render EditorWorkspace
-EditorWorkspace->>EditorCanvas : Initialize canvas
-EditorCanvas->>API : Load assets and templates
-API-->>EditorCanvas : Return assets and templates
-EditorCanvas-->>Browser : Interactive editing interface
+EditorWorkspace->>API : Load assets and templates
+API-->>EditorWorkspace : Return assets and templates
+EditorWorkspace-->>Browser : Interactive editing interface
+Note over ErrorBoundary : Secure error handling with user-friendly messages
 ```
 
 **Diagram sources**
@@ -564,6 +579,78 @@ CollaborationState["Collaboration State"] --> PresenceState["Presence State"]
 - [src/components/editor/EditorWorkspace.tsx:275-325](file://src/components/editor/EditorWorkspace.tsx#L275-L325)
 - [src/components/editor/EditorWorkspace.tsx:59-63](file://src/components/editor/EditorWorkspace.tsx#L59-L63)
 
+## Enhanced Error Handling Security
+
+### Centralized Error Display Component
+The ErrorDisplay component has been refactored to provide secure, user-friendly error handling across the application:
+
+- **User-Safe Messages**: Displays generic error messages like "Something went wrong" and "We couldn't load this page. Please try again."
+- **Information Leakage Prevention**: No longer displays raw error objects or technical details to end users
+- **Consistent UI**: Provides standardized error presentation with icons, styling, and retry functionality
+- **Accessibility**: Includes proper ARIA labels and semantic markup for screen readers
+
+```mermaid
+flowchart TD
+ErrorEvent["Error Occurs"] --> ErrorBoundary["Error Boundary Captures"]
+ErrorBoundary --> ErrorDisplay["ErrorDisplay Component"]
+ErrorDisplay --> SafeMessage["User-Friendly Message"]
+ErrorDisplay --> RetryButton["Try Again Button"]
+SafeMessage --> UserInterface["Clean User Interface"]
+RetryButton --> ResetFunction["Component Reset"]
+ResetFunction --> ErrorBoundary
+```
+
+**Diagram sources**
+- [src/components/ui/ErrorDisplay.tsx:1-55](file://src/components/ui/ErrorDisplay.tsx#L1-L55)
+
+### Application-Wide Error Boundaries
+All error boundary components have been updated to use the centralized ErrorDisplay component:
+
+- **Admin Error Boundary**: `src/app/(admin)/admin/error.tsx` - Uses ErrorDisplay for admin-specific errors
+- **Dashboard Error Boundary**: `src/app/(protected)/dashboard/error.tsx` - Uses ErrorDisplay for protected route errors  
+- **Vault Error Boundary**: `src/app/vault/error.tsx` - Uses ErrorDisplay for vault-related errors
+- **Global Error Handler**: `src/app/global-error.tsx` - Provides fallback error handling with custom styling
+
+Each error boundary receives the error object with optional `digest` property for server-side logging while displaying only safe messages to users.
+
+```mermaid
+graph TB
+Sub["Application Routes"] --> AdminErr["Admin Error Boundary"]
+Sub --> DashboardErr["Dashboard Error Boundary"]
+Sub --> VaultErr["Vault Error Boundary"]
+Sub --> GlobalErr["Global Error Handler"]
+AdminErr --> ErrorDisplay["ErrorDisplay Component"]
+DashboardErr --> ErrorDisplay
+VaultErr --> ErrorDisplay
+GlobalErr --> CustomGlobal["Custom Global Error UI"]
+ErrorDisplay --> SafeMessages["User-Safe Messages Only"]
+CustomGlobal --> SafeMessages
+```
+
+**Diagram sources**
+- [src/app/(admin)/admin/error.tsx:1-13](file://src/app/(admin)/admin/error.tsx#L1-L13)
+- [src/app/(protected)/dashboard/error.tsx:1-13](file://src/app/(protected)/dashboard/error.tsx#L1-L13)
+- [src/app/vault/error.tsx:1-13](file://src/app/vault/error.tsx#L1-L13)
+- [src/app/global-error.tsx:1-101](file://src/app/global-error.tsx#L1-L101)
+- [src/components/ui/ErrorDisplay.tsx:1-55](file://src/components/ui/ErrorDisplay.tsx#L1-L55)
+
+### Security Benefits and Implementation Details
+The enhanced error handling provides several security benefits:
+
+- **Prevents Information Disclosure**: Raw error objects, stack traces, and internal implementation details are never shown to users
+- **Maintains Debugging Capability**: Technical details remain accessible via the `digest` property for server-side logging
+- **Consistent User Experience**: All errors present the same friendly interface regardless of their source
+- **Graceful Degradation**: Users can retry operations without exposing sensitive application state
+
+The implementation uses TypeScript's error type augmentation (`Error & { digest?: string }`) to maintain type safety while ensuring only safe properties are displayed to users.
+
+**Section sources**
+- [src/components/ui/ErrorDisplay.tsx:1-55](file://src/components/ui/ErrorDisplay.tsx#L1-L55)
+- [src/app/(admin)/admin/error.tsx:1-13](file://src/app/(admin)/admin/error.tsx#L1-L13)
+- [src/app/(protected)/dashboard/error.tsx:1-13](file://src/app/(protected)/dashboard/error.tsx#L1-L13)
+- [src/app/vault/error.tsx:1-13](file://src/app/vault/error.tsx#L1-L13)
+- [src/app/global-error.tsx:1-101](file://src/app/global-error.tsx#L1-L101)
+
 ## Dependency Analysis
 External dependencies relevant to frontend architecture:
 - next: App Router, metadata, font loading
@@ -610,6 +697,7 @@ Markdown --> Rendering["Markdown Rendering"]
 - Optimize canvas rendering performance through selective updates.
 - Use debounced saving for real-time collaborative features.
 - Implement proper cleanup for event listeners and timers.
+- **Error handling optimization**: Centralized error display reduces bundle size and improves consistency.
 
 ## Troubleshooting Guide
 Common issues and resolutions:
@@ -637,15 +725,25 @@ Common issues and resolutions:
 - State synchronization problems:
   - Review undo/redo implementation
   - Check for proper state normalization
+- **Error handling issues**:
+  - Verify ErrorDisplay component is properly imported
+  - Check that error boundaries are correctly configured
+  - Ensure error messages are user-friendly and don't leak technical details
+  - Confirm server-side logging captures full error details via digest property
 
 **Section sources**
 - [src/middleware.ts:3-5](file://src/middleware.ts#L3-L5)
 - [src/auth.ts:65-79](file://src/auth.ts#L65-L79)
-- [src/app/(admin)/admin/page.ts:7-9](file://src/app/(admin)/admin/page.tsx#L7-L9)
+- [src/app/(admin)/admin/page.ts:7-9](file://src/app/(admin)/admin/page.ts#L7-L9)
 - [src/app/api/admin/submissions/route.ts:7-10](file://src/app/api/admin/submissions/route.ts#L7-L10)
 - [src/components/editor/EditorWorkspace.tsx:398-457](file://src/components/editor/EditorWorkspace.tsx#L398-L457)
 - [src/components/editor/EditorCanvas.tsx:48-67](file://src/components/editor/EditorCanvas.tsx#L48-L67)
 - [src/app/api/ai/chat/route.ts:38-43](file://src/app/api/ai/chat/route.ts#L38-L43)
+- [src/components/ui/ErrorDisplay.tsx:1-55](file://src/components/ui/ErrorDisplay.tsx#L1-L55)
 
 ## Conclusion
-The frontend architecture leverages Next.js App Router with route groups to cleanly separate auth, protected, and admin concerns, while the new editor ecosystem provides professional-grade book creation capabilities. The Providers pattern centralizes session management, while middleware and server-side guards enforce access control. The sophisticated EditorWorkspace component orchestrates complex state management, template systems, and real-time collaboration features. Client–server boundaries are respected: client components handle interactivity and UI, while server components and API handlers manage authentication, authorization, and data access. The integration of AI chat capabilities enhances the creative workflow, and the comprehensive styling system with Tailwind CSS provides a consistent, theme-aware interface. Component composition promotes reusability across page types, with the editor components serving as the foundation for Titchybook's core functionality.
+The frontend architecture leverages Next.js App Router with route groups to cleanly separate auth, protected, and admin concerns, while the new editor ecosystem provides professional-grade book creation capabilities. The Providers pattern centralizes session management, while middleware and server-side guards enforce access control. The sophisticated EditorWorkspace component orchestrates complex state management, template systems, and real-time collaboration features. Client–server boundaries are respected: client components handle interactivity and UI, while server components and API handlers manage authentication, authorization, and data access. The integration of AI chat capabilities enhances the creative workflow, and the comprehensive styling system with Tailwind CSS provides a consistent, theme-aware interface. 
+
+**Enhanced Security**: The application now features robust error handling security that prevents information leakage while maintaining excellent user experience. The centralized ErrorDisplay component ensures consistent, user-friendly error messages across all routes, while technical details are safely logged server-side for debugging purposes. This security enhancement protects against potential vulnerabilities while maintaining the application's usability and reliability.
+
+Component composition promotes reusability across page types, with the editor components serving as the foundation for Titchybook's core functionality and the enhanced error handling system providing a secure foundation for the entire application.

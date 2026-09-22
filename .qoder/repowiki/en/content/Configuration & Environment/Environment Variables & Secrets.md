@@ -46,7 +46,7 @@ This document explains how environment variables and secrets are used in Titchyb
 ## Project Structure
 The application relies on environment variables for:
 - Authentication via NextAuth (external provider configuration is present but does not read secret values from environment in the current code)
-- Database connectivity (PostgreSQL via Prisma; also backs the durable render queue)
+- Database connectivity (SQLite via Prisma)
 - AWS S3 integration (region, credentials, bucket)
 - Email system integration (Resend API for password reset and welcome emails)
 - Vector PDF rendering (optional high-quality text rendering)
@@ -62,7 +62,7 @@ EMAIL["Email Service"]
 PDF["PDF Renderer"]
 end
 subgraph "External Services"
-DB["PostgreSQL Database"]
+DB["SQLite Database"]
 S3["AWS S3"]
 RESEND["Resend Email API"]
 end
@@ -97,10 +97,10 @@ This section enumerates the environment variables used by the application and th
 
 ### Database Connectivity
 - DATABASE_URL
-  - Purpose: Prisma datasource URL for PostgreSQL (the schema datasource provider is `postgresql`)
+  - Purpose: Prisma datasource URL for SQLite
   - Type: String (URL)
   - Required: Yes
-  - Validation: Must be a valid PostgreSQL connection URL
+  - Validation: Must be a valid SQLite connection URL
   - Notes: Used in Prisma schema via environment variable substitution
 
 ### AWS S3 Integration
@@ -207,7 +207,7 @@ Security note: The current NextAuth configuration uses a credentials provider an
 
 ## Architecture Overview
 The runtime reads environment variables to configure:
-- Prisma client for PostgreSQL (backs the app database and the durable render queue tables)
+- Prisma client for SQLite
 - AWS SDK S3 client for uploads/downloads
 - NextAuth for authentication
 - Resend email service for password reset and welcome emails
@@ -245,9 +245,9 @@ Note over Email : Password reset/welcome emails sent via Resend API
 
 ### Database Connectivity (Prisma)
 - Variable: DATABASE_URL
-- Role: Provides the Prisma datasource URL for PostgreSQL
-- Behavior: Loaded via Prisma schema environment substitution; the durable render queue (RenderJob) and migrations run against this same PostgreSQL database
-- Validation: Must be a valid PostgreSQL URL; misconfiguration leads to startup failures
+- Role: Provides the Prisma datasource URL for SQLite
+- Behavior: Loaded via Prisma schema environment substitution
+- Validation: Must be a valid SQLite URL; misconfiguration leads to startup failures
 
 ```mermaid
 flowchart TD
@@ -398,7 +398,7 @@ ENV --> S3LIB["S3 Client Library"]
 ENV --> NEXTAUTH["NextAuth"]
 ENV --> EMAIL["Email Service"]
 ENV --> PDF["PDF Renderer"]
-PRISMA --> DB["PostgreSQL"]
+PRISMA --> DB["SQLite"]
 S3LIB --> S3["AWS S3"]
 NEXTAUTH --> APP["Next.js App"]
 EMAIL --> RESEND["Resend API"]
@@ -431,7 +431,7 @@ PDF --> S3
 Common configuration errors and resolutions:
 - Missing or invalid DATABASE_URL
   - Symptom: Application fails to start or Prisma client initialization errors
-  - Resolution: Ensure DATABASE_URL points to a valid PostgreSQL URL
+  - Resolution: Ensure DATABASE_URL points to a valid SQLite URL
 
 - Missing AWS_REGION or invalid region
   - Symptom: S3 client creation errors or signature mismatches
@@ -469,7 +469,7 @@ Common configuration errors and resolutions:
   - Debug: Check logs for "vector rendering is only supported for editor-mode submissions"
 
 Debugging techniques:
-- Log only environment variable *names* at startup with a configured/not-configured indicator (never their values, and never any secret, even masked)
+- Log environment variables during startup to confirm values are loaded
 - Test pre-signed URL generation independently to isolate S3 configuration issues
 - Validate NextAuth callbacks using a simple test route
 - Use AWS CLI or SDK to verify credentials and bucket access outside the app
@@ -492,7 +492,7 @@ Titchybook Creator requires a small set of environment variables to connect to t
 ## Appendices
 
 ### Environment Variable Reference
-- DATABASE_URL: Prisma datasource URL for PostgreSQL (app database and durable render queue)
+- DATABASE_URL: Prisma datasource URL for SQLite
 - AWS_REGION: AWS region for S3 client
 - AWS_ACCESS_KEY_ID: AWS access key ID
 - AWS_SECRET_ACCESS_KEY: AWS secret access key
@@ -508,13 +508,8 @@ Titchybook Creator requires a small set of environment variables to connect to t
 
 ### Example .env File Structure
 ```bash
-# Database (PostgreSQL — required for the app schema and the durable render queue)
-DATABASE_URL=postgresql://USER:PASSWORD@HOST:5432/DATABASE?sslmode=require
-
-# migrations and `prisma migrate deploy` target this same PostgreSQL URL
-
-# Local-only prototype (NOT production; the durable render queue requires PostgreSQL):
-# DATABASE_URL=sqlite:./dev.db
+# Database
+DATABASE_URL=sqlite:./dev.db
 
 # AWS S3
 AWS_REGION=us-east-1
@@ -551,14 +546,14 @@ OPENAI_MODEL=gpt-4o
 - Inject variables at build and deploy time
 - Use separate variables for development, staging, and production
 - Rotate secrets regularly and update CI/CD variables accordingly
-- Email calls in the default CI path are mocked and run without application secrets; test-email.ts is a live-provider smoke test run only from a separately, manually triggered job that supplies the required email secrets
-- Validate vector rendering configuration in staging environments
+- **New**: Implement email testing in CI/CD pipeline using test-email.ts
+- **New**: Validate vector rendering configuration in staging environments
 
 ### Local Development vs Production Differences
-- Local: Use a local or hosted PostgreSQL instance via DATABASE_URL (the durable render queue requires PostgreSQL); ensure AWS credentials are valid for testing
+- Local: Use local SQLite via DATABASE_URL; ensure AWS credentials are valid for testing
 - Production: Use managed database and S3; restrict IAM policies; enforce HTTPS for NEXTAUTH_URL and NEXT_PUBLIC_AWS_BUCKET_URL
 - **New**: Local development can run without email service; production should always have RESEND_API_KEY configured
-- **New**: Raster rendering remains the production default (VECTOR_RENDER unset or "false"); enable vector rendering only as an explicit opt-in after validating editor-mode rendering and legacy-job compatibility
+- **New**: Enable VECTOR_RENDER in production for optimal PDF quality; disable in development for faster iteration
 - **New**: Use TEST_EMAIL environment variable in test-email.ts to specify recipient for email testing
 
 ### Email Testing and Validation

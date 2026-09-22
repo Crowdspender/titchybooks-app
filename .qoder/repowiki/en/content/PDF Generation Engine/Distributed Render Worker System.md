@@ -7,6 +7,7 @@
 - [schema.prisma](file://prisma/schema.prisma)
 - [generate.ts](file://src/lib/pdf/generate.ts)
 - [vector-render.ts](file://src/lib/pdf/vector-render.ts)
+- [snapshot.ts](file://src/lib/pdf/snapshot.ts)
 - [s3.ts](file://src/lib/s3.ts)
 - [submission-store.ts](file://src/lib/editor/submission-store.ts)
 - [route.ts (submit)](file://src/app/api/submissions/[id]/submit/route.ts)
@@ -16,6 +17,12 @@
 - [worker-process.test.ts](file://tests/integration/worker-process.test.ts)
 - [editor-queue.test.ts](file://tests/integration/editor-queue.test.ts)
 </cite>
+
+## Update Summary
+**Changes Made**
+- Updated the Rendering Pipeline section to reflect the critical fix in frozenInput function's captureSnapshot call
+- Enhanced documentation of snapshot capture behavior during job processing
+- Added details about the third parameter control for snapshot capture consistency
 
 ## Table of Contents
 1. [Introduction](#introduction)
@@ -183,7 +190,8 @@ QUEUED --> FAILED : "exhausted on claim"
 - [schema.prisma:217-239](file://prisma/schema.prisma#L217-L239)
 
 ### Rendering Pipeline
-- Snapshot capture freezes editor scene or image list into a versioned structure.
+- Snapshot capture freezes editor scene or image list into a versioned structure with enhanced consistency controls.
+- **Updated**: The frozenInput function now uses captureSnapshot with a third parameter (true) during job processing to ensure proper snapshot capture behavior and document state consistency.
 - Generation chooses between raster and vector modes:
   - Raster: Renders each panel sequentially to bound memory, embeds PNGs into a single A4 landscape PDF, uploads previews and final PDF.
   - Vector: Draws shapes, text, and images directly onto PDF pages using vector APIs for crisp text at any scale.
@@ -210,6 +218,8 @@ Draw --> Upload
 - [generate.ts:1-43](file://src/lib/pdf/generate.ts#L1-L43)
 - [vector-render.ts:163-442](file://src/lib/pdf/vector-render.ts#L163-L442)
 - [s3.ts:1-109](file://src/lib/s3.ts#L1-L109)
+- [snapshot.ts:39-60](file://src/lib/pdf/snapshot.ts#L39-L60)
+- [render-job.ts:95-105](file://src/lib/pdf/render-job.ts#L95-L105)
 
 ### Client Interaction and Progress
 - Submit endpoint enqueues a job and returns 202 with jobId and submission details.
@@ -286,8 +296,7 @@ UI["RenderProgress.tsx"] --> StatusAPI["render-status route"]
 - Lease tuning: 120-second lease balances responsiveness and safety; heartbeat interval keeps long runs healthy.
 - Database indexing: RenderJob indexes on status and timing fields optimize claim queries.
 - Network resilience: Client uses abort controllers and adaptive polling to reduce wasted requests.
-
-[No sources needed since this section provides general guidance]
+- **Updated**: Enhanced snapshot capture consistency reduces redundant processing and ensures reliable document state preservation.
 
 ## Troubleshooting Guide
 Common issues and diagnostics:
@@ -295,14 +304,14 @@ Common issues and diagnostics:
 - Repeated failures: Inspect errorMessage and attempts; invalid snapshots cause terminal failures and stop retries.
 - Missing assets: Rendering will fail explicitly when required assets are unavailable; ensure S3 keys exist and are accessible.
 - Duplicate enqueues: Enqueue is idempotent per submission; multiple calls return the same jobId.
-- Worker not picking up jobs: Verify RENDER_WORKER_POLL_MS and database connectivity; check logs for “render-claimed” events.
+- Worker not picking up jobs: Verify RENDER_WORKER_POLL_MS and database connectivity; check logs for "render-claimed" events.
+- **Updated**: Snapshot capture issues: If encountering snapshot identity mismatches, ensure the frozenInput function properly captures snapshots with the enhanced third parameter control.
 
 **Section sources**
 - [render-job.ts:81-124](file://src/lib/pdf/render-job.ts#L81-L124)
 - [worker-process.test.ts:8-32](file://tests/integration/worker-process.test.ts#L8-L32)
 - [rendering.test.ts:44-65](file://tests/unit/rendering.test.ts#L44-L65)
+- [snapshot.ts:39-60](file://src/lib/pdf/snapshot.ts#L39-L60)
 
 ## Conclusion
-The Distributed Render Worker System provides a robust, scalable mechanism for generating PDFs from editor content or images. Through durable queuing, safe concurrency controls, and resilient rendering pipelines, it ensures reliable delivery of outputs even under failures. Clients receive clear progress feedback and can safely retry when needed.
-
-[No sources needed since this section summarizes without analyzing specific files]
+The Distributed Render Worker System provides a robust, scalable mechanism for generating PDFs from editor content or images. Through durable queuing, safe concurrency controls, and resilient rendering pipelines with enhanced snapshot capture consistency, it ensures reliable delivery of outputs even under failures. Clients receive clear progress feedback and can safely retry when needed.

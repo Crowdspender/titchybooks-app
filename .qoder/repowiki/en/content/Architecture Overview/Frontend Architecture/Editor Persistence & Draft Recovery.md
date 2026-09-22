@@ -14,6 +14,7 @@
 - [render-worker.ts](file://src/workers/render-worker.ts)
 - [RenderProgress.tsx](file://src/components/submissions/RenderProgress.tsx)
 - [ContinueEditingButton.tsx](file://src/components/dashboard/ContinueEditingButton.tsx)
+- [history.ts](file://src/lib/editor/history.ts)
 - [persistence.test.ts](file://tests/unit/persistence.test.ts)
 - [editor.spec.ts](file://tests/browser/editor.spec.ts)
 </cite>
@@ -24,6 +25,7 @@
 - Updated submission store error response functionality with intelligent error detection
 - Added detailed troubleshooting guidance for database-related issues
 - Enhanced error reporting with code extraction and metadata logging
+- **Updated**: Improved editor history management in title input handling with separated focus-based history entry creation
 
 ## Table of Contents
 1. [Introduction](#introduction)
@@ -37,7 +39,7 @@
 9. [Conclusion](#conclusion)
 
 ## Introduction
-This document explains how the editor persists drafts and recovers unsaved changes across reloads, tabs, and network failures. It covers the client-side persistence layer, server-side revision control, background rendering jobs, and UI recovery flows that keep user work safe and consistent. The system now includes enhanced error handling with improved Prisma error logging and diagnostic capabilities for better database issue diagnosis.
+This document explains how the editor persists drafts and recovers unsaved changes across reloads, tabs, and network failures. It covers the client-side persistence layer, server-side revision control, background rendering jobs, and UI recovery flows that keep user work safe and consistent. The system now includes enhanced error handling with improved Prisma error logging and diagnostic capabilities for better database issue diagnosis, along with optimized history management for improved user experience.
 
 ## Project Structure
 The editor persistence system spans three layers:
@@ -51,6 +53,7 @@ subgraph "Client"
 EW["EditorWorkspace.tsx"]
 DP["DraftPersistence<br/>persistence.ts"]
 LS["localStorage"]
+HM["History Management<br/>history.ts"]
 end
 subgraph "Server API"
 SPOST["POST /api/submissions"]
@@ -69,6 +72,7 @@ WKR["render-worker.ts"]
 RJOB["render-job.ts"]
 end
 EW --> DP
+EW --> HM
 DP --> LS
 DP --> SPUT
 DP --> SPATCH
@@ -87,6 +91,7 @@ WKR --> RJOB
 **Diagram sources**
 - [EditorWorkspace.tsx:432-771](file://src/components/editor/EditorWorkspace.tsx#L432-L771)
 - [persistence.ts:11-122](file://src/lib/editor/persistence.ts#L11-L122)
+- [history.ts:1-10](file://src/lib/editor/history.ts#L1-L10)
 - [route.ts (submissions):52-148](file://src/app/api/submissions/route.ts#L52-L148)
 - [route.ts (submission by id):18-160](file://src/app/api/submissions/[id]/route.ts#L18-L160)
 - [route.ts (page save/load):11-42](file://src/app/api/submissions/[id]/pages/[pageLabel]/route.ts#L11-L42)
@@ -97,6 +102,7 @@ WKR --> RJOB
 **Section sources**
 - [EditorWorkspace.tsx:432-771](file://src/components/editor/EditorWorkspace.tsx#L432-L771)
 - [persistence.ts:11-122](file://src/lib/editor/persistence.ts#L11-L122)
+- [history.ts:1-10](file://src/lib/editor/history.ts#L1-L10)
 - [route.ts (submissions):52-148](file://src/app/api/submissions/route.ts#L52-L148)
 - [route.ts (submission by id):18-160](file://src/app/api/submissions/[id]/route.ts#L18-L160)
 - [route.ts (page save/load):11-42](file://src/app/api/submissions/[id]/pages/[pageLabel]/route.ts#L11-L42)
@@ -106,13 +112,15 @@ WKR --> RJOB
 
 ## Core Components
 - DraftPersistence: Tracks per-part edits (title and each page), persists unsaved parts to localStorage, and coalesces concurrent saves with revision tracking.
-- EditorWorkspace: Orchestrates loading a submission, merging template elements, wiring autosave, handling beforeunload, and offering recovery prompts.
+- EditorWorkspace: Orchestrates loading a submission, merging template elements, wiring autosave, handling beforeunload, and offering recovery prompts with optimized history management.
+- History Management: Provides undo/redo functionality with efficient snapshot management and focused history entry creation to reduce unnecessary entries.
 - Submission Store: Validates scenes, enforces editability and revisions, safely updates Submission and SubmissionPage rows with enhanced error handling and Prisma error diagnostics.
 - Render Pipeline: Enqueues render jobs, claims them in workers, publishes results, and exposes status endpoints for UI polling.
 
 **Section sources**
 - [persistence.ts:11-122](file://src/lib/editor/persistence.ts#L11-L122)
 - [EditorWorkspace.tsx:432-771](file://src/components/editor/EditorWorkspace.tsx#L432-L771)
+- [history.ts:1-10](file://src/lib/editor/history.ts#L1-L10)
 - [submission-store.ts:25-147](file://src/lib/editor/submission-store.ts#L25-L147)
 - [render-job.ts:21-86](file://src/lib/pdf/render-job.ts#L21-L86)
 
@@ -123,18 +131,27 @@ The editor uses optimistic client state with robust recovery:
 - Unsaved edits survive tab crashes via localStorage recovery entries scoped by user and submission.
 - On reload, the editor offers to restore local recovery data if present.
 - Rendering is decoupled into durable jobs with retry and lease fencing.
-- Enhanced error handling provides detailed Prisma error diagnostics for better database issue resolution.
+- **Enhanced**: Optimized history management separates focus events from typing events to reduce unnecessary history entries while maintaining proper undo/redo functionality.
+- **Enhanced**: Error handling provides detailed Prisma error diagnostics for better database issue resolution.
 
 ```mermaid
 sequenceDiagram
 participant U as "User"
 participant EW as "EditorWorkspace"
+participant HM as "History Manager"
 participant DP as "DraftPersistence"
 participant API as "Submissions API"
 participant ES as "Enhanced Error Handler"
 participant DB as "Database"
 participant WK as "Render Worker"
-U->>EW : Edit title or page scene
+U->>EW : Focus title input
+EW->>HM : pushHistory()
+HM-->>EW : history updated
+U->>EW : Type in title (onChange)
+EW->>EW : setTitle(value) - no history entry
+U->>EW : Edit page scene
+EW->>HM : pushHistory()
+HM-->>EW : history updated
 EW->>DP : set(part, value)
 DP-->>EW : notify saving/saved/error
 EW->>DP : flushAll() after debounce
@@ -155,6 +172,8 @@ WK->>DB : publish artifacts, mark COMPLETED
 
 **Diagram sources**
 - [EditorWorkspace.tsx:773-836](file://src/components/editor/EditorWorkspace.tsx#L773-L836)
+- [EditorWorkspace.tsx:1715-1724](file://src/components/editor/EditorWorkspace.tsx#L1715-L1724)
+- [history.ts:1-10](file://src/lib/editor/history.ts#L1-L10)
 - [persistence.ts:80-109](file://src/lib/editor/persistence.ts#L80-L109)
 - [route.ts (page save/load):31-42](file://src/app/api/submissions/[id]/pages/[pageLabel]/route.ts#L31-L42)
 - [submission-store.ts:14-30](file://src/lib/editor/submission-store.ts#L14-L30)
@@ -193,15 +212,17 @@ Notify --> End
 - [persistence.ts:11-122](file://src/lib/editor/persistence.ts#L11-L122)
 - [persistence.test.ts:108-136](file://tests/unit/persistence.test.ts#L108-L136)
 
-### EditorWorkspace: Autosave, Recovery, and Lifecycle
+### EditorWorkspace: Autosave, Recovery, Lifecycle, and Optimized History Management
 - Creates or loads a submission, seeds DraftPersistence with server-provided revisions, and wires transport functions to PATCH/PUT endpoints.
 - Detects and offers to restore local recovery data on load; clears it if discarded.
 - Debounces autosave for title and pages; prevents navigation when dirty; reconnects on online events.
 - Manages history, template merging, asset loading, and active draft pointer for "Continue editing".
+- **Enhanced**: Title input now uses separate focus and change handlers - `onFocus` triggers history entry creation while `onChange` only updates the title state without creating history entries, reducing unnecessary history entries during active typing sessions.
 
 ```mermaid
 sequenceDiagram
 participant EW as "EditorWorkspace"
+participant HM as "History Manager"
 participant DP as "DraftPersistence"
 participant LS as "localStorage"
 participant API as "Submissions API"
@@ -215,6 +236,9 @@ EW->>EW : merge recovered title/pages
 else no recovery
 EW->>DP : clearRecovery()
 end
+Note over EW,HM : Optimized History Management
+EW->>HM : onFocus() -> pushHistory()
+EW->>EW : onChange() -> setTitle() only
 EW->>DP : set(title, pages) periodically
 EW->>DP : flushAll() after debounce
 DP->>API : PATCH/PUT with revision
@@ -225,12 +249,54 @@ DP-->>EW : saved state
 **Diagram sources**
 - [EditorWorkspace.tsx:493-661](file://src/components/editor/EditorWorkspace.tsx#L493-L661)
 - [EditorWorkspace.tsx:773-836](file://src/components/editor/EditorWorkspace.tsx#L773-L836)
+- [EditorWorkspace.tsx:1715-1724](file://src/components/editor/EditorWorkspace.tsx#L1715-L1724)
+- [history.ts:1-10](file://src/lib/editor/history.ts#L1-L10)
 - [persistence.ts:35-79](file://src/lib/editor/persistence.ts#L35-L79)
 
 **Section sources**
 - [EditorWorkspace.tsx:432-771](file://src/components/editor/EditorWorkspace.tsx#L432-L771)
 - [EditorWorkspace.tsx:773-836](file://src/components/editor/EditorWorkspace.tsx#L773-L836)
+- [EditorWorkspace.tsx:1715-1724](file://src/components/editor/EditorWorkspace.tsx#L1715-L1724)
 - [ContinueEditingButton.tsx:1-68](file://src/components/dashboard/ContinueEditingButton.tsx#L1-L68)
+
+### History Management: Efficient Undo/Redo System
+- Provides undo/redo functionality using past/present/future stack pattern.
+- **Enhanced**: Optimized history entry creation separates focus events from typing events to reduce unnecessary history entries during active user interaction.
+- Supports keyboard shortcuts (Ctrl+Z/Ctrl+Shift+Z) for undo/redo operations.
+- Maintains maximum history depth to prevent memory bloat.
+
+```mermaid
+classDiagram
+class HistoryState {
++past : HistoryEntry[]
++present : HistoryEntry
++future : HistoryEntry[]
+}
+class HistoryManager {
++undoHistory(history, current)
++redoHistory(history, current)
++pushHistory()
++createSnapshot()
+}
+class EditorWorkspace {
++title : string
++pagesByLabel : Record~PageLabel, PageRecord~
++onFocus()
++onChange()
+}
+HistoryManager --> HistoryState : manages
+EditorWorkspace --> HistoryManager : uses for undo/redo
+```
+
+**Diagram sources**
+- [history.ts:1-10](file://src/lib/editor/history.ts#L1-L10)
+- [EditorWorkspace.tsx:856-878](file://src/components/editor/EditorWorkspace.tsx#L856-L878)
+- [EditorWorkspace.tsx:1715-1724](file://src/components/editor/EditorWorkspace.tsx#L1715-L1724)
+
+**Section sources**
+- [history.ts:1-10](file://src/lib/editor/history.ts#L1-L10)
+- [EditorWorkspace.tsx:856-878](file://src/components/editor/EditorWorkspace.tsx#L856-L878)
+- [EditorWorkspace.tsx:1715-1724](file://src/components/editor/EditorWorkspace.tsx#L1715-L1724)
 
 ### Server Submission Store: Validation, Locking, Revisions, and Enhanced Error Handling
 - Enforces editability (draft or template mode) and revision checks to prevent lost updates.
@@ -323,27 +389,32 @@ API-->>UI : updated status
 - [RenderProgress.tsx:1-30](file://src/components/submissions/RenderProgress.tsx#L1-L30)
 
 ## Dependency Analysis
-- EditorWorkspace depends on DraftPersistence for autosave and recovery, and on submissions APIs for lifecycle and content.
+- EditorWorkspace depends on DraftPersistence for autosave and recovery, History Management for undo/redo functionality, and on submissions APIs for lifecycle and content.
 - DraftPersistence depends on browser Storage and the transport function that calls PATCH/PUT endpoints.
+- History Management provides efficient snapshot management with optimized entry creation patterns.
 - Submission APIs depend on Prisma models and the submission store for locking, validation, and enhanced error handling.
 - Render pipeline depends on database queues and worker processes for reliable export.
 
 ```mermaid
 graph LR
 EW["EditorWorkspace.tsx"] --> DP["DraftPersistence"]
+EW --> HM["History Management"]
 DP --> API_PUT["PUT /:id/pages/:label"]
 DP --> API_PATCH["PATCH /:id"]
 API_PUT --> SS["submission-store.ts"]
 API_PATCH --> SS
 SS --> ERH["Enhanced Error Handling"]
 ERH --> DB["Prisma Models"]
+HM --> HISTORY["history.ts"]
 RQ["render-job.ts"] --> WK["render-worker.ts"]
 UI["RenderProgress.tsx"] --> RQ
 ```
 
 **Diagram sources**
 - [EditorWorkspace.tsx:432-771](file://src/components/editor/EditorWorkspace.tsx#L432-L771)
+- [EditorWorkspace.tsx:1715-1724](file://src/components/editor/EditorWorkspace.tsx#L1715-L1724)
 - [persistence.ts:11-122](file://src/lib/editor/persistence.ts#L11-L122)
+- [history.ts:1-10](file://src/lib/editor/history.ts#L1-L10)
 - [submission-store.ts:25-147](file://src/lib/editor/submission-store.ts#L25-L147)
 - [submission-store.ts:14-30](file://src/lib/editor/submission-store.ts#L14-L30)
 - [render-job.ts:21-86](file://src/lib/pdf/render-job.ts#L21-L86)
@@ -352,7 +423,9 @@ UI["RenderProgress.tsx"] --> RQ
 
 **Section sources**
 - [EditorWorkspace.tsx:432-771](file://src/components/editor/EditorWorkspace.tsx#L432-L771)
+- [EditorWorkspace.tsx:1715-1724](file://src/components/editor/EditorWorkspace.tsx#L1715-L1724)
 - [persistence.ts:11-122](file://src/lib/editor/persistence.ts#L11-L122)
+- [history.ts:1-10](file://src/lib/editor/history.ts#L1-L10)
 - [submission-store.ts:25-147](file://src/lib/editor/submission-store.ts#L25-L147)
 - [submission-store.ts:14-30](file://src/lib/editor/submission-store.ts#L14-L30)
 - [render-job.ts:21-86](file://src/lib/pdf/render-job.ts#L21-L86)
@@ -364,7 +437,8 @@ UI["RenderProgress.tsx"] --> RQ
 - Debounced autosave balances responsiveness with bandwidth usage.
 - Revision-based concurrency control prevents lost updates without heavy locking at the client.
 - Durable render jobs with leases ensure long-running exports are resilient to worker restarts.
-- Enhanced error handling minimizes performance impact while providing comprehensive diagnostic information.
+- **Enhanced**: Optimized history management reduces unnecessary history entries during active typing sessions, improving performance and user experience.
+- **Enhanced**: Error handling minimizes performance impact while providing comprehensive diagnostic information.
 
 [No sources needed since this section provides general guidance]
 
@@ -374,16 +448,18 @@ UI["RenderProgress.tsx"] --> RQ
 - Network offline: Autosave will not complete; reconnection triggers flushAll to push pending changes.
 - Render failures: Polling shows job attempts and next attempt time; users can retry safely after failure.
 - **Enhanced**: Database errors now provide detailed Prisma error codes and metadata in server logs for faster diagnosis of connection issues, constraint violations, and other database problems.
+- **Enhanced**: History management improvements reduce unnecessary undo/redo entries during active typing, making the undo/redo experience more intuitive and performant.
 
-**Updated** Enhanced troubleshooting capabilities now include detailed Prisma error diagnostics with error code extraction and metadata logging for improved database issue resolution.
+**Updated** Enhanced troubleshooting capabilities now include detailed Prisma error diagnostics with error code extraction and metadata logging for improved database issue resolution, along with optimized history management for better user experience.
 
 **Section sources**
 - [persistence.ts:32-34](file://src/lib/editor/persistence.ts#L32-L34)
 - [persistence.ts:67-79](file://src/lib/editor/persistence.ts#L67-L79)
 - [EditorWorkspace.tsx:817-828](file://src/components/editor/EditorWorkspace.tsx#L817-L828)
+- [EditorWorkspace.tsx:1715-1724](file://src/components/editor/EditorWorkspace.tsx#L1715-L1724)
 - [submission-store.ts:40-44](file://src/lib/editor/submission-store.ts#L40-L44)
 - [submission-store.ts:14-30](file://src/lib/editor/submission-store.ts#L14-L30)
 - [RenderProgress.tsx:1-30](file://src/components/submissions/RenderProgress.tsx#L1-L30)
 
 ## Conclusion
-The editor's persistence and recovery system combines optimistic local state, robust localStorage recovery, strict server-side revision control, and a durable render pipeline with enhanced error handling. Together, these mechanisms protect user work across reloads, network issues, and concurrent edits while enabling reliable export workflows and providing comprehensive database error diagnostics for improved operational visibility.
+The editor's persistence and recovery system combines optimistic local state, robust localStorage recovery, strict server-side revision control, and a durable render pipeline with enhanced error handling and optimized history management. Together, these mechanisms protect user work across reloads, network issues, and concurrent edits while enabling reliable export workflows, providing comprehensive database error diagnostics for improved operational visibility, and delivering a smoother user experience through efficient history management that reduces unnecessary undo/redo entries during active typing sessions.
