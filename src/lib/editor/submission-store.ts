@@ -18,7 +18,14 @@ export function errorResponse(error: unknown) {
   if (error instanceof z.ZodError || error instanceof SyntaxError) {
     return Response.json({ error: 'Invalid editor content' }, { status: 400 });
   }
-  console.error('Submission operation failed');
+  // Log enough detail to diagnose without leaking internals to the client.
+  if (error && typeof error === 'object' && 'code' in error) {
+    // Prisma errors carry a .code (e.g. P2022) and .meta that are invaluable.
+    const pe = error as { code?: string; message?: string; meta?: unknown };
+    console.error(`Submission DB error [${pe.code}]: ${pe.message}`, pe.meta ?? '');
+  } else {
+    console.error('Submission operation failed', error instanceof Error ? error.message : error);
+  }
   return Response.json({ error: 'Unable to save this operation. Please retry.' }, { status: 500 });
 }
 
