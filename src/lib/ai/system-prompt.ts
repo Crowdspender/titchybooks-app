@@ -10,7 +10,7 @@ export interface BookContext {
   }>;
 }
 
-const PAGE_DESCRIPTIONS: Record<PageLabel, string> = {
+export const PAGE_DESCRIPTIONS: Record<PageLabel, string> = {
   FRONT_COVER: "The front cover — the first thing readers see. Best for a title, author name, and a short tagline.",
   BACK_COVER: "The back cover — typically a short blurb or summary. Note: a branding strip at the bottom is reserved and cannot be used.",
   PAGE_2: "Page 2 — the first interior page, good for a dedication, introduction, or the start of the story.",

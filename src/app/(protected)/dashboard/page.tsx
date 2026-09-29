@@ -43,6 +43,9 @@ export default function DashboardPage() {
         <Link href="/create/templates" className="btn btn-outline btn-sm">
           From Template
         </Link>
+        <Link href="/create/ai" className="btn btn-outline btn-sm">
+          Create with AI
+        </Link>
         <ContinueEditingButton />
         <div className="flex-1" />
         <Link href="/create?new=true" className="btn btn-primary btn-sm">

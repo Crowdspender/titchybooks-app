@@ -15,7 +15,8 @@
     "test:db:migrate": "tsx scripts/test-db.ts migrate",
     "test:integration": "tsx scripts/test-db.ts integration",
     "test:browser": "tsx scripts/test-db.ts browser",
-    "worker:render": "tsx src/workers/render-worker.ts"
+    "worker:render": "tsx src/workers/render-worker.ts",
+    "worker:ai": "tsx src/workers/ai-book-worker.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1009.0",

@@ -14,8 +14,14 @@ export async function GET(request: NextRequest) {
 
   const { searchParams } = new URL(request.url);
   const status = searchParams.get("status");
+  // Spot-check view: AI books that were auto-approved and sampled for review.
+  const spotCheck = searchParams.get("spotCheck") === "true";
 
-  const where = status ? { status } : {};
+  const where = spotCheck
+    ? { qaSampled: true, status: "APPROVED" }
+    : status
+      ? { status }
+      : {};
 
   const submissions = await prisma.submission.findMany({
     where,

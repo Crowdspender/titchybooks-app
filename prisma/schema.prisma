@@ -25,6 +25,7 @@ model User {
   assets                  Asset[]
   submissions             Submission[]
   orders                  Order[]
+  aiBookJobs              AiBookJob[]
   createdAt               DateTime     @default(now())
   updatedAt               DateTime     @updatedAt
 }
@@ -50,11 +51,16 @@ model Submission {
   version         Int               @default(1) // Template version counter (incremented on publish)
   publishedAt     DateTime?         // When a template was published
 
+  // Autonomous AI pipeline fields
+  aiGenerated     Boolean           @default(false) // Created end-to-end by the AI book pipeline
+  qaSampled       Boolean           @default(false) // Flagged for admin spot-check after auto-approval
+
   images          SubmissionImage[]
   pages           SubmissionPage[]
   orders          Order[]
   vaultEntries    VaultEntry[]
   renderJobs      RenderJob[]
+  aiBookJobs      AiBookJob[]
   templateElements TemplateElement[] @relation("TemplateElements")
   instances       Submission[]      @relation("TemplateInstances")
   template        Submission?       @relation("TemplateInstances", fields: [templateId], references: [id])
@@ -212,6 +218,35 @@ model VaultEntry {
 
   @@index([submissionId])
   @@index([status])
+}
+
+model AiBookJob {
+  id             String      @id @default(cuid())
+  userId         String
+  user           User        @relation(fields: [userId], references: [id])
+  concept        String      // user prompt, max 2000 chars enforced in API
+  templateId     String?     // optional user-chosen template; otherwise AI-selected
+  submissionId   String?     // set once COMPOSE succeeds
+  submission     Submission? @relation(fields: [submissionId], references: [id])
+  renderJobId    String?     // set once RENDER is enqueued
+  status         String      @default("QUEUED")  // QUEUED, PROCESSING, COMPLETED, FAILED
+  stage          String      @default("CONCEPT") // CONCEPT, CONTENT, COMPOSE, RENDER, QA
+  stageOutput    Json?       // { contentPlan?, templateId?, qaReport? } persisted per stage
+  attempts       Int         @default(0)
+  maxAttempts    Int         @default(3)
+  nextAttemptAt  DateTime    @default(now())
+  leaseExpiresAt DateTime?
+  claimToken     String?
+  errorMessage   String?
+  startedAt      DateTime?
+  completedAt    DateTime?
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  @@index([userId])
+  @@index([submissionId])
+  @@index([status, nextAttemptAt])
+  @@index([status, leaseExpiresAt])
 }
 
 model RenderJob {

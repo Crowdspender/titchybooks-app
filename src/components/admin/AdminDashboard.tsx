@@ -20,6 +20,8 @@ interface AdminSubmission {
   pdfDownloadUrl: string | null;
   rejectionReason: string | null;
   createdAt: string;
+  aiGenerated: boolean;
+  qaSampled: boolean;
   pagePreviews: PagePreview[];
   user: {
     id: string;
@@ -27,6 +29,8 @@ interface AdminSubmission {
     name: string | null;
   };
 }
+
+const SPOT_CHECK = "SPOT_CHECK";
 
 export default function AdminDashboard() {
   const [submissions, setSubmissions] = useState<AdminSubmission[]>([]);
@@ -39,7 +43,11 @@ export default function AdminDashboard() {
     let cancelled = false;
     async function load() {
       setLoading(true);
-      const params = filter ? `?status=${filter}` : "";
+      const params = filter === SPOT_CHECK
+        ? "?spotCheck=true"
+        : filter
+        ? `?status=${filter}`
+        : "";
       const res = await fetch(`/api/admin/submissions${params}`);
       const data = await res.json();
       if (!cancelled) {
@@ -106,6 +114,14 @@ export default function AdminDashboard() {
             {s || "All"}
           </button>
         ))}
+        <button
+          onClick={() => setFilter(SPOT_CHECK)}
+          className={`btn btn-sm ${
+            filter === SPOT_CHECK ? "btn-primary" : "btn-ghost"
+          }`}
+        >
+          Spot-check
+        </button>
       </div>
 
       {loading
@@ -223,6 +239,18 @@ export default function AdminDashboard() {
                             >
                               {sub.title}
                             </div>
+                          )}
+                          {sub.aiGenerated && (
+                            <span
+                              className="badge text-[10px] mt-1 inline-block"
+                              style={{
+                                background: "var(--color-primary-muted)",
+                                color: "var(--color-primary)",
+                              }}
+                              title={sub.qaSampled ? "AI-created, sampled for spot-check" : "AI-created"}
+                            >
+                              AI{sub.qaSampled ? " · spot-check" : ""}
+                            </span>
                           )}
                         </td>
                         <td
