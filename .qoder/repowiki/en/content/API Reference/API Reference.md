@@ -926,7 +926,7 @@ USER ||--o{ AI_BOOK_JOB : "initiates"
 SUBMISSION ||--o{ SUBMISSION_IMAGE : "contains"
 SUBMISSION ||--o{ SUBMISSION_PAGE : "contains"
 SUBMISSION ||--o{ TEMPLATE_ELEMENT : "provides"
-SUBMISSION ||--o{ AI_BOOK_JOB : "generated_by"
+SUBMISSION |o--o{ AI_BOOK_JOB : "generated_by"
 ASSET ||--|| SUBMISSION_IMAGE : "references"
 ORDER ||--|| SUBMISSION : "orders"
 ```
