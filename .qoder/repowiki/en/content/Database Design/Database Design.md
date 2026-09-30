@@ -3,38 +3,22 @@
 <cite>
 **Referenced Files in This Document**
 - [schema.prisma](file://prisma/schema.prisma)
-- [migration.sql](file://prisma/migrations/20260316171130_init/migration.sql)
-- [migration.sql](file://prisma/migrations/20260424120000_editor_foundation/migration.sql)
-- [migration.sql](file://prisma/migrations/20260430000000_orders/migration.sql)
-- [migration.sql](file://prisma/migrations/20260501000000_pricing_currency_rates/migration.sql)
-- [migration.sql](file://prisma/migrations/20260501123018_add_template_system/migration.sql)
-- [seed.ts](file://prisma/seed.ts)
-- [prisma.ts](file://src/lib/prisma.ts)
-- [constants.ts](file://src/lib/constants.ts)
-- [editor/constants.ts](file://src/lib/editor/constants.ts)
-- [pricing/constants.ts](file://src/lib/pricing/constants.ts)
-- [auth.ts](file://src/auth.ts)
-- [route.ts](file://src/app/api/submissions/route.ts)
-- [route.ts](file://src/app/api/submissions/[id]/route.ts)
-- [route.ts](file://src/app/api/submissions/[id]/pdf/route.ts)
-- [route.ts](file://src/app/api/admin/submissions/route.ts)
-- [route.ts](file://src/app/api/admin/submissions/[id]/route.ts)
-- [route.ts](file://src/app/api/orders/route.ts)
-- [route.ts](file://src/app/api/admin/pricing-config/route.ts)
-- [generate.ts](file://src/lib/pdf/generate.ts)
-- [image-processor.ts](file://src/lib/pdf/image-processor.ts)
-- [s3.ts](file://src/lib/s3.ts)
+- [migration.sql](file://prisma/migrations/20260929090000_add_ai_book_jobs/migration.sql)
+- [ai-book-worker.ts](file://src/workers/ai-book-worker.ts)
+- [ai-book-job.ts](file://src/lib/ai/ai-book-job.ts)
+- [pipeline.ts](file://src/lib/ai/pipeline.ts)
+- [route.ts](file://src/app/api/ai/books/route.ts)
+- [route.ts](file://src/app/api/ai/books/[id]/route.ts)
 </cite>
 
 ## Update Summary
 **Changes Made**
-- Added comprehensive template system with SubmissionTemplate and TemplateElement models
-- Introduced asset management system with Asset model for reusable media
-- Enhanced Submission model with editor-based modes and template relationships
-- Added order management system with Order and PricingConfig models
-- Expanded page-based editing with SubmissionPage model replacing legacy images
-- Added pricing configuration system with currency rate support
-- Updated migration history to reflect new schema evolution
+- Enhanced Submission model with aiGenerated and qaSampled fields for AI pipeline tracking
+- Added new AiBookJob table for autonomous AI book creation lifecycle management
+- Implemented lease/heartbeat/fencing mechanisms for distributed job processing
+- Integrated AI book worker system with stage-based pipeline processing
+- Added API endpoints for AI book job creation and status polling
+- Updated database schema with comprehensive indexing for job queue operations
 
 ## Table of Contents
 1. [Introduction](#introduction)
@@ -49,106 +33,68 @@
 10. [Appendices](#appendices)
 
 ## Introduction
-This document describes the comprehensive database design for Titchybook Creator, covering the expanded data model supporting the full editor ecosystem. The schema now includes:
-- Enhanced User model with authentication, roles, and relationships to assets, submissions, and orders
-- Advanced Submission model supporting multiple creation modes (legacy upload, editor, template)
-- Template system with SubmissionTemplate and TemplateElement for reusable designs
-- Asset management for reusable media across projects
-- Order management with pricing configuration and currency support
-- Page-based editing system replacing legacy image-centric approach
-- Comprehensive foreign key relationships, indexes, and constraints
-- Prisma schema definitions across multiple migration phases
-- Database seeding with templates and pricing configuration
-- Sample data examples and advanced query patterns
-- Validation rules, business constraints, and referential integrity
-- Performance considerations and indexing strategies for the expanded schema
+This document describes the comprehensive database design for Titchybook Creator, now enhanced with autonomous AI book creation capabilities. The schema includes the original editor ecosystem plus new AI pipeline components that enable end-to-end automated booklet generation with quality assurance workflows. Key additions include:
+- Enhanced Submission model with aiGenerated and qaSampled flags for AI pipeline tracking
+- New AiBookJob table implementing distributed job processing with lease/heartbeat/fencing
+- Stage-based pipeline architecture (CONCEPT → CONTENT → COMPOSE → RENDER → QA)
+- Robust error handling with retry mechanisms and terminal failure states
+- Comprehensive indexing strategy optimized for concurrent job processing
+- Integration with existing template system and rendering infrastructure
 
 ## Project Structure
-The database schema is defined through Prisma with a multi-phase migration strategy, evolving from basic submission management to a comprehensive editor ecosystem. The schema now supports template-based creation, asset management, order processing, and international pricing.
+The database schema has evolved to support both traditional manual creation and autonomous AI-generated books through a sophisticated job processing system.
 
 ```mermaid
 graph TB
 subgraph "Prisma Layer"
 PRISMA_SCHEMA["prisma/schema.prisma"]
+AI_MIG["20260929090000_add_ai_book_jobs/migration.sql"]
 INIT_MIG["20260316171130_init/migration.sql"]
 EDITOR_MIG["20260424120000_editor_foundation/migration.sql"]
 ORDERS_MIG["20260430000000_orders/migration.sql"]
-PRICING_MIG["20260501000000_pricing_currency_rates/migration.sql"]
 TEMPLATE_MIG["20260501123018_add_template_system/migration.sql"]
-SEED["prisma/seed.ts"]
+end
+subgraph "AI Processing Layer"
+AI_WORKER["src/workers/ai-book-worker.ts"]
+JOB_MANAGER["src/lib/ai/ai-book-job.ts"]
+PIPELINE["src/lib/ai/pipeline.ts"]
+API_ROUTES["src/app/api/ai/books/*"]
 end
 subgraph "Application Layer"
-PRISMA_CLIENT["src/lib/prisma.ts"]
-AUTH["src/auth.ts"]
 SUB_API["src/app/api/submissions/*"]
 ORDER_API["src/app/api/orders/*"]
 ADMIN_API["src/app/api/admin/*"]
-PRICING_API["src/app/api/pricing/*"]
 PDF_GEN["src/lib/pdf/generate.ts"]
-IMG_PROC["src/lib/pdf/image-processor.ts"]
 S3["src/lib/s3.ts"]
 end
+PRISMA_SCHEMA --> AI_MIG
 PRISMA_SCHEMA --> INIT_MIG
 PRISMA_SCHEMA --> EDITOR_MIG
 PRISMA_SCHEMA --> ORDERS_MIG
-PRISMA_SCHEMA --> PRICING_MIG
 PRISMA_SCHEMA --> TEMPLATE_MIG
-SEED --> PRISMA_CLIENT
-PRISMA_CLIENT --> SUB_API
-PRISMA_CLIENT --> ORDER_API
-PRISMA_CLIENT --> ADMIN_API
-PRISMA_CLIENT --> PRICING_API
-AUTH --> SUB_API
-AUTH --> ORDER_API
-AUTH --> ADMIN_API
-PDF_GEN --> IMG_PROC
-PDF_GEN --> S3
+AI_WORKER --> JOB_MANAGER
+JOB_MANAGER --> PIPELINE
+API_ROUTES --> JOB_MANAGER
+JOB_MANAGER --> SUB_API
 SUB_API --> S3
-ORDER_API --> PRICING_API
+ORDER_API --> PDF_GEN
 ```
 
 **Diagram sources**
-- [schema.prisma:1-178](file://prisma/schema.prisma#L1-L178)
-- [migration.sql:1-45](file://prisma/migrations/20260316171130_init/migration.sql#L1-L45)
-- [migration.sql:1-51](file://prisma/migrations/20260424120000_editor_foundation/migration.sql#L1-L51)
-- [migration.sql:1-59](file://prisma/migrations/20260430000000_orders/migration.sql#L1-L59)
-- [migration.sql:1-7](file://prisma/migrations/20260501000000_pricing_currency_rates/migration.sql#L1-L7)
-- [migration.sql:1-51](file://prisma/migrations/20260501123018_add_template_system/migration.sql#L1-L51)
-- [seed.ts:1-350](file://prisma/seed.ts#L1-L350)
-
-**Section sources**
-- [schema.prisma:1-178](file://prisma/schema.prisma#L1-L178)
-- [migration.sql:1-45](file://prisma/migrations/20260316171130_init/migration.sql#L1-L45)
-- [migration.sql:1-51](file://prisma/migrations/20260424120000_editor_foundation/migration.sql#L1-L51)
-- [migration.sql:1-59](file://prisma/migrations/20260430000000_orders/migration.sql#L1-L59)
-- [migration.sql:1-7](file://prisma/migrations/20260501000000_pricing_currency_rates/migration.sql#L1-L7)
-- [migration.sql:1-51](file://prisma/migrations/20260501123018_add_template_system/migration.sql#L1-L51)
-- [prisma.ts:1-10](file://src/lib/prisma.ts#L1-L10)
+- [schema.prisma:1-275](file://prisma/schema.prisma#L1-L275)
+- [migration.sql:1-47](file://prisma/migrations/20260929090000_add_ai_book_jobs/migration.sql#L1-L47)
+- [ai-book-worker.ts:1-34](file://src/workers/ai-book-worker.ts#L1-L34)
+- [ai-book-job.ts:1-173](file://src/lib/ai/ai-book-job.ts#L1-L173)
+- [pipeline.ts:1-365](file://src/lib/ai/pipeline.ts#L1-L365)
+- [route.ts:1-53](file://src/app/api/ai/books/route.ts#L1-L53)
 
 ## Core Components
-This section documents the expanded model set supporting the comprehensive editor ecosystem.
+This section documents the enhanced model set supporting both manual and AI-driven booklet creation workflows.
 
-### User Model
-- Purpose: Central authentication and profile management for creators and administrators
-- Key fields:
-  - id: String, primary key, cuid()
-  - email: String, unique, used for login
-  - passwordHash: String, bcrypt-hashed password
-  - name: String?, optional display name
-  - role: String, default "USER"; supports "ADMIN"
-  - assets: Asset[] array relationship
-  - submissions: Submission[] array relationship  
-  - orders: Order[] array relationship
-  - createdAt/updatedAt: Timestamps managed by Prisma
-- Relationships:
-  - One-to-many with Asset via userId
-  - One-to-many with Submission via userId
-  - One-to-many with Order via userId
-- Constraints:
-  - Unique index on email enforced by Prisma and SQL migration
+### Enhanced Submission Model
+**Updated** - Now includes AI pipeline tracking fields
 
-### Submission Model (Enhanced)
-- Purpose: Represents booklet creation requests with multiple creation modes and template support
+- Purpose: Represents booklet creation requests with multiple creation modes including AI-generated content
 - Key fields:
   - id: String, primary key, cuid()
   - userId: String, foreign key to User
@@ -159,7 +105,10 @@ This section documents the expanded model set supporting the comprehensive edito
   - previewS3Key: String?, nullable S3 key for preview
   - rejectionReason: String?, nullable reason when rejected
   - editorVersion: Int, default 1, tracks editor compatibility
+  - revision: Int, default 0, version counter for submissions
   - submittedAt: DateTime?, timestamp when submitted
+  - **aiGenerated**: Boolean, default false, marks AI-created submissions
+  - **qaSampled**: Boolean, default false, flags submissions for admin spot-check after auto-approval
   - templateId: String?, self-reference to parent template (set on instances)
   - templateVersion: Int?, snapshot of template version when instance created
   - isTemplate: Boolean, default false, true for template submissions
@@ -174,145 +123,82 @@ This section documents the expanded model set supporting the comprehensive edito
   - One-to-many with TemplateElement via templateId (relation "TemplateElements")
   - One-to-many with Submission via templateId (relation "TemplateInstances")
   - One-to-one with Template via templateId (relation "TemplateInstances")
+  - One-to-many with AiBookJob via submissionId
 - Indexes:
   - Index on userId for efficient user-scoped queries
   - Index on isTemplate for template filtering
   - Index on templateId for template relationships
-- Constraints:
-  - Foreign key constraint on userId referencing User(id)
-  - Foreign key constraint on templateId referencing Submission(id) with SET NULL on delete
-  - Default status "PENDING"
-
-### SubmissionPage Model (New)
-- Purpose: Stores page-level editing data for the modern editor system
-- Key fields:
-  - id: String, primary key, cuid()
-  - submissionId: String, foreign key to Submission
-  - pageLabel: String, identifies the page (e.g., FRONT_COVER, PAGE_2, ..., PAGE_7, BACK_COVER)
-  - order: Int, page ordering (0–7)
-  - sceneJson: String, default "{}", JSON of editor scene data
-  - previewS3Key: String?, nullable S3 key for page preview
-  - renderedPageS3Key: String?, nullable S3 key for rendered page
-  - createdAt/updatedAt: Timestamps
-- Relationships:
-  - Belongs to Submission (one-to-many)
-- Indexes:
-  - Index on submissionId for efficient per-submission queries
-- Constraints:
-  - Foreign key constraint on submissionId referencing Submission(id) with cascade delete
-  - Unique constraint on (submissionId, pageLabel)
-  - Unique constraint on (submissionId, order)
-
-### Asset Model (New)
-- Purpose: Manages reusable media assets across projects
-- Key fields:
-  - id: String, primary key, cuid()
-  - userId: String, foreign key to User
-  - s3Key: String, unique, S3 key for the asset
-  - originalFilename: String, original filename
-  - mimeType: String, e.g., image/jpeg, image/png, image/webp
-  - width: Int?, nullable width in pixels
-  - height: Int?, nullable height in pixels
-  - fileSize: Int, file size in bytes
-  - createdAt/updatedAt: Timestamps
-- Relationships:
-  - Belongs to User (one-to-many)
-- Indexes:
-  - Index on userId for efficient user-scoped queries
-- Constraints:
-  - Unique constraint on s3Key
-  - Foreign key constraint on userId referencing User(id)
-
-### Order Model (New)
-- Purpose: Manages customer orders with comprehensive pricing and shipping
-- Key fields:
-  - id: String, primary key, cuid()
-  - userId: String, foreign key to User
-  - submissionId: String, foreign key to Submission
-  - quantity: Int, number of copies
-  - zone: String, shipping zone identifier
-  - weightGrams: Int, total weight in grams
-  - shippingBand: Int, weight band index
-  - unitPriceHuf: Int, unit price in Hungarian Forint
-  - printCostHuf: Int, print cost in HUF
-  - handlingCostHuf: Int, default 0, handling fee in HUF
-  - shippingCostHuf: Int, shipping cost in HUF
-  - discountHuf: Int, default 0, discount in HUF
-  - totalHuf: Int, total cost in HUF
-  - currency: String, default "HUF", target currency
-  - status: String, default "PENDING_PAYMENT", order lifecycle status
-  - pricingConfigVersion: Int, version of pricing config used
-  - recipientName: String, shipping recipient
-  - line1/line2: String?, shipping address lines
-  - city: String, shipping city
-  - postalCode: String, shipping postal code
-  - countryCode: String, shipping country code
-  - phone: String?, recipient phone
-  - fulfillmentHub: String?, future-proofing field
-  - couponCode: String?, future-proofing field
-  - parentBatchId: String?, future-proofing field
-  - notes: String?, administrative notes
-  - createdAt/updatedAt: Timestamps
-- Relationships:
-  - Belongs to User (one-to-many)
-  - Belongs to Submission (one-to-many)
-- Indexes:
-  - Index on userId for efficient user-scoped queries
-  - Index on submissionId for efficient submission-scoped queries
-  - Index on status for order filtering
-- Constraints:
-  - Foreign key constraint on userId referencing User(id)
-  - Foreign key constraint on submissionId referencing Submission(id)
-
-### TemplateElement Model (New)
-- Purpose: Stores reusable editor elements within templates
-- Key fields:
-  - id: String, primary key, cuid()
-  - templateId: String, foreign key to Submission (template)
-  - pageLabel: String, page identifier for element placement
-  - order: Int, rendering order within page
-  - elementJson: String, JSON string of the element data
-  - createdAt/updatedAt: Timestamps
-- Relationships:
-  - Belongs to Submission (template) (one-to-many)
-- Indexes:
-  - Index on templateId for efficient template queries
-  - Index on (templateId, pageLabel) for page-specific queries
-- Constraints:
-  - Foreign key constraint on templateId referencing Submission(id) with cascade delete
-
-### PricingConfig Model (New)
-- Purpose: Centralized pricing configuration with currency support
-- Key fields:
-  - id: String, primary key, default "default"
-  - version: Int, default 1, configuration version
-  - weightPerBookGrams: Int, default 6, weight per book in grams
-  - handlingFixedHuf: Int, default 0, fixed handling cost in HUF
-  - handlingPercent: Float, default 0, percentage handling cost
-  - enabledZones: String, JSON string of enabled shipping zones
-  - weightBands: String, JSON string of weight bands
-  - shippingTable: String, JSON string of per-zone shipping costs
-  - priceTiers: String, JSON string of volume discount tiers
-  - currencyRates: String, default JSON rates, HUF→currency conversion factors
-  - updatedAt: DateTime, timestamp of last update
-  - updatedByUserId: String?, user who last updated configuration
-- Constraints:
-  - Single row constraint via default id "default"
-  - Currency rates stored as JSON string with HUF base
 
 **Section sources**
-- [schema.prisma:10-178](file://prisma/schema.prisma#L10-L178)
-- [migration.sql:1-45](file://prisma/migrations/20260316171130_init/migration.sql#L1-L45)
-- [migration.sql:1-51](file://prisma/migrations/20260424120000_editor_foundation/migration.sql#L1-L51)
-- [migration.sql:1-59](file://prisma/migrations/20260430000000_orders/migration.sql#L1-L59)
-- [migration.sql:1-7](file://prisma/migrations/20260501000000_pricing_currency_rates/migration.sql#L1-L7)
-- [migration.sql:1-51](file://prisma/migrations/20260501123018_add_template_system/migration.sql#L1-L51)
-- [constants.ts:6-59](file://src/lib/constants.ts#L6-L59)
-- [editor/constants.ts:1-21](file://src/lib/editor/constants.ts#L1-L21)
-- [pricing/constants.ts:1-132](file://src/lib/pricing/constants.ts#L1-L132)
+- [schema.prisma:33-73](file://prisma/schema.prisma#L33-L73)
+- [migration.sql:1-3](file://prisma/migrations/20260929090000_add_ai_book_jobs/migration.sql#L1-L3)
+
+### AiBookJob Model (New)
+- Purpose: Manages autonomous AI book creation jobs with distributed processing capabilities
+- Key fields:
+  - id: String, primary key, cuid()
+  - userId: String, foreign key to User
+  - concept: String, user prompt (max 2000 chars enforced in API)
+  - templateId: String?, optional user-chosen template; otherwise AI-selected
+  - submissionId: String?, set once COMPOSE succeeds
+  - renderJobId: String?, set once RENDER is enqueued
+  - status: String, default "QUEUED"; supports "PROCESSING", "COMPLETED", "FAILED"
+  - stage: String, default "CONCEPT"; supports "CONTENT", "COMPOSE", "RENDER", "QA"
+  - stageOutput: Json?, persists per-stage output { contentPlan?, templateId?, qaReport? }
+  - attempts: Int, default 0, tracks retry attempts
+  - maxAttempts: Int, default 3, maximum retry attempts before failure
+  - nextAttemptAt: DateTime, default now(), scheduled retry time
+  - leaseExpiresAt: DateTime?, lease expiration for distributed processing
+  - claimToken: String?, unique token for job ownership
+  - errorMessage: String?, error details for failed jobs
+  - startedAt: DateTime?, when job processing began
+  - completedAt: DateTime?, when job finished successfully
+  - createdAt/updatedAt: Timestamps
+- Relationships:
+  - Belongs to User (one-to-many)
+  - Belongs to Submission (one-to-many, nullable until COMPOSE stage)
+- Indexes:
+  - Index on userId for user-specific job queries
+  - Index on submissionId for submission-related job tracking
+  - Composite index on (status, nextAttemptAt) for job scheduling
+  - Composite index on (status, leaseExpiresAt) for lease recovery
+
+**Section sources**
+- [schema.prisma:223-250](file://prisma/schema.prisma#L223-L250)
+- [migration.sql:5-47](file://prisma/migrations/20260929090000_add_ai_book_jobs/migration.sql#L5-L47)
+
+### RenderJob Model (Enhanced)
+**Updated** - Now integrated with AI book pipeline
+
+- Purpose: Manages PDF rendering jobs with distributed processing capabilities
+- Key fields:
+  - id: String, primary key, cuid()
+  - submissionId: String, foreign key to Submission
+  - status: String, default "QUEUED"; supports "PROCESSING", "COMPLETED", "FAILED"
+  - attempts: Int, default 0, tracks retry attempts
+  - maxAttempts: Int, default 3, maximum retry attempts before failure
+  - inputSnapshot: Json?, preserves rendering input data
+  - nextAttemptAt: DateTime, default now(), scheduled retry time
+  - leaseExpiresAt: DateTime?, lease expiration for distributed processing
+  - claimToken: String?, unique token for job ownership
+  - errorMessage: String?, error details for failed jobs
+  - pdfS3Key: String?, generated PDF location
+  - startedAt: DateTime?, when job processing began
+  - completedAt: DateTime?, when job finished successfully
+  - createdAt/updatedAt: Timestamps
+- Relationships:
+  - Belongs to Submission (one-to-many)
+- Indexes:
+  - Index on submissionId for submission-related queries
+  - Index on status for job status filtering
+  - Composite index on (status, nextAttemptAt) for job scheduling
+  - Composite index on (status, leaseExpiresAt) for lease recovery
+
+**Section sources**
+- [schema.prisma:252-275](file://prisma/schema.prisma#L252-L275)
 
 ## Architecture Overview
-The database architecture now centers around five core entities with sophisticated relationships supporting the complete editor ecosystem. Users create Submissions (either legacy uploads, editor-created, or templates), which contain either images or pages depending on mode. Templates provide reusable design systems with associated elements. Assets enable media reuse across projects. Orders connect approved submissions to customer purchases with comprehensive pricing.
+The database architecture now centers around six core entities with sophisticated relationships supporting both manual and AI-driven creation workflows. Users create Submissions through traditional methods or AI pipelines, which contain either images or pages depending on mode. Templates provide reusable design systems with associated elements. Assets enable media reuse across projects. Orders connect approved submissions to customer purchases with comprehensive pricing. The new AiBookJob system manages autonomous AI book creation with robust distributed processing capabilities.
 
 ```mermaid
 erDiagram
@@ -335,12 +221,53 @@ string pdfS3Key
 string previewS3Key
 string rejectionReason
 int editorVersion
+int revision
 datetime submittedAt
+boolean aiGenerated
+boolean qaSampled
 string templateId FK
 int templateVersion
 boolean isTemplate
 int version
 datetime publishedAt
+datetime createdAt
+datetime updatedAt
+}
+AI_BOOK_JOB {
+string id PK
+string userId FK
+string concept
+string templateId FK
+string submissionId FK
+string renderJobId
+string status
+string stage
+json stageOutput
+int attempts
+int maxAttempts
+datetime nextAttemptAt
+datetime leaseExpiresAt
+string claimToken
+string errorMessage
+datetime startedAt
+datetime completedAt
+datetime createdAt
+datetime updatedAt
+}
+RENDER_JOB {
+string id PK
+string submissionId FK
+string status
+int attempts
+int maxAttempts
+json inputSnapshot
+datetime nextAttemptAt
+datetime leaseExpiresAt
+string claimToken
+string errorMessage
+string pdfS3Key
+datetime startedAt
+datetime completedAt
 datetime createdAt
 datetime updatedAt
 }
@@ -350,6 +277,7 @@ string submissionId FK
 string pageLabel
 int order
 string sceneJson
+int revision
 string previewS3Key
 string renderedPageS3Key
 datetime createdAt
@@ -391,7 +319,7 @@ string city
 string postalCode
 string countryCode
 string phone
-string fulfillmentHub
+string fulfilmentHub
 string couponCode
 string parentBatchId
 string notes
@@ -418,61 +346,46 @@ string weightBands
 string shippingTable
 string priceTiers
 string currencyRates
+int vaultFeeHuf
 datetime updatedAt
 string updatedByUserId
 }
 USER ||--o{ SUBMISSION : "creates"
 USER ||--o{ ASSET : "owns"
+USER ||--o{ ORDER : "places"
+USER ||--o{ AI_BOOK_JOB : "initiates"
 SUBMISSION ||--o{ SUBMISSION_PAGE : "contains"
 SUBMISSION ||--o{ SUBMISSION_IMAGE : "legacy contains"
 SUBMISSION ||--o{ ORDER : "generates"
+SUBMISSION ||--o{ RENDER_JOB : "renders"
+SUBMISSION ||--o{ AI_BOOK_JOB : "result of"
 SUBMISSION ||--o{ TEMPLATE_ELEMENT : "defines"
 SUBMISSION ||--o{ SUBMISSION : "instances"
+AI_BOOK_JOB ||--|| USER : "belongs to"
+AI_BOOK_JOB ||--|| SUBMISSION : "produces"
+RENDER_JOB ||--|| SUBMISSION : "processes"
 ASSET ||--|| USER : "owned by"
-ASSET ||--o{ SUBMISSION_PAGE : "used in"
 ORDER ||--|| SUBMISSION : "orders"
 ORDER ||--|| USER : "placed by"
 TEMPLATE_ELEMENT ||--|| SUBMISSION : "belongs to"
 ```
 
 **Diagram sources**
-- [schema.prisma:10-178](file://prisma/schema.prisma#L10-L178)
-- [migration.sql:1-45](file://prisma/migrations/20260316171130_init/migration.sql#L1-L45)
-- [migration.sql:1-51](file://prisma/migrations/20260424120000_editor_foundation/migration.sql#L1-L51)
-- [migration.sql:1-59](file://prisma/migrations/20260430000000_orders/migration.sql#L1-L59)
-- [migration.sql:1-7](file://prisma/migrations/20260501000000_pricing_currency_rates/migration.sql#L1-L7)
-- [migration.sql:1-51](file://prisma/migrations/20260501123018_add_template_system/migration.sql#L1-L51)
+- [schema.prisma:10-275](file://prisma/schema.prisma#L10-L275)
 
 ## Detailed Component Analysis
 
-### User Model
-- Authentication fields:
-  - email: unique, used for login
-  - passwordHash: bcrypt-hashed
-- Roles:
-  - role defaults to "USER"
-  - "ADMIN" role is supported and enforced in admin APIs
-- Extended relationships:
-  - assets: one-to-many for media management
-  - submissions: one-to-many for project management
-  - orders: one-to-many for purchase history
-- Timestamps:
-  - createdAt and updatedAt managed by Prisma
-- Validation and constraints:
-  - Unique email enforced at DB level and Prisma level
-  - Role values validated by application logic and admin endpoints
+### Enhanced Submission Model (AI Pipeline Integration)
+**Updated** - Now supports AI-generated content tracking
 
-**Section sources**
-- [schema.prisma:10-21](file://prisma/schema.prisma#L10-L21)
-- [migration.sql:2-10](file://prisma/migrations/20260316171130_init/migration.sql#L2-L10)
-- [auth.ts:43-57](file://src/auth.ts#L43-L57)
-- [seed.ts:22-43](file://prisma/seed.ts#L22-L43)
-
-### Enhanced Submission Model
 - Multiple creation modes:
   - LEGACY_UPLOAD: traditional image-based creation
   - EDITOR: modern page-based editing
   - TEMPLATE: reusable design templates
+- AI pipeline integration:
+  - aiGenerated flag marks submissions created end-to-end by AI pipeline
+  - qaSampled flag indicates submissions selected for admin quality review
+  - revision field tracks version history for AI-generated content
 - Template system:
   - isTemplate flag distinguishes templates from instances
   - templateId links instances to parent templates
@@ -490,354 +403,280 @@ TEMPLATE_ELEMENT ||--|| SUBMISSION : "belongs to"
   - Supports both legacy images and modern pages
   - Template relationships for design reuse
   - Order generation for approved submissions
+  - AI book job tracking for automated creation
 
 **Section sources**
-- [schema.prisma:23-55](file://prisma/schema.prisma#L23-L55)
-- [migration.sql:1-7](file://prisma/migrations/20260424120000_editor_foundation/migration.sql#L1-L7)
-- [migration.sql:13-44](file://prisma/migrations/20260501123018_add_template_system/migration.sql#L13-L44)
-- [constants.ts:6-26](file://src/lib/constants.ts#L6-L26)
-- [route.ts:30-92](file://src/app/api/submissions/route.ts#L30-L92)
+- [schema.prisma:33-73](file://prisma/schema.prisma#L33-L73)
+- [pipeline.ts:272-287](file://src/lib/ai/pipeline.ts#L272-L287)
 
-### SubmissionPage Model (Modern Editor System)
-- Purpose: Replaces legacy image-centric approach with page-based editing
-- Scene data management:
-  - sceneJson stores complete editor state as JSON
-  - Supports complex layouts with multiple elements
-  - Version tracking for editor compatibility
-- Page organization:
-  - pageLabel with predefined set of labels
-  - order field for page sequence
-  - Unique constraints prevent duplicates
-- Preview and rendering:
-  - previewS3Key for real-time previews
-  - renderedPageS3Key for final page output
-- Integration:
-  - Seamlessly replaces SubmissionImage for EDITOR mode
-  - Maintains backward compatibility with legacy submissions
-
-**Section sources**
-- [schema.prisma:71-86](file://prisma/schema.prisma#L71-L86)
-- [migration.sql:8-20](file://prisma/migrations/20260424120000_editor_foundation/migration.sql#L8-L20)
-- [constants.ts:28-50](file://src/lib/constants.ts#L28-L50)
-- [editor/constants.ts:3-8](file://src/lib/editor/constants.ts#L3-L8)
-
-### Asset Model (Media Management)
-- Purpose: Centralized asset management for reusable media across projects
-- Media metadata:
-  - s3Key: unique S3 identifier
-  - originalFilename: preserves original naming
-  - mimeType: supports standard image formats
-  - dimensions: width and height for responsive design
-  - fileSize: byte count for storage management
-- Organization:
-  - userId ownership for personal asset libraries
-  - Index on userId for efficient querying
-- Integration:
-  - Assets can be referenced by multiple pages
-  - Supports both user-uploaded and system-provided assets
+### AiBookJob Model (Distributed Job Processing)
+- Purpose: Manages autonomous AI book creation with robust distributed processing
+- Job lifecycle:
+  - QUEUED: initial state when job is created
+  - PROCESSING: active processing by worker nodes
+  - COMPLETED: successful completion with all stages done
+  - FAILED: terminal failure after exhausting retries
+- Stage progression:
+  - CONCEPT: template selection and slot analysis
+  - CONTENT: AI-generated content planning
+  - COMPOSE: submission instance creation/update
+  - RENDER: PDF generation coordination
+  - QA: automated quality assurance checks
+- Distributed processing features:
+  - Lease mechanism prevents concurrent processing
+  - Heartbeat system maintains job ownership
+  - Fencing ensures atomic state transitions
+  - Retry logic with exponential backoff
+- State persistence:
+  - stageOutput captures intermediate results
+  - attempt tracking for retry management
+  - timestamp tracking for performance monitoring
+- Integration points:
+  - Links to User for ownership tracking
+  - Optional Submission reference after COMPOSE stage
+  - RenderJob coordination for PDF generation
 
 **Section sources**
-- [schema.prisma:88-102](file://prisma/schema.prisma#L88-L102)
-- [migration.sql:22-35](file://prisma/migrations/20260424120000_editor_foundation/migration.sql#L22-L35)
-- [constants.ts:52-58](file://src/lib/constants.ts#L52-L58)
+- [schema.prisma:223-250](file://prisma/schema.prisma#L223-L250)
+- [ai-book-job.ts:1-173](file://src/lib/ai/ai-book-job.ts#L1-L173)
 
-### Order Model (E-commerce System)
-- Purpose: Complete order management with comprehensive pricing
-- Order details:
-  - quantity: number of copies requested
-  - shipping address: complete recipient information
-  - status: full lifecycle management (PENDING_PAYMENT, PAID, IN_PRODUCTION, SHIPPED, DELIVERED, CANCELLED)
-- Pricing integration:
-  - Links to PricingConfig for calculation consistency
-  - Currency support with conversion rates
-  - Volume discounts via price tiers
-- Weight and shipping:
-  - Automatic weight calculation from quantity and book weight
-  - Band-based shipping cost calculation
-  - Multi-zone shipping support
-- Audit trail:
-  - Created and updated timestamps
-  - Pricing configuration version tracking
+### RenderJob Model (Rendering Pipeline Integration)
+**Updated** - Enhanced for AI pipeline coordination
 
-**Section sources**
-- [schema.prisma:104-148](file://prisma/schema.prisma#L104-L148)
-- [migration.sql:1-34](file://prisma/migrations/20260430000000_orders/migration.sql#L1-L34)
-- [pricing/constants.ts:61-84](file://src/lib/pricing/constants.ts#L61-L84)
-- [route.ts:27-130](file://src/app/api/orders/route.ts#L27-L130)
-
-### Template System (Design Reuse)
-- Template creation:
-  - isTemplate flag marks template submissions
-  - version tracking for template evolution
-  - publishedAt timestamp for template lifecycle
-- Template elements:
-  - TemplateElement stores reusable editor components
-  - pageLabel association for targeted placement
-  - order field for rendering priority
-  - elementJson stores serialized element data
-- Instance management:
-  - templateId links instances to parent templates
-  - templateVersion snapshot for historical accuracy
-  - TemplateInstances relation for template usage tracking
-- Seed data:
-  - Three sample templates: Birthday Card, Photo Journal, Minimalist Zine
-  - Each template includes proper page structure and starter elements
+- Purpose: Manages PDF rendering with distributed processing capabilities
+- Integration with AI pipeline:
+  - Coordinated by AiBookJob during RENDER stage
+  - Automatic retry logic for transient failures
+  - Lease-based exclusive processing
+- Rendering workflow:
+  - QUEUED: waiting for available workers
+  - PROCESSING: active PDF generation
+  - COMPLETED: successful PDF creation
+  - FAILED: rendering failure after retries
+- Performance optimization:
+  - Input snapshot preservation for debugging
+  - Attempt tracking with configurable limits
+  - Lease mechanism for distributed processing
+- Output management:
+  - pdfS3Key stores generated PDF location
+  - Error message capture for troubleshooting
+  - Timestamp tracking for performance metrics
 
 **Section sources**
-- [schema.prisma:150-162](file://prisma/schema.prisma#L150-L162)
-- [migration.sql:1-11](file://prisma/migrations/20260501123018_add_template_system/migration.sql#L1-L11)
-- [seed.ts:75-336](file://prisma/seed.ts#L75-L336)
+- [schema.prisma:252-275](file://prisma/schema.prisma#L252-L275)
+- [pipeline.ts:223-266](file://src/lib/ai/pipeline.ts#L223-L266)
 
-### Pricing Configuration System
-- Centralized configuration:
-  - Single default row with id "default"
-  - Version tracking for configuration changes
-  - updatedAt timestamp for audit trails
-- Pricing parameters:
-  - weightPerBookGrams: base weight per book
-  - handling costs: fixed and percentage components
-  - shipping zones: configurable geographic coverage
-  - weight bands: tiered pricing structure
-  - price tiers: volume discount ladder
-- Currency support:
-  - currencyRates JSON field with HUF as base
-  - Default rates for EUR and GBP
-  - Configurable per region
-- Integration:
-  - Orders reference pricingConfigVersion for consistency
-  - Real-time calculation using current configuration
+### AI Book Worker System
+- Purpose: Background worker process for autonomous AI book creation
+- Worker lifecycle:
+  - Polling loop for job acquisition
+  - Graceful shutdown with cleanup
+  - Signal handling for process management
+- Job processing:
+  - Claims jobs using distributed locking
+  - Executes multi-stage pipeline
+  - Handles errors and retries automatically
+- Configuration:
+  - Configurable polling interval (AI_WORKER_POLL_MS)
+  - Process timeout for cleanup
+  - Environment-based settings
 
 **Section sources**
-- [schema.prisma:164-178](file://prisma/schema.prisma#L164-L178)
-- [migration.sql:37-49](file://prisma/migrations/20260430000000_orders/migration.sql#L37-L49)
-- [migration.sql:1-7](file://prisma/migrations/20260501000000_pricing_currency_rates/migration.sql#L1-L7)
-- [pricing/constants.ts:11-132](file://src/lib/pricing/constants.ts#L11-L132)
-- [seed.ts:45-73](file://prisma/seed.ts#L45-L73)
+- [ai-book-worker.ts:1-34](file://src/workers/ai-book-worker.ts#L1-L34)
 
-### PDF Generation Workflow (Enhanced)
-- Mode-aware generation:
-  - Legacy mode: generates from SubmissionImage data
-  - Editor mode: generates from SubmissionPage scene data
-  - Template mode: generates from template elements
-- Status transitions:
-  - Before generation, Submission.status set to PROCESSING
-  - After successful generation, Submission.status set to PENDING
-  - Template publishing sets status to APPROVED
-- Data preparation:
-  - Fetches pages grouped by pageLabel for editor mode
-  - Downloads all images from S3 in parallel
-  - Processes images and renders pages in parallel
-  - Composes A4 landscape PDF using pdf-lib
-  - Uploads PDF to S3 and updates Submission.pdfS3Key
-- Access control:
-  - Only authorized users can trigger generation
-  - Admins can regenerate PDFs and approve/reject
-  - Template publishing requires admin approval
-
-```mermaid
-sequenceDiagram
-participant Client as "Client"
-participant API as "Submissions API"
-participant DB as "Prisma Client"
-participant PDF as "PDF Generator"
-participant S3 as "S3 Storage"
-Client->>API : "POST /api/submissions/{id}/pdf"
-API->>DB : "Update status to PROCESSING"
-API->>PDF : "generateTitchybookPdf(submissionId)"
-alt Legacy Mode
-PDF->>DB : "Fetch images by pageLabel"
-PDF->>S3 : "Download images"
-else Editor Mode
-PDF->>DB : "Fetch pages by pageLabel"
-PDF->>S3 : "Download page assets"
-end
-PDF->>PDF : "Process and render content"
-PDF->>PDF : "Compose PDF"
-PDF->>S3 : "Upload PDF"
-PDF->>DB : "Update pdfS3Key and status"
-API-->>Client : "Success with pdfS3Key"
-```
-
-**Diagram sources**
-- [route.ts:5-26](file://src/app/api/submissions/[id]/pdf/route.ts#L5-L26)
-- [generate.ts:23-111](file://src/lib/pdf/generate.ts#L23-L111)
-- [s3.ts:38-64](file://src/lib/s3.ts#L38-L64)
+### AI Book Job Management
+- Purpose: Core logic for job lifecycle management with distributed processing
+- Key functions:
+  - enqueueAiBookJob: Creates new jobs with rate limiting
+  - claimAiBookJob: Atomically claims jobs with lease
+  - heartbeatAiBookJob: Extends job lease periodically
+  - advanceStage: Progresses through pipeline stages
+  - completeAiBook: Finalizes successful jobs
+  - failAiBook: Handles job failures with retry logic
+- Distributed processing features:
+  - PostgreSQL advisory locks for concurrency control
+  - Lease expiration for automatic job recovery
+  - Claim tokens for ownership verification
+  - Atomic transactions for state consistency
 
 **Section sources**
-- [generate.ts:23-111](file://src/lib/pdf/generate.ts#L23-L111)
-- [image-processor.ts:9-29](file://src/lib/pdf/image-processor.ts#L9-L29)
-- [s3.ts:38-80](file://src/lib/s3.ts#L38-L80)
+- [ai-book-job.ts:1-173](file://src/lib/ai/ai-book-job.ts#L1-L173)
 
-### Admin Submission Management (Expanded)
-- Template management:
-  - Admins can publish/unpublish templates
-  - Template version tracking and incrementing
-  - Template element management
-- Enhanced approval workflow:
-  - Approve/Reject with rejectionReason
-  - Bulk listing with status filtering
-  - Template-specific admin views
-- Pricing configuration:
-  - Admin pricing configuration management
-  - Currency rate updates
-  - Zone and weight band adjustments
-- Order management:
-  - Full order lifecycle management
-  - Status transition validation
-  - Shipment tracking integration
+### AI Pipeline Processing
+- Purpose: Orchestrates the multi-stage AI book creation workflow
+- Stage implementation:
+  - CONCEPT: Template selection and text slot analysis
+  - CONTENT: AI-generated content planning with validation
+  - COMPOSE: Submission instance creation or update
+  - RENDER: PDF generation coordination with retry logic
+  - QA: Automated quality assurance with sampling
+- Error handling:
+  - TerminalError for unrecoverable failures
+  - RetryableError for recoverable issues
+  - LeaseLostError for distributed processing conflicts
+- Quality assurance:
+  - Automated checklist validation
+  - Random sampling for admin review
+  - Retry logic for temporary failures
 
 **Section sources**
-- [route.ts:12-62](file://src/app/api/admin/submissions/[id]/route.ts#L12-L62)
-- [route.ts:6-37](file://src/app/api/admin/submissions/route.ts#L6-L37)
-- [route.ts:1-200](file://src/app/api/admin/pricing-config/route.ts#L1-L200)
+- [pipeline.ts:1-365](file://src/lib/ai/pipeline.ts#L1-L365)
+
+### API Endpoints (AI Books)
+**New** - RESTful interfaces for AI book management
+
+- POST /api/ai/books: Create new AI book job
+  - Validates concept length (1-2000 characters)
+  - Optional templateId parameter
+  - Rate limiting per user (10 second cooldown)
+  - Returns jobId with 202 Accepted status
+- GET /api/ai/books/:id: Poll job status
+  - Authorization required
+  - Admin access for any job
+  - Returns current stage, status, and progress
+  - Includes QA report if available
+
+**Section sources**
+- [route.ts:1-53](file://src/app/api/ai/books/route.ts#L1-L53)
+- [route.ts:1-36](file://src/app/api/ai/books/[id]/route.ts#L1-L36)
 
 ## Dependency Analysis
-The expanded schema introduces several new dependency chains supporting the comprehensive editor ecosystem.
+The expanded schema introduces several new dependency chains supporting the autonomous AI book creation system alongside the existing editor ecosystem.
 
 ```mermaid
 graph LR
-SCHEMA["schema.prisma"] --> INIT_MIG["init migration"]
+SCHEMA["schema.prisma"] --> AI_MIG["ai book jobs migration"]
+SCHEMA --> INIT_MIG["init migration"]
 SCHEMA --> EDITOR_MIG["editor foundation"]
 SCHEMA --> ORDERS_MIG["orders system"]
-SCHEMA --> PRICING_MIG["pricing config"]
 SCHEMA --> TEMPLATE_MIG["template system"]
-INIT_MIG --> DB["SQLite"]
+AI_MIG --> DB["PostgreSQL"]
+INIT_MIG --> DB
 EDITOR_MIG --> DB
 ORDERS_MIG --> DB
-PRICING_MIG --> DB
 TEMPLATE_MIG --> DB
 SCHEMA --> PC["Prisma Client"]
-PC --> SUB_API["API Routes"]
+PC --> AI_API["AI Book Routes"]
+PC --> SUB_API["Submissions API"]
 PC --> ORDER_API["Order Routes"]
 PC --> ADMIN_API["Admin Routes"]
-PC --> PRICING_API["Pricing Routes"]
-AUTH["auth.ts"] --> SUB_API
+AI_WORKER["ai-book-worker.ts"] --> JOB_MANAGER["ai-book-job.ts"]
+JOB_MANAGER --> PIPELINE["pipeline.ts"]
+AI_API --> JOB_MANAGER
+JOB_MANAGER --> SUB_API
+AUTH["auth.ts"] --> AI_API
+AUTH --> SUB_API
 AUTH --> ORDER_API
 AUTH --> ADMIN_API
 SUB_API --> S3["s3.ts"]
 SUB_API --> PDF["generate.ts"]
 ORDER_API --> PRICING_API
-PRICING_API --> PRICING_CONST["pricing constants"]
 PDF --> IMGPROC["image-processor.ts"]
-SEED --> SEED_SCRIPT["seed.ts"]
-SEED_SCRIPT --> PRICING_SEED["pricing defaults"]
-SEED_SCRIPT --> TEMPLATE_SEED["template seeds"]
 ```
 
 **Diagram sources**
-- [schema.prisma:1-178](file://prisma/schema.prisma#L1-L178)
-- [migration.sql:1-45](file://prisma/migrations/20260316171130_init/migration.sql#L1-L45)
-- [migration.sql:1-51](file://prisma/migrations/20260424120000_editor_foundation/migration.sql#L1-L51)
-- [migration.sql:1-59](file://prisma/migrations/20260430000000_orders/migration.sql#L1-L59)
-- [migration.sql:1-7](file://prisma/migrations/20260501000000_pricing_currency_rates/migration.sql#L1-L7)
-- [migration.sql:1-51](file://prisma/migrations/20260501123018_add_template_system/migration.sql#L1-L51)
-- [prisma.ts:1-10](file://src/lib/prisma.ts#L1-L10)
-- [auth.ts:1-80](file://src/auth.ts#L1-L80)
-- [route.ts:1-147](file://src/app/api/submissions/route.ts#L1-L147)
-- [route.ts:1-131](file://src/app/api/orders/route.ts#L1-L131)
-- [pricing/constants.ts:1-132](file://src/lib/pricing/constants.ts#L1-L132)
-- [seed.ts:1-350](file://prisma/seed.ts#L1-L350)
-
-**Section sources**
-- [schema.prisma:1-178](file://prisma/schema.prisma#L1-L178)
-- [migration.sql:1-45](file://prisma/migrations/20260316171130_init/migration.sql#L1-L45)
-- [migration.sql:1-51](file://prisma/migrations/20260424120000_editor_foundation/migration.sql#L1-L51)
-- [migration.sql:1-59](file://prisma/migrations/20260430000000_orders/migration.sql#L1-L59)
-- [migration.sql:1-7](file://prisma/migrations/20260501000000_pricing_currency_rates/migration.sql#L1-L7)
-- [migration.sql:1-51](file://prisma/migrations/20260501123018_add_template_system/migration.sql#L1-L51)
-- [prisma.ts:1-10](file://src/lib/prisma.ts#L1-L10)
-- [auth.ts:1-80](file://src/auth.ts#L1-L80)
+- [schema.prisma:1-275](file://prisma/schema.prisma#L1-L275)
+- [migration.sql:1-47](file://prisma/migrations/20260929090000_add_ai_book_jobs/migration.sql#L1-L47)
+- [ai-book-worker.ts:1-34](file://src/workers/ai-book-worker.ts#L1-L34)
+- [ai-book-job.ts:1-173](file://src/lib/ai/ai-book-job.ts#L1-L173)
+- [pipeline.ts:1-365](file://src/lib/ai/pipeline.ts#L1-L365)
+- [route.ts:1-53](file://src/app/api/ai/books/route.ts#L1-L53)
 
 ## Performance Considerations
-- Enhanced indexing strategy:
-  - User.email: unique index for fast login and existence checks
-  - Submission.userId: index for user-scoped queries
-  - Submission.isTemplate: index for template filtering
-  - Submission.templateId: index for template relationships
-  - SubmissionPage.submissionId: index for per-submission page queries
-  - Asset.userId: index for user asset libraries
-  - Order.userId: index for user order history
-  - Order.submissionId: index for submission order tracking
-  - Order.status: index for order lifecycle filtering
-  - TemplateElement.templateId: index for template element queries
+- Enhanced indexing strategy for AI pipeline:
+  - AiBookJob.userId: index for user-specific job queries
+  - AiBookJob.submissionId: index for submission-related tracking
+  - AiBookJob.status_nextAttemptAt: composite index for job scheduling
+  - AiBookJob.status_leaseExpiresAt: composite index for lease recovery
+  - RenderJob.status: index for job status filtering
+  - RenderJob.status_nextAttemptAt: composite index for scheduling
+  - RenderJob.status_leaseExpiresAt: composite index for lease recovery
 - Query optimization patterns:
-  - Include pages ordered by order asc for editor mode
-  - Include images ordered by order asc for legacy mode
-  - Admin listing uses status filter and template flags
-  - Template queries use isTemplate and publishedAt filters
+  - FOR UPDATE SKIP LOCKED for concurrent job claiming
+  - Atomic updates with lease expiration checks
+  - Batch processing for large-scale operations
+  - Connection pooling for high-throughput scenarios
 - Concurrency and consistency:
-  - PDF generation sets status to PROCESSING to prevent concurrent runs
-  - Transactions ensure atomic creation of Submission with pages/images
-  - Template version snapshots prevent data drift
+  - PostgreSQL advisory locks prevent duplicate processing
+  - Lease mechanism ensures single-writer semantics
+  - Heartbeat system maintains job ownership
+  - Transactional integrity for state transitions
 - I/O optimization:
-  - Parallel downloads and processing of images and page assets
-  - Pre-signed URLs for S3 uploads/downloads minimize latency
-  - Template element caching for frequently used components
+  - Parallel processing of independent stages
+  - Streaming responses for long-running operations
+  - Efficient JSON serialization for stage outputs
+  - Optimized S3 operations for large assets
 - Storage considerations:
-  - Separate S3 buckets for different content types
-  - Asset deduplication based on s3Key
-  - Template element compression for JSON storage
+  - Compressed JSON storage for stage outputs
+  - Efficient indexing for frequent query patterns
+  - Partitioning strategies for large datasets
+  - Archive policies for completed jobs
 
 ## Troubleshooting Guide
-- Template-related issues:
-  - Ensure template is published (publishedAt set) before creating instances
-  - Template version increments on publish; verify templateVersion matches expected version
-  - Template elements must match pageLabels defined in PAGE_LABELS
-- Editor vs legacy mode conflicts:
-  - Legacy mode submissions use SubmissionImage; editor mode uses SubmissionPage
-  - Cannot mix pageLabel and order constraints between modes
-  - Scene data must be valid JSON matching editor schema
-- Asset management problems:
-  - s3Key must be unique across all assets
-  - Asset dimensions and file sizes should be properly recorded
-  - Asset ownership verification required for access
-- Order processing errors:
-  - Only approved submissions can generate orders
-  - Pricing configuration must be loaded successfully
-  - Currency rates must be valid JSON format
-  - Shipping zones must be enabled in pricing configuration
-- Database integrity issues:
-  - TemplateId foreign key constraints require valid template references
-  - TemplateElement unique constraints prevent duplicate page elements
-  - Asset unique constraints prevent duplicate S3 keys
+- AI book job issues:
+  - Check job status and stage progression
+  - Verify lease expiration for stuck jobs
+  - Monitor attempt counts and retry logic
+  - Review error messages for specific failure reasons
+- Distributed processing problems:
+  - Ensure proper lease management and heartbeats
+  - Verify claim token consistency across processes
+  - Check for concurrent access conflicts
+  - Monitor database connection pool utilization
+- Pipeline stage failures:
+  - CONCEPT: Template availability and text slot validation
+  - CONTENT: AI service configuration and response parsing
+  - COMPOSE: Template instance creation and override application
+  - RENDER: PDF generation resources and S3 connectivity
+  - QA: Quality checklist configuration and sampling rates
 - Performance bottlenecks:
-  - Missing indexes cause slow template queries
-  - Large JSON payloads in sceneJson may impact query performance
-  - Unoptimized template element queries require proper indexing
+  - Missing indexes cause slow job queries
+  - Large JSON payloads impact query performance
+  - Database connection exhaustion under load
+  - Memory pressure from concurrent job processing
+- Data integrity issues:
+  - Foreign key constraints require valid references
+  - Unique constraints prevent duplicate entries
+  - Lease token conflicts indicate concurrent access
+  - Stage progression violations suggest logic errors
 
 **Section sources**
-- [route.ts:26-28](file://src/app/api/submissions/[id]/route.ts#L26-L28)
-- [route.ts:16-18](file://src/app/api/admin/submissions/[id]/route.ts#L16-L18)
-- [generate.ts:44-47](file://src/lib/pdf/generate.ts#L44-L47)
-- [route.ts:54-61](file://src/app/api/submissions/route.ts#L54-L61)
-- [seed.ts:75-336](file://prisma/seed.ts#L75-L336)
+- [ai-book-job.ts:63-78](file://src/lib/ai/ai-book-job.ts#L63-L78)
+- [pipeline.ts:313-365](file://src/lib/ai/pipeline.ts#L313-L365)
+- [route.ts:19-52](file://src/app/api/ai/books/route.ts#L19-L52)
 
 ## Conclusion
-The Titchybook Creator database design now supports a comprehensive editor ecosystem with:
-- Flexible submission modes accommodating legacy and modern workflows
+The Titchybook Creator database design now supports a comprehensive creation ecosystem with both manual and autonomous AI-driven workflows. The enhanced Submission model accommodates AI-generated content tracking, while the new AiBookJob system provides robust distributed processing capabilities for end-to-end automated booklet creation. Key achievements include:
+- Flexible submission modes accommodating legacy, editor, template, and AI workflows
 - Robust template system enabling design reuse and brand consistency
 - Centralized asset management for media organization
 - Complete order management with international pricing and shipping
 - Sophisticated pricing configuration with currency support
+- Autonomous AI book creation with multi-stage pipeline processing
+- Distributed job processing with lease/heartbeat/fencing mechanisms
 - Strong referential integrity across all relationships
 - Comprehensive indexing strategy for optimal performance
 - Practical validation and constraints enforced by application logic
 
-This foundation enables scalable creation, editing, templating, and commercialization of booklets while maintaining data integrity, performance, and extensibility for future enhancements.
+This foundation enables scalable creation, editing, templating, AI automation, and commercialization of booklets while maintaining data integrity, performance, and extensibility for future enhancements.
 
 ## Appendices
 
 ### Prisma Schema Definitions (Complete)
-- User: id, email (unique), passwordHash, name, role (default "USER"), assets[], submissions[], orders[], createdAt, updatedAt
-- Submission: id, userId (FK), mode (default "LEGACY_UPLOAD"), title, status (default "PENDING"), pdfS3Key, previewS3Key, rejectionReason, editorVersion (default 1), submittedAt, templateId, templateVersion, isTemplate (default false), version (default 1), publishedAt, createdAt, updatedAt
-- SubmissionPage: id, submissionId (FK), pageLabel, order, sceneJson (default "{}"), previewS3Key, renderedPageS3Key, createdAt, updatedAt
+- User: id, email (unique), passwordHash, name, role (default "USER"), audience, businessName, businessType, companySize, assets[], submissions[], orders[], aiBookJobs[], createdAt, updatedAt
+- Submission: id, userId (FK), mode (default "LEGACY_UPLOAD"), title, status (default "PENDING"), pdfS3Key, previewS3Key, rejectionReason, editorVersion (default 1), revision (default 0), submittedAt, aiGenerated (default false), qaSampled (default false), templateId, templateVersion, isTemplate (default false), version (default 1), publishedAt, images[], pages[], orders[], vaultEntries[], renderJobs[], aiBookJobs[], templateElements[], instances[], template, createdAt, updatedAt
+- SubmissionImage: id, submissionId (FK), pageLabel, s3Key, order, originalFilename, mimeType, createdAt
+- SubmissionPage: id, submissionId (FK), pageLabel, order, sceneJson (default "{}"), revision (default 0), previewS3Key, renderedPageS3Key, createdAt, updatedAt
 - Asset: id, userId (FK), s3Key (unique), originalFilename, mimeType, width, height, fileSize, createdAt, updatedAt
-- Order: id, userId (FK), submissionId (FK), quantity, zone, weightGrams, shippingBand, unitPriceHuf, printCostHuf, handlingCostHuf (default 0), shippingCostHuf, discountHuf (default 0), totalHuf, currency (default "HUF"), status (default "PENDING_PAYMENT"), pricingConfigVersion, recipientName, line1, line2, city, postalCode, countryCode, phone, fulfillmentHub, couponCode, parentBatchId, notes, createdAt, updatedAt
+- Order: id, userId (FK), submissionId (FK), quantity, zone, weightGrams, shippingBand, vaultAddOn (default false), vaultFeeHuf (default 0), unitPriceHuf, printCostHuf, handlingCostHuf (default 0), shippingCostHuf, discountHuf (default 0), totalHuf, currency (default "HUF"), status (default "PENDING_PAYMENT"), pricingConfigVersion, recipientName, line1, line2, city, postalCode, countryCode, phone, fulfilmentHub, couponCode, parentBatchId, notes, vaultEntries[], createdAt, updatedAt
 - TemplateElement: id, templateId (FK), pageLabel, order, elementJson, createdAt, updatedAt
-- PricingConfig: id (default "default"), version (default 1), weightPerBookGrams (default 6), handlingFixedHuf (default 0), handlingPercent (default 0), enabledZones (JSON), weightBands (JSON), shippingTable (JSON), priceTiers (JSON), currencyRates (default JSON rates), updatedAt, updatedByUserId
+- PricingConfig: id (default "default"), version (default 1), weightPerBookGrams (default 6), handlingFixedHuf (default 0), handlingPercent (default 0), enabledZones (JSON), weightBands (JSON), shippingTable (JSON), priceTiers (JSON), currencyRates (default JSON rates), vaultFeeHuf (default 2000), updatedAt, updatedByUserId
+- VaultEntry: id, orderId (FK), submissionId (FK), title, authorName, quantity (default 2), status (default "STORED"), storedAt (default now()), withdrawnAt, createdAt, updatedAt
+- AiBookJob: id, userId (FK), concept, templateId, submissionId, renderJobId, status (default "QUEUED"), stage (default "CONCEPT"), stageOutput, attempts (default 0), maxAttempts (default 3), nextAttemptAt (default now()), leaseExpiresAt, claimToken, errorMessage, startedAt, completedAt, createdAt, updatedAt
+- RenderJob: id, submissionId (FK), status (default "QUEUED"), attempts (default 0), maxAttempts (default 3), inputSnapshot, nextAttemptAt (default now()), leaseExpiresAt, claimToken, errorMessage, pdfS3Key, startedAt, completedAt, createdAt, updatedAt
 
 **Section sources**
-- [schema.prisma:10-178](file://prisma/schema.prisma#L10-L178)
+- [schema.prisma:10-275](file://prisma/schema.prisma#L10-L275)
 
 ### Migration History
 - Initial schema (20260316171130): User, Submission, SubmissionImage tables with basic relationships
@@ -845,13 +684,14 @@ This foundation enables scalable creation, editing, templating, and commercializ
 - Orders system (20260430000000): Added Order, PricingConfig tables with pricing calculations
 - Currency rates (20260501000000): Enhanced PricingConfig with currencyRates JSON field
 - Template system (20260501123018): Added TemplateElement table and enhanced Submission with template relationships
+- Password reset fields (20260601120033): Added password reset functionality
+- Vault storage (20260604085357): Added VaultEntry table for secure storage
+- Business and render jobs repair (20260921090000): Fixed business registration and render job schemas
+- Durable queue and revisions (20260921091000): Enhanced queue durability and added revision tracking
+- AI book jobs (20260929090000): Added aiGenerated and qaSampled fields to Submission, created AiBookJob table with comprehensive indexing
 
 **Section sources**
-- [migration.sql:1-45](file://prisma/migrations/20260316171130_init/migration.sql#L1-L45)
-- [migration.sql:1-51](file://prisma/migrations/20260424120000_editor_foundation/migration.sql#L1-L51)
-- [migration.sql:1-59](file://prisma/migrations/20260430000000_orders/migration.sql#L1-L59)
-- [migration.sql:1-7](file://prisma/migrations/20260501000000_pricing_currency_rates/migration.sql#L1-L7)
-- [migration.sql:1-51](file://prisma/migrations/20260501123018_add_template_system/migration.sql#L1-L51)
+- [migration.sql:1-47](file://prisma/migrations/20260929090000_add_ai_book_jobs/migration.sql#L1-L47)
 
 ### Database Seeding (Enhanced)
 - Admin user creation with hashed password from environment variables
@@ -859,6 +699,7 @@ This foundation enables scalable creation, editing, templating, and commercializ
 - Template seeding with three sample templates: Birthday Card, Photo Journal, Minimalist Zine
 - Each template includes proper page structure and starter elements
 - Template elements include text and shape components with proper styling
+- AI book job initialization with proper status and stage defaults
 
 **Section sources**
 - [seed.ts:22-73](file://prisma/seed.ts#L22-L73)
@@ -870,63 +711,69 @@ This foundation enables scalable creation, editing, templating, and commercializ
   - email: unique email address
   - passwordHash: bcrypt hash
   - role: "USER" or "ADMIN"
-  - assets[], submissions[], orders[]: relationship arrays
+  - audience: "creator" or "business"
+  - assets[], submissions[], orders[], aiBookJobs[]: relationship arrays
 - Submission (Legacy)
   - id: generated cuid()
   - userId: existing user id
   - mode: "LEGACY_UPLOAD"
   - status: "PENDING"
+  - aiGenerated: false
+  - qaSampled: false
   - images[]: array of 8 SubmissionImage objects
 - Submission (Editor)
   - id: generated cuid()
   - userId: existing user id
   - mode: "EDITOR"
   - status: "DRAFT"
+  - aiGenerated: false
+  - qaSampled: false
   - pages[]: array of 8 SubmissionPage objects with sceneJson
-- Submission (Template)
+- Submission (AI-Generated)
   - id: generated cuid()
   - userId: existing user id
-  - mode: "TEMPLATE"
-  - isTemplate: true
-  - version: 1
-  - publishedAt: timestamp
-  - templateElements[]: array of TemplateElement objects
-- Asset
+  - mode: "EDITOR"
+  - status: "APPROVED"
+  - aiGenerated: true
+  - qaSampled: true/false (randomly sampled)
+  - pages[]: AI-generated content
+- AiBookJob
   - id: generated cuid()
   - userId: existing user id
-  - s3Key: unique S3 identifier
-  - originalFilename: original filename
-  - mimeType: image/jpeg, image/png, or image/webp
-  - width/height: dimensions in pixels
-  - fileSize: size in bytes
-- Order
+  - concept: user's book description (max 2000 chars)
+  - templateId: optional template reference
+  - submissionId: set after COMPOSE stage
+  - status: "QUEUED" → "PROCESSING" → "COMPLETED" or "FAILED"
+  - stage: "CONCEPT" → "CONTENT" → "COMPOSE" → "RENDER" → "QA"
+  - attempts: incremented on each retry
+  - leaseExpiresAt: set during processing
+  - claimToken: unique ownership identifier
+- RenderJob
   - id: generated cuid()
-  - userId: existing user id
-  - submissionId: existing approved submission id
-  - quantity: number of copies
-  - zone: shipping zone identifier
-  - totalHuf: calculated total in HUF
-  - status: "PENDING_PAYMENT"
-  - shippingAddress: complete recipient information
-- TemplateElement
-  - id: generated cuid()
-  - templateId: existing template id
-  - pageLabel: matching template page label
-  - order: rendering priority
-  - elementJson: serialized element data
+  - submissionId: existing submission id
+  - status: "QUEUED" → "PROCESSING" → "COMPLETED" or "FAILED"
+  - attempts: retry counter
+  - leaseExpiresAt: processing lease
+  - pdfS3Key: generated PDF location
 
 **Section sources**
 - [constants.ts:28-59](file://src/lib/constants.ts#L28-L59)
 - [editor/constants.ts:1-21](file://src/lib/editor/constants.ts#L1-L21)
 - [pricing/constants.ts:11-132](file://src/lib/pricing/constants.ts#L11-L132)
-- [route.ts:8-92](file://src/app/api/submissions/route.ts#L8-L92)
-- [seed.ts:90-336](file://prisma/seed.ts#L90-L336)
+- [route.ts:8-52](file://src/app/api/ai/books/route.ts#L8-L52)
+- [ai-book-job.ts:39-57](file://src/lib/ai/ai-book-job.ts#L39-L57)
 
 ### Common Query Patterns (Expanded)
 - List current user's submissions with appropriate mode handling:
   - Legacy: include images ordered by order asc
   - Editor: include pages ordered by order asc
   - Templates: filter by isTemplate = true
+  - AI-generated: filter by aiGenerated = true
+- AI book job management:
+  - Create new job with concept and optional template
+  - Poll job status and stage progression
+  - Filter jobs by user and status
+  - Track job attempts and retry schedules
 - Admin template management:
   - List templates with version and publishedAt
   - Get template with all templateElements
@@ -939,18 +786,17 @@ This foundation enables scalable creation, editing, templating, and commercializ
   - List user orders with submission details
   - Calculate order totals using current pricing config
   - Filter orders by status for fulfillment
-- Pricing configuration:
-  - Load current pricing config for calculations
-  - Validate shipping zones and rates
-  - Currency conversion for international customers
 - Complex joins:
   - Submission with user, pages, and orders
   - Template with templateElements and instances
-  - User with assets and submissions
+  - User with assets, submissions, and AI book jobs
+  - AiBookJob with related Submission and RenderJob
 
 **Section sources**
 - [route.ts:30-92](file://src/app/api/submissions/route.ts#L30-L92)
 - [route.ts:10-25](file://src/app/api/orders/route.ts#L10-L25)
+- [route.ts:19-52](file://src/app/api/ai/books/route.ts#L19-L52)
+- [route.ts:8-35](file://src/app/api/ai/books/[id]/route.ts#L8-L35)
 - [seed.ts:75-336](file://prisma/seed.ts#L75-L336)
 
 ### Data Validation Rules and Business Constraints (Enhanced)
@@ -962,6 +808,15 @@ This foundation enables scalable creation, editing, templating, and commercializ
   - Maximum file size 10MB
   - Status transitions: DRAFT → PENDING → APPROVED/REJECTED/PROCESSING
   - Template versioning: automatic increment on publish
+  - AI-generated submissions: aiGenerated flag set automatically
+  - QA sampling: qaSampled randomly assigned based on configured rate
+- AI book job validation:
+  - Concept length: 1-2000 characters
+  - TemplateId must reference approved template if provided
+  - Rate limiting: one job per user per 10 seconds
+  - Active job limit: configurable maximum concurrent jobs
+  - Stage progression: strict ordering (CONCEPT → CONTENT → COMPOSE → RENDER → QA)
+  - Retry logic: exponential backoff with configurable max attempts
 - Template system:
   - Template elements must match template pageLabels
   - Template instances inherit templateVersion snapshot
@@ -985,9 +840,13 @@ This foundation enables scalable creation, editing, templating, and commercializ
   - Pricing configuration updates
   - Order status transitions
   - User role management
+  - AI book job monitoring and intervention
 
 **Section sources**
-- [route.ts:8-92](file://src/app/api/submissions/route.ts#L8-L92)
+- [route.ts:8-52](file://src/app/api/ai/books/route.ts#L8-L52)
+- [route.ts:8-35](file://src/app/api/ai/books/[id]/route.ts#L8-L35)
+- [ai-book-job.ts:39-57](file://src/lib/ai/ai-book-job.ts#L39-L57)
+- [pipeline.ts:30-36](file://src/lib/ai/pipeline.ts#L30-L36)
 - [route.ts:27-130](file://src/app/api/orders/route.ts#L27-L130)
 - [constants.ts:52-59](file://src/lib/constants.ts#L52-L59)
 - [pricing/constants.ts:11-132](file://src/lib/pricing/constants.ts#L11-L132)
@@ -995,12 +854,13 @@ This foundation enables scalable creation, editing, templating, and commercializ
 
 ### Referential Integrity (Enhanced)
 - User relationships:
-  - User(id) with RESTRICT on delete for assets and submissions
+  - User(id) with RESTRICT on delete for assets, submissions, and aiBookJobs
   - CASCADE on delete for orders (when user deleted)
 - Submission relationships:
   - User(id) with RESTRICT on delete
   - TemplateInstance templateId with SET NULL on delete
   - TemplateElement templateId with CASCADE on delete
+  - AiBookJob submissionId with SET NULL on delete
 - Page and image relationships:
   - Submission(id) with CASCADE on delete for both pages and images
 - Asset relationships:
@@ -1012,13 +872,20 @@ This foundation enables scalable creation, editing, templating, and commercializ
 - Template relationships:
   - TemplateElement(templateId) with CASCADE on delete
   - TemplateInstances(templateId) with SET NULL on delete
+- AI book job relationships:
+  - User(id) with RESTRICT on delete
+  - Submission(id) with SET NULL on delete
+  - RenderJob coordination through submissionId
 - Index enforcement:
   - Unique indexes on User.email and Asset.s3Key
   - Composite indexes on SubmissionPage (submissionId, pageLabel) and (submissionId, order)
   - Multi-column indexes on Submission (userId, isTemplate) and (userId, templateId)
+  - Composite indexes on AiBookJob (status, nextAttemptAt) and (status, leaseExpiresAt)
+  - Composite indexes on RenderJob (status, nextAttemptAt) and (status, leaseExpiresAt)
 
 **Section sources**
-- [migration.sql:21-35](file://prisma/migrations/20260316171130_init/migration.sql#L21-L35)
+- [migration.sql:42-47](file://prisma/migrations/20260929090000_add_ai_book_jobs/migration.sql#L42-L47)
+- [migration.sql:37-44](file://prisma/migrations/20260316171130_init/migration.sql#L37-L44)
 - [migration.sql:34-51](file://prisma/migrations/20260424120000_editor_foundation/migration.sql#L34-L51)
 - [migration.sql:32-34](file://prisma/migrations/20260430000000_orders/migration.sql#L32-L34)
 - [migration.sql:34-44](file://prisma/migrations/20260501123018_add_template_system/migration.sql#L34-L44)
@@ -1036,6 +903,14 @@ This foundation enables scalable creation, editing, templating, and commercializ
   - Order.submissionId: index for submission order tracking
   - Order.status: index for order lifecycle filtering
   - TemplateElement.templateId: index for template element queries
+  - AiBookJob.userId: index for user-specific job queries
+  - AiBookJob.submissionId: index for submission-related tracking
+  - AiBookJob.status_nextAttemptAt: composite index for job scheduling
+  - AiBookJob.status_leaseExpiresAt: composite index for lease recovery
+  - RenderJob.submissionId: index for submission-related queries
+  - RenderJob.status: index for job status filtering
+  - RenderJob.status_nextAttemptAt: composite index for scheduling
+  - RenderJob.status_leaseExpiresAt: composite index for lease recovery
 - Composite indexes:
   - SubmissionPage(submissionId, pageLabel): unique constraint
   - SubmissionPage(submissionId, order): unique constraint
@@ -1045,17 +920,25 @@ This foundation enables scalable creation, editing, templating, and commercializ
   - Consider adding indexes on Submission(userId, createdAt) for user activity
   - Consider adding indexes on Order(status, createdAt) for order reporting
   - Consider adding indexes on TemplateElement(pageLabel, order) for element ordering
+  - Consider partitioning AiBookJob by status for large-scale deployments
+  - Consider archiving completed jobs to separate tables
 - Query optimization:
   - Include pages/images ordered by their respective order fields
   - Use appropriate filters for template vs instance queries
   - Leverage unique constraints to prevent duplicate entries
   - Optimize template element queries with proper indexing
+  - Use FOR UPDATE SKIP LOCKED for concurrent job claiming
+  - Implement efficient lease expiration checks
 
 **Section sources**
+- [migration.sql:30-40](file://prisma/migrations/20260929090000_add_ai_book_jobs/migration.sql#L30-L40)
 - [migration.sql:37-44](file://prisma/migrations/20260316171130_init/migration.sql#L37-L44)
 - [migration.sql:37-51](file://prisma/migrations/20260424120000_editor_foundation/migration.sql#L37-L51)
 - [migration.sql:51-59](file://prisma/migrations/20260430000000_orders/migration.sql#L51-L59)
 - [migration.sql:46-51](file://prisma/migrations/20260501123018_add_template_system/migration.sql#L46-L51)
-- [schema.prisma:52-86](file://prisma/schema.prisma#L52-L86)
-- [schema.prisma:101-148](file://prisma/schema.prisma#L101-L148)
-- [schema.prisma:160-162](file://prisma/schema.prisma#L160-L162)
+- [schema.prisma:70-73](file://prisma/schema.prisma#L70-L73)
+- [schema.prisma:102-105](file://prisma/schema.prisma#L102-L105)
+- [schema.prisma:169-172](file://prisma/schema.prisma#L169-L172)
+- [schema.prisma:184-186](file://prisma/schema.prisma#L184-L186)
+- [schema.prisma:246-250](file://prisma/schema.prisma#L246-L250)
+- [schema.prisma:270-274](file://prisma/schema.prisma#L270-L274)

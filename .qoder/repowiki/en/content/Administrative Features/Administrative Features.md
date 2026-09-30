@@ -45,6 +45,7 @@
 - Added user administration capabilities including user search, role modification, and account management
 - Implemented administrative reporting and analytics features
 - Enhanced security with audit trails and bulk operation support
+- **Updated** Admin dashboard enhanced with AI-generated content badges and spot-check filter for reviewing AI-created submissions
 
 ## Table of Contents
 1. [Introduction](#introduction)
@@ -62,7 +63,7 @@
 ## Introduction
 This document describes the expanded administrative features in Titchybook Creator with a focus on the admin dashboard for content moderation, order management, pricing configuration, template administration, and user management. It explains the submission moderation workflow, order processing and status management, pricing configuration and calculation engine, template management capabilities, user administration features, reporting and analytics capabilities, security considerations for admin access, bulk operations and administrative shortcuts, and integration with the user dashboard and submission management systems.
 
-**Updated** The admin system now supports the complete editor ecosystem with comprehensive order moderation, pricing configuration, template management, and user administration capabilities.
+**Updated** The admin system now supports the complete editor ecosystem with comprehensive order moderation, pricing configuration, template management, and user administration capabilities. The admin dashboard has been enhanced with AI-generated content badges and a spot-check filter for reviewing AI-created submissions that were auto-approved and sampled for quality assurance.
 
 ## Project Structure
 Administrative features are organized around:
@@ -147,7 +148,7 @@ PricingConfig --> PricingEngine
 - [src/components/admin/OrderModeration.tsx:1-300](file://src/components/admin/OrderModeration.tsx#L1-L300)
 - [src/components/admin/PricingConfigForm.tsx:1-710](file://src/components/admin/PricingConfigForm.tsx#L1-L710)
 - [src/components/admin/TemplateManager.tsx:1-269](file://src/components/admin/TemplateManager.tsx#L1-L269)
-- [src/components/admin/AdminDashboard.tsx:1-168](file://src/components/admin/AdminDashboard.tsx#L1-L168)
+- [src/components/admin/AdminDashboard.tsx:1-396](file://src/components/admin/AdminDashboard.tsx#L1-L396)
 - [src/app/api/admin/orders/route.ts:1-40](file://src/app/api/admin/orders/route.ts#L1-L40)
 - [src/app/api/admin/orders/[id]/route.ts:1-87](file://src/app/api/admin/orders/[id]/route.ts#L1-L87)
 - [src/app/api/admin/pricing-config/route.ts:1-47](file://src/app/api/admin/pricing-config/route.ts#L1-L47)
@@ -169,11 +170,11 @@ PricingConfig --> PricingEngine
 - [src/app/(admin)/admin/orders/page.tsx](file://src/app/(admin)/admin/orders/page.tsx#L1-L30)
 - [src/app/(admin)/admin/pricing/page.tsx](file://src/app/(admin)/admin/pricing/page.tsx#L1-L30)
 - [src/app/(admin)/admin/templates/page.tsx](file://src/app/(admin)/admin/templates/page.tsx#L1-L17)
-- [src/components/admin/AdminDashboard.tsx:1-168](file://src/components/admin/AdminDashboard.tsx#L1-L168)
+- [src/components/admin/AdminDashboard.tsx:1-396](file://src/components/admin/AdminDashboard.tsx#L1-L396)
 - [src/components/admin/OrderModeration.tsx:1-300](file://src/components/admin/OrderModeration.tsx#L1-L300)
 - [src/components/admin/PricingConfigForm.tsx:1-710](file://src/components/admin/PricingConfigForm.tsx#L1-L710)
 - [src/components/admin/TemplateManager.tsx:1-269](file://src/components/admin/TemplateManager.tsx#L1-L269)
-- [src/app/api/admin/submissions/route.ts:1-38](file://src/app/api/admin/submissions/route.ts#L1-L38)
+- [src/app/api/admin/submissions/route.ts:1-63](file://src/app/api/admin/submissions/route.ts#L1-L63)
 - [src/app/api/admin/submissions/[id]/route.ts](file://src/app/api/admin/submissions/[id]/route.ts#L1-L63)
 - [src/app/api/admin/orders/route.ts:1-40](file://src/app/api/admin/orders/route.ts#L1-L40)
 - [src/app/api/admin/orders/[id]/route.ts:1-87](file://src/app/api/admin/orders/[id]/route.ts#L1-L87)
@@ -210,11 +211,11 @@ PricingConfig --> PricingEngine
 - [src/app/(admin)/admin/orders/page.tsx](file://src/app/(admin)/admin/orders/page.tsx#L1-L30)
 - [src/app/(admin)/admin/pricing/page.tsx](file://src/app/(admin)/admin/pricing/page.tsx#L1-L30)
 - [src/app/(admin)/admin/templates/page.tsx](file://src/app/(admin)/admin/templates/page.tsx#L1-L17)
-- [src/components/admin/AdminDashboard.tsx:1-168](file://src/components/admin/AdminDashboard.tsx#L1-L168)
+- [src/components/admin/AdminDashboard.tsx:1-396](file://src/components/admin/AdminDashboard.tsx#L1-L396)
 - [src/components/admin/OrderModeration.tsx:1-300](file://src/components/admin/OrderModeration.tsx#L1-L300)
 - [src/components/admin/PricingConfigForm.tsx:1-710](file://src/components/admin/PricingConfigForm.tsx#L1-L710)
 - [src/components/admin/TemplateManager.tsx:1-269](file://src/components/admin/TemplateManager.tsx#L1-L269)
-- [src/app/api/admin/submissions/route.ts:1-38](file://src/app/api/admin/submissions/route.ts#L1-L38)
+- [src/app/api/admin/submissions/route.ts:1-63](file://src/app/api/admin/submissions/route.ts#L1-L63)
 - [src/app/api/admin/submissions/[id]/route.ts](file://src/app/api/admin/submissions/[id]/route.ts#L1-L63)
 - [src/app/api/admin/orders/route.ts:1-40](file://src/app/api/admin/orders/route.ts#L1-L40)
 - [src/app/api/admin/orders/[id]/route.ts:1-87](file://src/app/api/admin/orders/[id]/route.ts#L1-L87)
@@ -428,8 +429,10 @@ DeleteTemplate --> Success["Return success + instance count"]
 - [src/app/api/admin/templates/[id]/route.ts:1-163](file://src/app/api/admin/templates/[id]/route.ts#L1-L163)
 - [src/app/api/admin/templates/[id]/publish/route.ts:1-44](file://src/app/api/admin/templates/[id]/publish/route.ts#L1-L44)
 
-### Submission Moderation Workflow
+### Submission Moderation Workflow with AI Content Support
 - Retrieval: Admin dashboard queries submissions with optional status filter and includes user and image metadata, ordered by creation date
+- **Updated** Spot-check filtering: New "Spot-check" filter button enables viewing AI-created submissions that were auto-approved and sampled for quality assurance review
+- **Updated** AI content badges: Visual indicators show AI-generated content with additional "spot-check" designation for sampled submissions requiring manual review
 - Preview: PDF preview links are generated via pre-signed URLs when available
 - Review: Pending submissions display approve/reject controls; approved/rejected submissions show static status
 - Approval/Rejection: PATCH endpoint validates payload, checks existence, updates status, and optionally stores rejection reason
@@ -438,28 +441,31 @@ DeleteTemplate --> Success["Return success + instance count"]
 ```mermaid
 sequenceDiagram
 participant Admin as "AdminDashboard"
-participant API as "PATCH /api/admin/submissions/[id]"
+participant API as "GET /api/admin/submissions"
+participant SpotCheck as "Spot-check Filter"
 participant Auth as "Auth"
 participant DB as "Prisma"
-Admin->>API : "PATCH { action, rejectionReason? }"
+Admin->>API : "GET /api/admin/submissions?spotCheck=true"
 API->>Auth : "auth()"
 Auth-->>API : "Session with role"
-API->>DB : "findUnique(submission)"
-DB-->>API : "Submission"
-API->>DB : "update(status, rejectionReason?)"
-DB-->>API : "Updated submission"
-API-->>Admin : "JSON { submission }"
+API->>DB : "findMany({ qaSampled : true, status : APPROVED })"
+DB-->>API : "AI submissions marked for spot-check"
+API-->>Admin : "JSON { submissions }"
+Admin->>Admin : "Display AI badges with spot-check indicators"
 ```
 
 **Diagram sources**
 - [src/components/admin/AdminDashboard.tsx:43-62](file://src/components/admin/AdminDashboard.tsx#L43-L62)
-- [src/app/api/admin/submissions/[id]/route.ts](file://src/app/api/admin/submissions/[id]/route.ts#L12-L55)
-- [src/components/submissions/StatusBadge.tsx:1-18](file://src/components/submissions/StatusBadge.tsx#L1-L18)
+- [src/components/admin/AdminDashboard.tsx:117-125](file://src/components/admin/AdminDashboard.tsx#L117-L125)
+- [src/components/admin/AdminDashboard.tsx:243-254](file://src/components/admin/AdminDashboard.tsx#L243-L254)
+- [src/app/api/admin/submissions/route.ts:17-24](file://src/app/api/admin/submissions/route.ts#L17-L24)
 
 **Section sources**
-- [src/app/api/admin/submissions/route.ts:6-37](file://src/app/api/admin/submissions/route.ts#L6-L37)
-- [src/app/api/admin/submissions/[id]/route.ts](file://src/app/api/admin/submissions/[id]/route.ts#L12-L55)
+- [src/app/api/admin/submissions/route.ts:6-63](file://src/app/api/admin/submissions/route.ts#L6-L63)
+- [src/app/api/admin/submissions/[id]/route.ts](file://src/app/api/admin/submissions/[id]/route.ts#L1-L63)
 - [src/components/submissions/StatusBadge.tsx:1-18](file://src/components/submissions/StatusBadge.tsx#L1-L18)
+- [src/components/admin/AdminDashboard.tsx:117-125](file://src/components/admin/AdminDashboard.tsx#L117-L125)
+- [src/components/admin/AdminDashboard.tsx:243-254](file://src/components/admin/AdminDashboard.tsx#L243-L254)
 
 ### User Administration Capabilities
 - User search functionality with email, name, and role filtering
@@ -494,16 +500,18 @@ API-->>Admin : "JSON { submission }"
 - Pricing configuration: Admin user identification stored with pricing config changes for audit purposes
 - User administration: All user actions are logged with timestamps and admin user identifiers
 - Template management: Template creation, publishing, and deletion actions are tracked with version numbers
+- **Updated** AI content moderation: Spot-check sampling provides automated quality assurance for AI-generated content while maintaining human oversight
 
 **Section sources**
 - [src/app/(admin)/admin/page.tsx](file://src/app/(admin)/admin/page.tsx#L7-L9)
-- [src/app/api/admin/submissions/[id]/route.ts](file://src/app/api/admin/submissions/[id]/route.ts#L17-L18)
+- [src/app/api/admin/submissions/[id]/route.ts](file://src/app/api/admin/submissions/[id]/route.ts#L1-L63)
 - [src/middleware.ts:3-5](file://src/middleware.ts#L3-L5)
 - [src/auth.ts:65-77](file://src/auth.ts#L65-L77)
 - [src/app/api/admin/pricing-config/route.ts:38](file://src/app/api/admin/pricing-config/route.ts#L38)
 
 ### Bulk Operations, Mass Moderation, and Administrative Shortcuts
 - Current implementation supports per-submission approve/reject actions triggered by button clicks
+- **Updated** Spot-check filter provides administrative shortcut for focused review of AI-generated content samples
 - There are no bulk operations or mass moderation endpoints exposed
 - Administrative shortcuts include status filters and PDF preview links
 - Order management provides inline editing but no bulk status updates
@@ -513,6 +521,7 @@ API-->>Admin : "JSON { submission }"
 
 **Section sources**
 - [src/components/admin/AdminDashboard.tsx:68-82](file://src/components/admin/AdminDashboard.tsx#L68-L82)
+- [src/components/admin/AdminDashboard.tsx:117-125](file://src/components/admin/AdminDashboard.tsx#L117-L125)
 - [src/components/admin/AdminDashboard.tsx:138-157](file://src/components/admin/AdminDashboard.tsx#L138-L157)
 - [src/components/admin/OrderModeration.tsx:195-234](file://src/components/admin/OrderModeration.tsx#L195-L234)
 - [src/components/admin/TemplateManager.tsx:127-152](file://src/components/admin/TemplateManager.tsx#L127-L152)
@@ -525,10 +534,11 @@ API-->>Admin : "JSON { submission }"
 - Template lifecycle: Automated version increments and instance tracking streamline template management workflows
 - User administration: Automated role assignment and account management reduce administrative overhead
 - Reporting automation: Scheduled report generation and export functionality for regular administrative analysis
+- **Updated** AI content sampling: Automated QA sampling identifies AI-generated submissions for spot-check review, balancing efficiency with quality assurance
 
 **Section sources**
-- [src/app/api/admin/submissions/route.ts:26-34](file://src/app/api/admin/submissions/route.ts#L26-L34)
-- [src/app/api/admin/submissions/[id]/route.ts](file://src/app/api/admin/submissions/[id]/route.ts#L23-L32)
+- [src/app/api/admin/submissions/route.ts:26-63](file://src/app/api/admin/submissions/route.ts#L26-L63)
+- [src/app/api/admin/submissions/[id]/route.ts](file://src/app/api/admin/submissions/[id]/route.ts#L1-L63)
 - [src/components/admin/AdminDashboard.tsx:138-157](file://src/components/admin/AdminDashboard.tsx#L138-L157)
 - [src/lib/pricing/engine.ts:137-176](file://src/lib/pricing/engine.ts#L137-L176)
 - [src/components/admin/TemplateManager.tsx:241-246](file://src/components/admin/TemplateManager.tsx#L241-L246)
@@ -536,6 +546,7 @@ API-->>Admin : "JSON { submission }"
 ### Integration with User Dashboard and Submission Management Systems
 - User dashboard displays the logged-in user's submissions and provides navigation to create new books
 - Admin dashboard complements the user dashboard by surfacing all submissions for moderation
+- **Updated** AI content integration: Admin dashboard now displays AI-generated content badges and spot-check indicators for enhanced content governance
 - Order management integrates with the pricing system to provide real-time cost calculations
 - Template management supports the submission creation workflow with reusable template elements
 - Submission list components share common status rendering via StatusBadge
@@ -546,6 +557,7 @@ API-->>Admin : "JSON { submission }"
 - [src/app/(protected)/dashboard/page.tsx](file://src/app/(protected)/dashboard/page.tsx#L1-L20)
 - [src/components/submissions/StatusBadge.tsx:1-18](file://src/components/submissions/StatusBadge.tsx#L1-L18)
 - [src/lib/pricing/engine.ts:137-176](file://src/lib/pricing/engine.ts#L137-L176)
+- [src/components/admin/AdminDashboard.tsx:243-254](file://src/components/admin/AdminDashboard.tsx#L243-L254)
 
 ## Dependency Analysis
 The expanded admin subsystem depends on:
@@ -557,6 +569,7 @@ The expanded admin subsystem depends on:
 - Template system for submission lifecycle management
 - User administration system for account management
 - Reporting system for administrative insights
+- **Updated** AI content pipeline for generating AI-generated submissions with QA sampling
 
 ```mermaid
 graph LR
@@ -566,11 +579,13 @@ AdminComponents --> PricingAPI["Pricing API<br/>(GET/PUT routes)"]
 AdminComponents --> TemplatesAPI["Templates API<br/>(GET/POST/PUT routes)"]
 AdminComponents --> UsersAPI["Users API<br/>(GET/PUT routes)"]
 AdminComponents --> ReportsAPI["Reports API<br/>(GET routes)"]
+AdminComponents --> SubmissionsAPI["Submissions API<br/>(GET routes with AI support)"]
 OrdersAPI --> Prisma["Prisma Client<br/>(prisma.ts)"]
 PricingAPI --> Prisma
 TemplatesAPI --> Prisma
 UsersAPI --> Prisma
 ReportsAPI --> Prisma
+SubmissionsAPI --> Prisma
 OrdersAPI --> PricingEngine["Pricing Engine<br/>(pricing/engine.ts)"]
 PricingAPI --> PricingConfig["Pricing Config<br/>(pricing/config.ts)"]
 TemplatesAPI --> TemplateSchema["Template Schema<br/>(lib/constants.ts)"]
@@ -581,6 +596,7 @@ Auth --> PricingAPI
 Auth --> TemplatesAPI
 Auth --> UsersAPI
 Auth --> ReportsAPI
+Auth --> SubmissionsAPI
 Middleware["Middleware<br/>(middleware.ts)"] --> AdminPages
 Prisma --> Schema["Prisma Schema<br/>(schema.prisma)"]
 PricingEngine --> PricingConstants["Pricing Constants<br/>(pricing/constants.ts)"]
@@ -594,9 +610,11 @@ PricingConfig --> PricingSchema["Pricing Schema<br/>(pricing/schema.ts)"]
 - [src/components/admin/OrderModeration.tsx:1-300](file://src/components/admin/OrderModeration.tsx#L1-L300)
 - [src/components/admin/PricingConfigForm.tsx:1-710](file://src/components/admin/PricingConfigForm.tsx#L1-L710)
 - [src/components/admin/TemplateManager.tsx:1-269](file://src/components/admin/TemplateManager.tsx#L1-L269)
+- [src/components/admin/AdminDashboard.tsx:1-396](file://src/components/admin/AdminDashboard.tsx#L1-L396)
 - [src/app/api/admin/orders/route.ts:1-40](file://src/app/api/admin/orders/route.ts#L1-L40)
 - [src/app/api/admin/pricing-config/route.ts:1-47](file://src/app/api/admin/pricing-config/route.ts#L1-L47)
 - [src/app/api/admin/templates/route.ts:1-100](file://src/app/api/admin/templates/route.ts#L1-L100)
+- [src/app/api/admin/submissions/route.ts:1-63](file://src/app/api/admin/submissions/route.ts#L1-L63)
 - [src/lib/prisma.ts:1-10](file://src/lib/prisma.ts#L1-L10)
 - [src/lib/pricing/engine.ts:1-324](file://src/lib/pricing/engine.ts#L1-L324)
 - [src/lib/pricing/config.ts:1-160](file://src/lib/pricing/config.ts#L1-L160)
@@ -614,9 +632,11 @@ PricingConfig --> PricingSchema["Pricing Schema<br/>(pricing/schema.ts)"]
 - [src/components/admin/OrderModeration.tsx:1-300](file://src/components/admin/OrderModeration.tsx#L1-L300)
 - [src/components/admin/PricingConfigForm.tsx:1-710](file://src/components/admin/PricingConfigForm.tsx#L1-L710)
 - [src/components/admin/TemplateManager.tsx:1-269](file://src/components/admin/TemplateManager.tsx#L1-L269)
+- [src/components/admin/AdminDashboard.tsx:1-396](file://src/components/admin/AdminDashboard.tsx#L1-L396)
 - [src/app/api/admin/orders/route.ts:1-40](file://src/app/api/admin/orders/route.ts#L1-L40)
 - [src/app/api/admin/pricing-config/route.ts:1-47](file://src/app/api/admin/pricing-config/route.ts#L1-L47)
 - [src/app/api/admin/templates/route.ts:1-100](file://src/app/api/admin/templates/route.ts#L1-L100)
+- [src/app/api/admin/submissions/route.ts:1-63](file://src/app/api/admin/submissions/route.ts#L1-L63)
 - [src/lib/prisma.ts:1-10](file://src/lib/prisma.ts#L1-L10)
 - [src/lib/pricing/engine.ts:1-324](file://src/lib/pricing/engine.ts#L1-L324)
 - [src/lib/pricing/config.ts:1-160](file://src/lib/pricing/config.ts#L1-L160)
@@ -636,6 +656,7 @@ PricingConfig --> PricingSchema["Pricing Schema<br/>(pricing/schema.ts)"]
 - Debounce or throttle frequent refreshes to avoid redundant network calls
 - User search indexing improves search performance across large user bases
 - Report generation uses efficient aggregation queries for better performance
+- **Updated** Spot-check filtering optimizes AI content review by focusing on sampled submissions rather than scanning entire submission database
 
 ## Security and Audit Considerations
 - Admin-only access is enforced at both route and API levels
@@ -647,10 +668,11 @@ PricingConfig --> PricingSchema["Pricing Schema<br/>(pricing/schema.ts)"]
 - Add audit logging for admin actions (approve/reject, order updates, template changes, user modifications) to track changes and reasons
 - Enforce input validation and sanitize all administrative inputs before storing
 - Implement rate limiting for bulk operations to prevent abuse
+- **Updated** AI content moderation maintains security boundaries between automated AI generation and manual human review processes
 
 **Section sources**
 - [src/app/(admin)/admin/page.tsx](file://src/app/(admin)/admin/page.tsx#L7-L9)
-- [src/app/api/admin/submissions/[id]/route.ts](file://src/app/api/admin/submissions/[id]/route.ts#L17-L18)
+- [src/app/api/admin/submissions/[id]/route.ts](file://src/app/api/admin/submissions/[id]/route.ts#L1-L63)
 - [src/app/api/admin/orders/[id]/route.ts](file://src/app/api/admin/orders/[id]/route.ts#L63-L75)
 - [src/app/api/admin/templates/[id]/route.ts](file://src/app/api/admin/templates/[id]/route.ts#L144-L148)
 - [src/auth.ts:65-77](file://src/auth.ts#L65-L77)
@@ -665,43 +687,48 @@ PricingConfig --> PricingSchema["Pricing Schema<br/>(pricing/schema.ts)"]
 - User administration errors: Role modification conflicts and account state validation errors require proper user state verification
 - Report generation errors: Database connection issues and query timeouts require proper error handling and retry mechanisms
 - Internal server errors: Catch-all response for unexpected failures; check server logs and Prisma client initialization
+- **Updated** Spot-check filter errors: If spot-check filter returns empty results, verify AI-generated submissions exist with qaSampled flag set to true
 
 **Section sources**
-- [src/app/api/admin/submissions/[id]/route.ts](file://src/app/api/admin/submissions/[id]/route.ts#L27-L32)
-- [src/app/api/admin/submissions/[id]/route.ts](file://src/app/api/admin/submissions/[id]/route.ts#L40-L42)
-- [src/app/api/admin/submissions/[id]/route.ts](file://src/app/api/admin/submissions/[id]/route.ts#L56-L61)
+- [src/app/api/admin/submissions/[id]/route.ts](file://src/app/api/admin/submissions/[id]/route.ts#L1-L63)
 - [src/app/api/admin/pricing-config/route.ts:29-35](file://src/app/api/admin/pricing-config/route.ts#L29-L35)
 - [src/app/api/admin/orders/[id]/route.ts](file://src/app/api/admin/orders/[id]/route.ts#L63-L75)
 - [src/app/api/admin/templates/[id]/route.ts](file://src/app/api/admin/templates/[id]/route.ts#L144-L148)
 
 ## Conclusion
-The expanded admin subsystem provides comprehensive administrative capabilities for Titchybook Creator, including focused content moderation, order management with status tracking, dynamic pricing configuration with real-time calculations, template lifecycle management, and complete user administration. The system offers role-secured interfaces with validation pipelines, real-time previews, and comprehensive administrative workflows. The addition of user administration, reporting and analytics, and enhanced security features strengthens the platform's governance capabilities. The foundation for bulk operations and advanced automation exists through shared authentication, middleware, and Prisma schema, providing a solid base for future enhancements to administrative efficiency and operational oversight.
+The expanded admin subsystem provides comprehensive administrative capabilities for Titchybook Creator, including focused content moderation with AI content support, order management with status tracking, dynamic pricing configuration with real-time calculations, template lifecycle management, and complete user administration. The system offers role-secured interfaces with validation pipelines, real-time previews, and comprehensive administrative workflows. The addition of AI-generated content badges and spot-check filtering enhances content governance capabilities, while user administration, reporting and analytics, and enhanced security features strengthen the platform's governance capabilities. The foundation for bulk operations and advanced automation exists through shared authentication, middleware, and Prisma schema, providing a solid base for future enhancements to administrative efficiency and operational oversight.
 
 ## Appendices
 
-### Expanded Submission Status Model
+### Expanded Submission Status Model with AI Support
 ```mermaid
 classDiagram
 class Submission {
 +string id
 +string userId
 +string status
-+string? pdfS3Key
-+string? rejectionReason
++string mode
++string title
++string pdfS3Key
++string previewS3Key
++string rejectionReason
++int editorVersion
++int revision
++datetime submittedAt
++boolean aiGenerated
++boolean qaSampled
 +datetime createdAt
 +datetime updatedAt
 }
 class Order {
 +string id
 +string userId
-+string submissionId?
++string submissionId
 +string status
 +number quantity
 +string zone
 +number totalHuf
-+string? notes
-+string recipientName
-+string countryCode
++string notes
 +datetime createdAt
 +datetime updatedAt
 }
@@ -711,7 +738,7 @@ class PricingConfig {
 +number weightPerBookGrams
 +number handlingFixedHuf
 +number handlingPercent
-+string[] enabledZones
++string enabledZones
 +number[] weightBands
 +object shippingTable
 +PriceTier[] priceTiers
@@ -756,7 +783,7 @@ UserRoleAudit --> User : "targets"
 ```
 
 **Diagram sources**
-- [prisma/schema.prisma:10-47](file://prisma/schema.prisma#L10-L47)
+- [prisma/schema.prisma:33-73](file://prisma/schema.prisma#L33-L73)
 
 ### Admin Account Setup
 - Seed script creates an admin user with configurable email and password, assigning the ADMIN role
@@ -792,3 +819,15 @@ UserRoleAudit --> User : "targets"
 **Section sources**
 - [src/app/api/admin/users/route.ts:1-200](file://src/app/api/admin/users/route.ts#L1-L200)
 - [src/components/admin/UserAdmin.tsx:1-300](file://src/components/admin/UserAdmin.tsx#L1-L300)
+
+### AI Content Moderation Features
+- **Updated** AI-generated content detection: Submissions created by the AI book pipeline are automatically flagged with aiGenerated boolean
+- **Updated** QA sampling system: AI-generated submissions may be randomly sampled for quality assurance review with qaSampled flag
+- **Updated** Spot-check filtering: Dedicated filter view shows only AI-generated submissions marked for spot-check review
+- **Updated** Visual indicators: AI badges with optional "spot-check" designation help moderators quickly identify AI content requiring attention
+- **Updated** Automated approval workflow: AI-generated submissions can be auto-approved while still being sampled for manual review
+
+**Section sources**
+- [src/components/admin/AdminDashboard.tsx:243-254](file://src/components/admin/AdminDashboard.tsx#L243-L254)
+- [src/app/api/admin/submissions/route.ts:17-24](file://src/app/api/admin/submissions/route.ts#L17-L24)
+- [prisma/schema.prisma:54-56](file://prisma/schema.prisma#L54-L56)
