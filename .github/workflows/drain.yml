@@ -1,0 +1,43 @@
+name: Drain background queues
+
+# Vercel (serverless) cannot host the long-lived `worker:ai` / `worker:render`
+# processes, so this workflow drives the bounded drain endpoints on a schedule.
+# Each run advances due jobs as far as the function budget allows; unfinished
+# work resumes on the next run via lease expiry.
+#
+# Required repository secrets:
+#   PROD_URL     - e.g. https://your-app.vercel.app (no trailing slash)
+#   CRON_SECRET  - must match the CRON_SECRET env var set in Vercel
+
+on:
+  schedule:
+    # Every 5 minutes (GitHub Actions cron minimum granularity).
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: drain-queues
+  cancel-in-progress: false
+
+jobs:
+  drain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Drain AI book queue
+        env:
+          PROD_URL: ${{ secrets.PROD_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          curl -sS -X POST "$PROD_URL/api/ai/drain" \
+            -H "authorization: Bearer $CRON_SECRET" \
+            --max-time 90 -w "\n[ai drain http %{http_code}]\n"
+
+      - name: Drain render queue
+        env:
+          PROD_URL: ${{ secrets.PROD_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          curl -sS -X POST "$PROD_URL/api/render/drain" \
+            -H "authorization: Bearer $CRON_SECRET" \
+            --max-time 90 -w "\n[render drain http %{http_code}]\n"

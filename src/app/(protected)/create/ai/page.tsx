@@ -33,9 +33,11 @@ export default function AiCreatePage() {
   const [phase, setPhase] = useState<Phase>("form");
   const [submitting, setSubmitting] = useState(false);
   const [job, setJob] = useState<JobStatus | null>(null);
+  const [workerStale, setWorkerStale] = useState(false);
   const [submissionId, setSubmissionId] = useState<string | null>(null);
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const queuedAtRef = useRef<number | null>(null);
 
   useEffect(() => {
     async function load() {
@@ -63,13 +65,26 @@ export default function AiCreatePage() {
       const data = (await res.json()) as JobStatus;
       setJob(data);
 
+      // Distinguish "queued, waiting for a worker" from "actively processing".
+      // If a job sits in QUEUED too long, no background worker is claiming jobs.
+      if (data.status === "QUEUED") {
+        if (queuedAtRef.current && Date.now() - queuedAtRef.current > 45_000) {
+          setWorkerStale(true);
+        }
+      } else {
+        setWorkerStale(false);
+      }
+
       if (data.status === "COMPLETED") {
         stopPolling();
         setSubmissionId(data.submissionId);
         setPhase("done");
         if (data.submissionId) {
           try {
-            const rs = await fetch(`/api/submissions/${data.submissionId}/render-status`, { cache: "no-store" });
+            const rs = await fetch(
+              `/api/submissions/${data.submissionId}/render-status`,
+              { cache: "no-store" },
+            );
             const rsData = await rs.json();
             if (rsData.pdfUrl) setPdfUrl(rsData.pdfUrl as string);
           } catch {
@@ -100,17 +115,27 @@ export default function AiCreatePage() {
       const res = await fetch("/api/ai/books", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ concept: trimmed, templateId: templateId || undefined }),
+        body: JSON.stringify({
+          concept: trimmed,
+          templateId: templateId || undefined,
+        }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Could not start AI creation");
       setJob(null);
       setPdfUrl(null);
       setSubmissionId(null);
+      setWorkerStale(false);
+      queuedAtRef.current = Date.now();
       setPhase("running");
-      timerRef.current = setTimeout(() => void poll(data.jobId as string), 1500);
+      timerRef.current = setTimeout(
+        () => void poll(data.jobId as string),
+        1500,
+      );
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not start AI creation");
+      toast.error(
+        err instanceof Error ? err.message : "Could not start AI creation",
+      );
     } finally {
       setSubmitting(false);
     }
@@ -122,26 +147,39 @@ export default function AiCreatePage() {
     setJob(null);
     setPdfUrl(null);
     setSubmissionId(null);
+    setWorkerStale(false);
+    queuedAtRef.current = null;
   }
 
-  const currentStageIdx = job ? STAGES.findIndex((s) => s.key === job.stage) : -1;
+  const currentStageIdx = job
+    ? STAGES.findIndex((s) => s.key === job.stage)
+    : -1;
 
   return (
     <div className="page-container py-10">
       <div className="mb-8">
         <p className="section-label mb-2">Autonomous creation</p>
-        <h1 className="text-3xl font-semibold tracking-tight" style={{ color: "var(--color-text)" }}>
+        <h1
+          className="text-3xl font-semibold tracking-tight"
+          style={{ color: "var(--color-text)" }}
+        >
           Create with AI
         </h1>
-        <p className="mt-1.5 text-sm" style={{ color: "var(--color-text-muted)" }}>
-          Describe your idea and the AI will write, lay out, render, and quality-check a
-          print-ready Titchybook automatically.
+        <p
+          className="mt-1.5 text-sm"
+          style={{ color: "var(--color-text-muted)" }}
+        >
+          Describe your idea and the AI will write, lay out, render, and
+          quality-check a print-ready Titchybook automatically.
         </p>
       </div>
 
       {phase === "form" && (
         <div className="card p-6 max-w-2xl">
-          <label className="block text-sm font-medium mb-2" style={{ color: "var(--color-text)" }}>
+          <label
+            className="block text-sm font-medium mb-2"
+            style={{ color: "var(--color-text)" }}
+          >
             Your book concept
           </label>
           <textarea
@@ -151,22 +189,36 @@ export default function AiCreatePage() {
             maxLength={2000}
             placeholder="e.g. A gentle bedtime story about a lonely lighthouse that makes friends with the stars."
             className="w-full rounded-md border px-3 py-2 text-sm"
-            style={{ borderColor: "var(--color-border)", background: "var(--color-bg)", color: "var(--color-text)" }}
+            style={{
+              borderColor: "var(--color-border)",
+              background: "var(--color-bg)",
+              color: "var(--color-text)",
+            }}
           />
-          <p className="mt-1 text-xs" style={{ color: "var(--color-text-subtle)" }}>
+          <p
+            className="mt-1 text-xs"
+            style={{ color: "var(--color-text-subtle)" }}
+          >
             {concept.length}/2000
           </p>
 
           {templates.length > 0 && (
             <>
-              <label className="block text-sm font-medium mt-4 mb-2" style={{ color: "var(--color-text)" }}>
+              <label
+                className="block text-sm font-medium mt-4 mb-2"
+                style={{ color: "var(--color-text)" }}
+              >
                 Template (optional)
               </label>
               <select
                 value={templateId}
                 onChange={(e) => setTemplateId(e.target.value)}
                 className="w-full rounded-md border px-3 py-2 text-sm"
-                style={{ borderColor: "var(--color-border)", background: "var(--color-bg)", color: "var(--color-text)" }}
+                style={{
+                  borderColor: "var(--color-border)",
+                  background: "var(--color-bg)",
+                  color: "var(--color-text)",
+                }}
               >
                 <option value="">Let the AI choose</option>
                 {templates.map((t) => (
@@ -179,7 +231,11 @@ export default function AiCreatePage() {
           )}
 
           <div className="mt-6 flex items-center gap-2">
-            <button onClick={handleSubmit} disabled={submitting} className="btn btn-primary">
+            <button
+              onClick={handleSubmit}
+              disabled={submitting}
+              className="btn btn-primary"
+            >
               {submitting ? "Starting..." : "Create my book"}
             </button>
             <Link href="/dashboard" className="btn btn-outline">Cancel</Link>
@@ -189,76 +245,138 @@ export default function AiCreatePage() {
 
       {phase === "running" && (
         <div className="card p-6 max-w-2xl">
-          <h2 className="font-semibold mb-4" style={{ color: "var(--color-text)" }}>
+          <h2
+            className="font-semibold mb-4"
+            style={{ color: "var(--color-text)" }}
+          >
             The AI is building your book...
           </h2>
           <ol className="space-y-3">
             {STAGES.map((s, i) => {
               const done = currentStageIdx > i || job?.status === "COMPLETED";
-              const active = currentStageIdx === i && job?.status !== "COMPLETED";
+              const active = currentStageIdx === i &&
+                job?.status !== "COMPLETED";
               return (
                 <li key={s.key} className="flex items-center gap-3 text-sm">
                   <span
                     className="flex h-6 w-6 items-center justify-center rounded-full border text-xs"
                     style={{
-                      borderColor: done ? "var(--color-primary)" : "var(--color-border)",
+                      borderColor: done
+                        ? "var(--color-primary)"
+                        : "var(--color-border)",
                       background: done ? "var(--color-primary)" : "transparent",
                       color: done ? "#fff" : "var(--color-text-muted)",
                     }}
                   >
                     {done ? "\u2713" : i + 1}
                   </span>
-                  <span style={{ color: active ? "var(--color-text)" : "var(--color-text-muted)" }}>
+                  <span
+                    style={{
+                      color: active
+                        ? "var(--color-text)"
+                        : "var(--color-text-muted)",
+                    }}
+                  >
                     {s.label}
-                    {active && <span className="ml-2 animate-pulse">working...</span>}
+                    {active && (
+                      <span className="ml-2 animate-pulse">
+                        {job?.status === "QUEUED"
+                          ? workerStale ? "waiting for worker..." : "queued..."
+                          : "working..."}
+                      </span>
+                    )}
                   </span>
                 </li>
               );
             })}
           </ol>
-          <p className="mt-6 text-xs" style={{ color: "var(--color-text-subtle)" }}>
-            This can take a minute. You can safely leave this page and check your dashboard later.
+          {workerStale && (
+            <p
+              className="mt-4 rounded-md border px-3 py-2 text-xs"
+              style={{
+                borderColor: "var(--color-border)",
+                color: "var(--color-text-subtle)",
+              }}
+            >
+              This job is queued but no background worker has claimed it yet.
+              The AI worker process may not be running in this environment.
+            </p>
+          )}
+          <p
+            className="mt-6 text-xs"
+            style={{ color: "var(--color-text-subtle)" }}
+          >
+            This can take a minute. You can safely leave this page and check
+            your dashboard later.
           </p>
         </div>
       )}
 
       {phase === "done" && (
         <div className="card p-6 max-w-2xl text-center">
-          <h2 className="text-xl font-semibold" style={{ color: "var(--color-text)" }}>
+          <h2
+            className="text-xl font-semibold"
+            style={{ color: "var(--color-text)" }}
+          >
             Your book is ready
           </h2>
-          <p className="mt-2 text-sm" style={{ color: "var(--color-text-muted)" }}>
-            The AI finished writing, layout, rendering, and quality checks. It is approved and
-            print-ready.
+          <p
+            className="mt-2 text-sm"
+            style={{ color: "var(--color-text-muted)" }}
+          >
+            The AI finished writing, layout, rendering, and quality checks. It
+            is approved and print-ready.
           </p>
           <div className="mt-6 flex flex-wrap items-center justify-center gap-2">
             {submissionId && (
-              <Link href={`/create?submissionId=${submissionId}`} className="btn btn-primary">
+              <Link
+                href={`/create?submissionId=${submissionId}`}
+                className="btn btn-primary"
+              >
                 View in editor
               </Link>
             )}
             {pdfUrl && (
-              <a href={pdfUrl} target="_blank" rel="noopener noreferrer" className="btn btn-outline">
+              <a
+                href={pdfUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="btn btn-outline"
+              >
                 Download PDF
               </a>
             )}
-            <Link href="/dashboard" className="btn btn-outline">Go to dashboard</Link>
-            <button onClick={reset} className="btn btn-outline">Create another</button>
+            <Link href="/dashboard" className="btn btn-outline">
+              Go to dashboard
+            </Link>
+            <button onClick={reset} className="btn btn-outline">
+              Create another
+            </button>
           </div>
         </div>
       )}
 
       {phase === "failed" && (
         <div className="card p-6 max-w-2xl text-center">
-          <h2 className="text-xl font-semibold" style={{ color: "var(--color-text)" }}>
+          <h2
+            className="text-xl font-semibold"
+            style={{ color: "var(--color-text)" }}
+          >
             We couldn&apos;t finish this book
           </h2>
-          <p className="mt-2 text-sm" style={{ color: "var(--color-text-muted)" }}>
+          <p
+            className="mt-2 text-sm"
+            style={{ color: "var(--color-text-muted)" }}
+          >
             {job?.errorMessage || "Something went wrong. Please try again."}
           </p>
           <div className="mt-6 flex items-center justify-center gap-2">
-            <button onClick={reset} className="btn btn-primary">Try again</button>
-            <Link href="/dashboard" className="btn btn-outline">Go to dashboard</Link>
+            <button onClick={reset} className="btn btn-primary">
+              Try again
+            </button>
+            <Link href="/dashboard" className="btn btn-outline">
+              Go to dashboard
+            </Link>
           </div>
         </div>
       )}
