@@ -6,6 +6,7 @@ import {
   cleanupFixtures,
 } from '../fixtures/database';
 import { prisma } from '@/lib/prisma';
+import type { Prisma } from '@prisma/client';
 
 // The content plan the fake LLM returns. Mutated per test to drive QA outcomes.
 const ai = vi.hoisted(() => ({
@@ -51,7 +52,14 @@ vi.mock('@/lib/pdf/render-job', () => ({
   },
 }));
 
-import { enqueueAiBookJob, claimAiBookJob } from '@/lib/ai/ai-book-job';
+import {
+  enqueueAiBookJob,
+  claimAiBookJob,
+  advanceStage,
+  completeAiBook,
+  AiBookStage,
+  AiBookTerminalError,
+} from '@/lib/ai/ai-book-job';
 import { processAiBookJob } from '@/lib/ai/pipeline';
 
 interface QaCheckOut { id: string; passed: boolean; detail: string; severity: string }
@@ -213,5 +221,83 @@ describe('autonomous AI book pipeline', () => {
     await enqueueAiBookJob(user.id, 'book one', templateId);
     await enqueueAiBookJob(user.id, 'book two', templateId);
     await expect(enqueueAiBookJob(user.id, 'book three', templateId)).rejects.toMatchObject({ status: 429 });
+  });
+
+  it('fences a stale worker out of advancing and approving while the new owner completes', async () => {
+    const { jobId } = await enqueueAiBookJob(user.id, 'a story about a rainy day', templateId);
+    const stale = (await claimAiBookJob())!; // token T1, attempts 1
+
+    // The lease expires and a second worker reclaims the same job row.
+    await db.aiBookJob.update({ where: { id: jobId }, data: { leaseExpiresAt: new Date(Date.now() - 1000) } });
+    const current = (await claimAiBookJob())!; // token T2, attempts 2
+    expect(current.claimToken).not.toBe(stale.claimToken);
+
+    // The stale worker's fenced writes are rejected, and its approval callback
+    // (which runs only inside the lease-fenced transaction) is never invoked.
+    const approve = vi.fn(async () => { throw new Error('a stale worker must not approve'); });
+    expect(await advanceStage(stale, AiBookStage.CONTENT, {})).toBe(false);
+    expect(await completeAiBook(stale, {}, approve)).toBe(false);
+    expect(approve).not.toHaveBeenCalled();
+
+    // Running the whole pipeline on the stale claim is fenced out at the first
+    // stage: it creates no submission and leaves the job owned by `current`.
+    await processAiBookJob(stale);
+    const afterStale = await db.aiBookJob.findUniqueOrThrow({ where: { id: jobId } });
+    expect(afterStale.status).toBe('PROCESSING');
+    expect(afterStale.claimToken).toBe(current.claimToken);
+    expect(afterStale.submissionId).toBeNull();
+    expect(await db.submission.count({ where: { userId: user.id, aiGenerated: true } })).toBe(0);
+
+    // The rightful owner still completes end-to-end and auto-approves.
+    await processAiBookJob(current);
+    const done = await db.aiBookJob.findUniqueOrThrow({ where: { id: jobId } });
+    expect(done.status).toBe('COMPLETED');
+    const submission = await db.submission.findUniqueOrThrow({ where: { id: done.submissionId! } });
+    expect(submission.status).toBe('APPROVED');
+  });
+
+  it('maps a missing submission (P2025) during completion to a terminal error, not a retry', async () => {
+    const { jobId } = await enqueueAiBookJob(user.id, 'a story about a rainy day', templateId);
+    const job = (await claimAiBookJob())!;
+
+    // Stand in for the QA approval callback targeting a submission that no
+    // longer exists: Prisma raises P2025 inside the fenced transaction.
+    const approveMissing = async (tx: Prisma.TransactionClient) => {
+      await tx.submission.update({ where: { id: 'nonexistent-submission-id' }, data: { status: 'APPROVED' } });
+    };
+
+    const error = await completeAiBook(job, {}, approveMissing).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(AiBookTerminalError);
+    expect((error as Error).message).toBe('The book draft no longer exists.');
+
+    // The transaction rolled back, so the job was not marked complete and can
+    // be failed terminally by the pipeline instead of exhausting retries.
+    const stored = await db.aiBookJob.findUniqueOrThrow({ where: { id: jobId } });
+    expect(stored.status).toBe('PROCESSING');
+    expect(stored.completedAt).toBeNull();
+  });
+
+  it('fails terminally when a job resumed at COMPOSE finds no editable text slots', async () => {
+    const { jobId } = await enqueueAiBookJob(user.id, 'a story about a rainy day', templateId);
+    const claimed = (await claimAiBookJob())!;
+
+    // The template loses its text slots between attempts (e.g. an admin edited
+    // or unpublished it), and the job resumes directly at COMPOSE.
+    await db.templateElement.deleteMany({ where: { templateId } });
+    const stageOutput = {
+      templateId,
+      contentPlan: { title: 'A Rainy Day', overrides: [{ templateElementId: 'slot-1', text: 'Rain falls.' }] },
+    };
+    await db.aiBookJob.update({ where: { id: jobId }, data: { stage: 'COMPOSE', stageOutput } });
+    const job = { ...claimed, stage: 'COMPOSE', stageOutput } as typeof claimed;
+
+    await processAiBookJob(job);
+
+    const stored = await db.aiBookJob.findUniqueOrThrow({ where: { id: jobId } });
+    expect(stored.status).toBe('FAILED');
+    expect(stored.errorMessage).toContain('no editable text');
+    // No blank book is composed or auto-approved.
+    expect(stored.submissionId).toBeNull();
+    expect(await db.submission.count({ where: { userId: user.id, aiGenerated: true } })).toBe(0);
   });
 });

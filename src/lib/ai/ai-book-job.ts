@@ -30,6 +30,9 @@ export class AiBookError extends Error {
   }
 }
 
+/** A failure that should not be retried; the pipeline marks the job FAILED. */
+export class AiBookTerminalError extends Error {}
+
 export type ClaimedAiBookJob = AiBookJob & { exhausted: boolean };
 
 /**
@@ -88,8 +91,8 @@ export async function heartbeatAiBookJob(job: ClaimedAiBookJob): Promise<boolean
 }
 
 /** Re-check that this worker still holds a valid, unexpired lease on the job. */
-async function fence(job: ClaimedAiBookJob): Promise<boolean> {
-  const rows = await prisma.$queryRaw<{ id: string }[]>`
+async function fence(job: ClaimedAiBookJob, tx: Prisma.TransactionClient): Promise<boolean> {
+  const rows = await tx.$queryRaw<{ id: string }[]>`
     SELECT "id" FROM "AiBookJob" WHERE "id" = ${job.id} AND "claimToken" = ${job.claimToken}
     AND "status" = 'PROCESSING' AND "leaseExpiresAt" > clock_timestamp() FOR UPDATE`;
   return rows.length === 1;
@@ -106,7 +109,7 @@ export async function advanceStage(
   data: { submissionId?: string; renderJobId?: string } = {},
 ): Promise<boolean> {
   return prisma.$transaction(async (tx) => {
-    if (!(await fence(job))) return false;
+    if (!(await fence(job, tx))) return false;
     const current = await tx.aiBookJob.findUnique({ where: { id: job.id }, select: { stageOutput: true } });
     const merged = { ...((current?.stageOutput as Record<string, unknown>) ?? {}), ...outputPatch };
     await tx.aiBookJob.update({ where: { id: job.id }, data: { stage: stage.valueOf(), stageOutput: merged as Prisma.InputJsonValue, ...data } });
@@ -114,28 +117,44 @@ export async function advanceStage(
   });
 }
 
-/** Mark the job complete, merging any final output patch. */
+/**
+ * Mark the job complete, merging any final output patch. `extra` runs inside
+ * the same lease-fenced transaction so side effects (e.g. approving the
+ * submission) only apply while this worker still holds the lease.
+ */
 export async function completeAiBook(
   job: ClaimedAiBookJob,
   outputPatch: Record<string, unknown> = {},
+  extra?: (tx: Prisma.TransactionClient) => Promise<void>,
 ): Promise<boolean> {
-  return prisma.$transaction(async (tx) => {
-    if (!(await fence(job))) return false;
-    const current = await tx.aiBookJob.findUnique({ where: { id: job.id }, select: { stageOutput: true } });
-    const merged = { ...((current?.stageOutput as Record<string, unknown>) ?? {}), ...outputPatch };
-    await tx.aiBookJob.update({
-      where: { id: job.id },
-      data: {
-        status: AiBookJobStatus.COMPLETED,
-        stageOutput: merged as Prisma.InputJsonValue,
-        errorMessage: null,
-        leaseExpiresAt: null,
-        claimToken: null,
-        completedAt: new Date(),
-      },
-    });
-    return true;
-  });
+  try {
+    return await prisma.$transaction(async (tx) => {
+      if (!(await fence(job, tx))) return false;
+      const current = await tx.aiBookJob.findUnique({ where: { id: job.id }, select: { stageOutput: true } });
+      const merged = { ...((current?.stageOutput as Record<string, unknown>) ?? {}), ...outputPatch };
+      if (extra) await extra(tx);
+      await tx.aiBookJob.update({
+        where: { id: job.id },
+        data: {
+          status: AiBookJobStatus.COMPLETED,
+          stageOutput: merged as Prisma.InputJsonValue,
+          errorMessage: null,
+          leaseExpiresAt: null,
+          claimToken: null,
+          completedAt: new Date(),
+        },
+      });
+      return true;
+    }, { timeout: 20000 });
+  } catch (error) {
+    // P2025: a row the transaction needed (e.g. the submission targeted by the
+    // extra callback) is gone. Fail terminally with a clear message instead of
+    // requeueing until retries exhaust.
+    if ((error as { code?: string }).code === "P2025") {
+      throw new AiBookTerminalError("The book draft no longer exists.");
+    }
+    throw error;
+  }
 }
 
 /**
@@ -148,7 +167,7 @@ export async function failAiBook(
   message = "The AI could not complete this book. Please try again.",
 ): Promise<boolean> {
   return prisma.$transaction(async (tx) => {
-    if (!(await fence(job))) return false;
+    if (!(await fence(job, tx))) return false;
     const exhausted = terminal || job.attempts >= job.maxAttempts;
     await tx.aiBookJob.update({
       where: { id: job.id },

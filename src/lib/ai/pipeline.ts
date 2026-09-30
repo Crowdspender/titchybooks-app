@@ -19,6 +19,7 @@ import {
 import { runQaChecklist, isRetryable, type QaReport } from "./qa";
 import {
   AiBookStage,
+  AiBookTerminalError,
   advanceStage,
   completeAiBook,
   failAiBook,
@@ -36,6 +37,8 @@ const CONTENT_MAX_ATTEMPTS = 2;
 class TerminalError extends Error {}
 /** A failure that should re-run from an earlier stage until attempts exhaust. */
 class RetryableError extends Error {}
+/** The lease was lost mid-stage; stop work and let another worker reclaim. */
+class LeaseLostError extends Error {}
 
 /** A fillable text slot in a template, keyed by the element id used for overrides. */
 interface TextSlotInfo {
@@ -176,19 +179,23 @@ Rules:
 async function runConceptStage(job: ClaimedAiBookJob, state: PipelineState): Promise<void> {
   state.templateId = await resolveTemplate(job.concept, job.templateId ?? null);
   state.slots = await loadTextSlots(state.templateId);
-  await advanceStage(job, AiBookStage.CONTENT, { templateId: state.templateId });
+  await mustAdvance(job, AiBookStage.CONTENT, { templateId: state.templateId });
 }
 
 async function runContentStage(job: ClaimedAiBookJob, state: PipelineState): Promise<void> {
   if (!state.templateId) throw new TerminalError("Missing template selection.");
   if (!state.slots) state.slots = await loadTextSlots(state.templateId);
   state.contentPlan = await generateContent(job.concept, state.slots);
-  await advanceStage(job, AiBookStage.COMPOSE, { contentPlan: state.contentPlan });
+  await mustAdvance(job, AiBookStage.COMPOSE, { contentPlan: state.contentPlan });
 }
 
 async function runComposeStage(job: ClaimedAiBookJob, state: PipelineState): Promise<void> {
-  if (!state.templateId || !state.contentPlan || !state.slots) {
+  if (!state.templateId || !state.contentPlan) {
     throw new TerminalError("Missing template or content plan.");
+  }
+  if (!state.slots) state.slots = await loadTextSlots(state.templateId);
+  if (state.slots.length === 0) {
+    throw new TerminalError("The selected template has no editable text.");
   }
   const templateSlots: TemplateTextSlot[] = state.slots.map(({ id, pageLabel }) => ({ id, pageLabel }));
   const overrides: OverridesByPage = buildOverridesByPage(state.contentPlan, templateSlots);
@@ -204,7 +211,17 @@ async function runComposeStage(job: ClaimedAiBookJob, state: PipelineState): Pro
       overrides,
     );
   }
-  await advanceStage(job, AiBookStage.RENDER, { contentPlan: state.contentPlan }, { submissionId: state.submissionId });
+  await mustAdvance(job, AiBookStage.RENDER, { contentPlan: state.contentPlan }, { submissionId: state.submissionId });
+}
+
+/** advanceStage that aborts the pipeline when the lease was lost. */
+async function mustAdvance(
+  job: ClaimedAiBookJob,
+  stage: AiBookStage,
+  outputPatch: Record<string, unknown> = {},
+  data: { submissionId?: string; renderJobId?: string } = {},
+): Promise<void> {
+  if (!(await advanceStage(job, stage, outputPatch, data))) throw new LeaseLostError();
 }
 
 async function runRenderStage(job: ClaimedAiBookJob, state: PipelineState, lostLease: () => boolean): Promise<void> {
@@ -214,7 +231,7 @@ async function runRenderStage(job: ClaimedAiBookJob, state: PipelineState, lostL
   const submission = await prisma.submission.findUnique({ where: { id: state.submissionId } });
   // Resume guard: already rendered and awaiting review -> skip straight to QA.
   if (submission?.pdfS3Key && (submission.status === "PENDING" || submission.status === "APPROVED")) {
-    await advanceStage(job, AiBookStage.QA, {});
+    await mustAdvance(job, AiBookStage.QA, {});
     return;
   }
 
@@ -227,13 +244,13 @@ async function runRenderStage(job: ClaimedAiBookJob, state: PipelineState, lostL
     if (err && typeof err === "object" && "details" in err && (err as { details?: { canForce?: boolean } }).details?.canForce) {
       const result = await enqueueRenderJob(state.submissionId, actor, { force: true });
       renderJobId = result.jobId;
-      await advanceStage(job, AiBookStage.RENDER, { dpiForced: true });
+      await mustAdvance(job, AiBookStage.RENDER, { dpiForced: true });
     } else {
       throw err;
     }
   }
   state.renderJobId = renderJobId;
-  await advanceStage(job, AiBookStage.RENDER, { renderJobId }, { renderJobId });
+  await mustAdvance(job, AiBookStage.RENDER, { renderJobId }, { renderJobId });
 
   const deadline = Date.now() + RENDER_WAIT_CAP_MS;
   while (Date.now() < deadline) {
@@ -242,7 +259,7 @@ async function runRenderStage(job: ClaimedAiBookJob, state: PipelineState, lostL
     const renderJob = await prisma.renderJob.findUnique({ where: { id: renderJobId } });
     if (!renderJob) throw new TerminalError("Render job disappeared.");
     if (renderJob.status === "COMPLETED") {
-      await advanceStage(job, AiBookStage.QA, {});
+      await mustAdvance(job, AiBookStage.QA, {});
       return;
     }
     if (renderJob.status === "FAILED") {
@@ -258,22 +275,28 @@ async function runQaStage(job: ClaimedAiBookJob, state: PipelineState): Promise<
 
   if (report.passed) {
     const sampled = Math.random() < QA_SAMPLE_RATE;
-    await prisma.$transaction(async (tx) => {
-      await tx.submission.update({
-        where: { id: state.submissionId! },
-        data: { status: "APPROVED", qaSampled: sampled },
-      });
-    });
-    await completeAiBook(job, { qaReport: report, qaSampled: sampled });
+    // Approve inside the lease-fenced completion transaction so a stale
+    // worker whose lease expired cannot approve the submission.
+    const completed = await completeAiBook(
+      job,
+      { qaReport: report, qaSampled: sampled },
+      async (tx) => {
+        await tx.submission.update({
+          where: { id: state.submissionId! },
+          data: { status: "APPROVED", qaSampled: sampled },
+        });
+      },
+    );
+    if (!completed) throw new LeaseLostError();
     return;
   }
 
   // QA failed: persist report, then retry from CONTENT (fresh text) if retryable.
   if (isRetryable(report)) {
-    await advanceStage(job, AiBookStage.CONTENT, { qaReport: report });
+    await mustAdvance(job, AiBookStage.CONTENT, { qaReport: report });
     throw new RetryableError("Automated QA rejected the content; regenerating.");
   }
-  await advanceStage(job, AiBookStage.QA, { qaReport: report });
+  await mustAdvance(job, AiBookStage.QA, { qaReport: report });
   throw new TerminalError("Automated QA rejected this book. It has been left for manual review.");
 }
 
@@ -293,6 +316,7 @@ interface PipelineState {
  */
 export async function processAiBookJob(job: ClaimedAiBookJob): Promise<void> {
   let lostLease = false;
+  let currentStage: string = job.stage;
   const timer = setInterval(() => {
     void heartbeatAiBookJob(job).then((ok) => {
       if (!ok) lostLease = true;
@@ -322,6 +346,7 @@ export async function processAiBookJob(job: ClaimedAiBookJob): Promise<void> {
     for (; idx < STAGE_ORDER.length; idx++) {
       if (lostLease) return;
       const stage = STAGE_ORDER[idx];
+      currentStage = stage;
       if (stage === AiBookStage.CONCEPT) await runConceptStage(job, state);
       else if (stage === AiBookStage.CONTENT) await runContentStage(job, state);
       else if (stage === AiBookStage.COMPOSE) await runComposeStage(job, state);
@@ -330,7 +355,12 @@ export async function processAiBookJob(job: ClaimedAiBookJob): Promise<void> {
       console.info(JSON.stringify({ event: "ai-book-stage-finished", jobId: job.id, stage }));
     }
   } catch (error) {
-    const terminal = error instanceof TerminalError;
+    if (error instanceof LeaseLostError) {
+      // Another worker owns the job now; stop quietly without touching state.
+      console.warn(JSON.stringify({ event: "ai-book-lease-lost", jobId: job.id, stage: currentStage }));
+      return;
+    }
+    const terminal = error instanceof TerminalError || error instanceof AiBookTerminalError;
     const message = error instanceof Error ? error.message : undefined;
     console.error(JSON.stringify({ event: "ai-book-failed", jobId: job.id, attempt: job.attempts, terminal }));
     if (!lostLease) await failAiBook(job, terminal, message);
