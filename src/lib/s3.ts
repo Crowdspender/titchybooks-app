@@ -29,12 +29,22 @@ export async function getPresignedUploadUrl(
   return getSignedUrl(s3Client, command, { expiresIn: 600 });
 }
 
-export async function getPresignedDownloadUrl(s3Key: string): Promise<string> {
+export async function getPresignedDownloadUrl(
+  s3Key: string,
+  options: { filename?: string; expiresIn?: number } = {}
+): Promise<string> {
   const command = new GetObjectCommand({
     Bucket: BUCKET,
     Key: s3Key,
+    // A download the customer can recognise in their downloads folder. Quotes
+    // and control characters are stripped: they would break the header.
+    ...(options.filename
+      ? {
+          ResponseContentDisposition: `attachment; filename="${options.filename.replace(/["\\\r\n]/g, "")}"`,
+        }
+      : {}),
   });
-  return getSignedUrl(s3Client, command, { expiresIn: 3600 });
+  return getSignedUrl(s3Client, command, { expiresIn: options.expiresIn ?? 3600 });
 }
 
 export async function downloadFromS3(s3Key: string): Promise<Buffer> {
@@ -65,13 +75,21 @@ export async function uploadToS3(
   await s3Client.send(command);
 }
 
+/**
+ * Object key for a source image uploaded before its Submission exists.
+ *
+ * `objectId` makes every presigned object distinct: without it, uploading the
+ * same page twice (a new session, a retry, a re-render) would overwrite bytes
+ * that an existing book still references.
+ */
 export function buildUploadKey(
   userId: string,
   submissionId: string,
   pageLabel: string,
-  ext: string
+  ext: string,
+  objectId: string
 ): string {
-  return `uploads/${userId}/${submissionId}/${pageLabel}.${ext}`;
+  return `uploads/${userId}/${submissionId}/${pageLabel}-${objectId}.${ext}`;
 }
 
 export function buildAssetUploadKey(
@@ -116,5 +134,22 @@ export async function objectExists(s3Key: string): Promise<boolean> {
     return true;
   } catch {
     return false;
+  }
+}
+
+/**
+ * Object metadata for verification: returns the stored size and content type,
+ * or null when the object does not exist (or HEAD fails).
+ */
+export async function headS3Object(
+  s3Key: string
+): Promise<{ size: number; contentType?: string } | null> {
+  try {
+    const head = await s3Client.send(
+      new HeadObjectCommand({ Bucket: BUCKET, Key: s3Key })
+    );
+    return { size: head.ContentLength ?? 0, contentType: head.ContentType };
+  } catch {
+    return null;
   }
 }

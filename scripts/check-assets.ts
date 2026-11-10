@@ -36,11 +36,12 @@ async function main() {
           Key: asset.s3Key,
         }));
         console.log("S3 object EXISTS, size:", head.ContentLength, "bytes");
-      } catch (e: any) {
-        console.error("S3 HEAD failed:", e.name, e.message, e.$metadata?.httpStatusCode);
+      } catch (e) {
+        const err = e as { name?: string; message?: string; $metadata?: { httpStatusCode?: number } };
+        console.error("S3 HEAD failed:", err.name, err.message, err.$metadata?.httpStatusCode);
       }
-    } catch (e: any) {
-      console.error("DB query failed:", e.message);
+    } catch (e) {
+      console.error("DB query failed:", e instanceof Error ? e.message : String(e));
     }
   }
 
