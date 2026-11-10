@@ -217,9 +217,10 @@ export default function TemplateGallery() {
                                             .toLocaleDateString()}
                                     </p>
                                     <button
-                                        onClick={() => handleCreateFromTemplate(
-                                            template.id,
-                                        )}
+                                        onClick={() =>
+                                            handleCreateFromTemplate(
+                                                template.id,
+                                            )}
                                         disabled={creating === template.id}
                                         className="btn btn-primary btn-sm mt-4 w-full"
                                     >

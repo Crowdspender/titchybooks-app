@@ -174,8 +174,7 @@ export default function OrderModeration() {
                         className="text-sm mb-4"
                         style={{ color: "var(--color-text-muted)" }}
                     >
-                        {alerts.length}
-                        {" "}
+                        {alerts.length}{" "}
                         {alerts.length === 1 ? "event needs" : "events need"}
                         {" "}
                         a decision. These were handled without failing the
@@ -193,26 +192,24 @@ export default function OrderModeration() {
                                         className="badge text-[11px] mr-2"
                                         style={{
                                             background: "var(--color-accent)",
-                                            color:
-                                                "var(--color-text-inverse)",
+                                            color: "var(--color-text-inverse)",
                                         }}
                                     >
                                         {ALERT_KIND_LABELS[alert.kind] ??
                                             alert.kind}
                                     </span>
-                                    <span style={{ color: "var(--color-text)" }}>
+                                    <span
+                                        style={{ color: "var(--color-text)" }}
+                                    >
                                         {alert.message}
                                     </span>
                                     <div
                                         className="text-xs mt-1"
                                         style={{
-                                            color:
-                                                "var(--color-text-muted)",
+                                            color: "var(--color-text-muted)",
                                         }}
                                     >
-                                        Seen
-                                        {" "}
-                                        {new Date(alert.lastSeenAt)
+                                        Seen {new Date(alert.lastSeenAt)
                                             .toLocaleString()}
                                         {alert.occurrences > 1
                                             ? ` · ${alert.occurrences}× since ${

@@ -13,12 +13,12 @@ Prisma 5 + PostgreSQL, NextAuth v5, S3, Stripe Checkout, OpenAI and `pdf-lib`.
 
 Read these before changing anything that touches queues, payments or deploys.
 
-| Where | What it covers |
-| --- | --- |
-| [`docs/operations-runbook.md`](docs/operations-runbook.md) | The operational source of truth: health and alerting, payments and reconciliation, the AI book lifecycle, S3 configuration, backups and restore, the release-verification gate, the deploy checklist and the incident checklist. |
-| [`docs/titchybook-editor-implementation-spec.md`](docs/titchybook-editor-implementation-spec.md) | The page-editor implementation spec. |
-| [`.qoder/repowiki/en/content/`](.qoder/repowiki/en/content) | The generated architecture wiki. Start with `Project Overview.md` and `Getting Started.md`, then the per-subsystem trees (Architecture Overview, API Reference, Authentication & Authorization, Database Design, Deployment & Operations, PDF Generation Engine, Administrative Features, Component Library, Configuration & Environment, Image Upload System, User Dashboard). |
-| [`.env.example`](.env.example) | Every environment variable, with the reason each one exists and the invariants between them. |
+| Where                                                                                            | What it covers                                                                                                                                                                                                                                                                                                                                                                  |
+| ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`docs/operations-runbook.md`](docs/operations-runbook.md)                                       | The operational source of truth: health and alerting, payments and reconciliation, the AI book lifecycle, S3 configuration, backups and restore, the release-verification gate, the deploy checklist and the incident checklist.                                                                                                                                                |
+| [`docs/titchybook-editor-implementation-spec.md`](docs/titchybook-editor-implementation-spec.md) | The page-editor implementation spec.                                                                                                                                                                                                                                                                                                                                            |
+| [`.qoder/repowiki/en/content/`](.qoder/repowiki/en/content)                                      | The generated architecture wiki. Start with `Project Overview.md` and `Getting Started.md`, then the per-subsystem trees (Architecture Overview, API Reference, Authentication & Authorization, Database Design, Deployment & Operations, PDF Generation Engine, Administrative Features, Component Library, Configuration & Environment, Image Upload System, User Dashboard). |
+| [`.env.example`](.env.example)                                                                   | Every environment variable, with the reason each one exists and the invariants between them.                                                                                                                                                                                                                                                                                    |
 
 ## Local development
 
@@ -52,9 +52,9 @@ Read these before changing anything that touches queues, payments or deploys.
    `ADMIN_EMAIL` / `managedKey`, so re-running never duplicates or overwrites
    them.
 
-   The seed step is not optional for the AI pipeline. Book generation only
-   picks templates that pass the shared preflight, and it fails terminally when
-   no `APPROVED`, `aiReady` template exists — which is exactly what a
+   The seed step is not optional for the AI pipeline. Book generation only picks
+   templates that pass the shared preflight, and it fails terminally when no
+   `APPROVED`, `aiReady` template exists — which is exactly what a
    migrated-but-unseeded database looks like.
 
 4. Start the app:
@@ -83,9 +83,9 @@ Read these before changing anything that touches queues, payments or deploys.
 `test:db:migrate`, `test:integration` and `test:browser` all read
 `TEST_DATABASE_URL` and refuse to run without it. They never fall back to the
 application `DATABASE_URL`, so there is no way to point a destructive test run
-at real data by accident. The URL must be local (`127.0.0.1` or `localhost`)
-and the database name must contain `test` — `scripts/test-environment.mts`
-enforces both.
+at real data by accident. The URL must be local (`127.0.0.1` or `localhost`) and
+the database name must contain `test` — `scripts/test-environment.mts` enforces
+both.
 
 ```bash
 docker run -d --name titchybook-test -p 127.0.0.1:55432:5432 \
@@ -106,17 +106,17 @@ refuses to boot by design.
 
 ### Commands
 
-| Command | What it does |
-| --- | --- |
-| `npm run typecheck` | `tsc --noEmit`. |
-| `npm run lint` | ESLint. CI runs `npx eslint --max-warnings 0`, so warnings are failures. |
-| `npm test` | Unit tests (Vitest). |
-| `npm run test:pricing` | The pricing engine's standalone assertions. |
-| `npm run test:db:migrate` | Migrates the test database and fails on any schema/migration drift. |
-| `npm run test:integration` | Integration tests against the test database — Stripe webhook and checkout retry, queue claim/retry/fencing, rate limiting, payment alerts. |
-| `npm run test:browser` | Playwright against a production build on port 3100. |
-| `npm run build` | `prisma generate && next build`. The route table must include `ƒ Proxy (Middleware)`. |
-| `npm run audit:dependencies` | Production advisories at `low`, dev advisories at `critical`. |
+| Command                      | What it does                                                                                                                               |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `npm run typecheck`          | `tsc --noEmit`.                                                                                                                            |
+| `npm run lint`               | ESLint. CI runs `npx eslint --max-warnings 0`, so warnings are failures.                                                                   |
+| `npm test`                   | Unit tests (Vitest).                                                                                                                       |
+| `npm run test:pricing`       | The pricing engine's standalone assertions.                                                                                                |
+| `npm run test:db:migrate`    | Migrates the test database and fails on any schema/migration drift.                                                                        |
+| `npm run test:integration`   | Integration tests against the test database — Stripe webhook and checkout retry, queue claim/retry/fencing, rate limiting, payment alerts. |
+| `npm run test:browser`       | Playwright against a production build on port 3100.                                                                                        |
+| `npm run build`              | `prisma generate && next build`. The route table must include `ƒ Proxy (Middleware)`.                                                      |
+| `npm run audit:dependencies` | Production advisories at `low`, dev advisories at `critical`.                                                                              |
 
 Run the whole gate in the order given in
 [Release verification](docs/operations-runbook.md#release-verification) before
