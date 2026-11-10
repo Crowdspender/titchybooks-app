@@ -3,6 +3,8 @@ import { getImageCropRect } from "@/lib/editor/crop";
 import type { EditorElement, EditorScene } from "@/lib/editor/schema";
 import type { PanelDefinition } from "./layout";
 import { TARGET_DPI } from "./layout";
+import { wrapTextLines } from "./text-layout";
+import { MIN_READING_PAGE_MM, PRINT_PROFILE_DPI } from "./print-profile";
 
 interface AssetSource {
   buffer: Buffer;
@@ -24,113 +26,21 @@ function escapeXml(value: string): string {
     .replace(/>/g, "&gt;");
 }
 
-/**
- * Estimate the rendered width of a single character at the given font size.
- * Uses a lookup table derived from average proportional-font glyph widths.
- * Not pixel-perfect for every typeface, but close enough to replicate canvas
- * word-wrap behaviour without a native font renderer on the server.
- */
-function estimateCharWidth(char: string, fontSize: number, fontWeight: number): number {
-  const boldFactor = fontWeight >= 600 ? 1.1 : 1.0;
-  let ratio: number;
-
-  if (char === " " || char === "\t") {
-    ratio = 0.28;
-  } else if ("iIjl!|".includes(char)) {
-    ratio = 0.30;
-  } else if ("frt".includes(char)) {
-    ratio = 0.37;
-  } else if ("sz".includes(char)) {
-    ratio = 0.48;
-  } else if ("acegknopquvxy".includes(char)) {
-    ratio = 0.53;
-  } else if ("bdh".includes(char)) {
-    ratio = 0.55;
-  } else if ("ABCDEFGHJKLNOPQRSTUVXYZ0123456789".includes(char)) {
-    ratio = 0.62;
-  } else if ("mwMW".includes(char)) {
-    ratio = 0.77;
-  } else {
-    ratio = 0.54;
-  }
-
-  return fontSize * ratio * boldFactor;
-}
-
-/**
- * Measure the approximate pixel width of a string at the given font settings.
- * `letterSpacing` is already in scene-coordinate pixels (same unit as fontSize).
- */
-function estimateStringWidth(
-  text: string,
-  fontSize: number,
-  fontWeight: number,
-  letterSpacing: number
-): number {
-  let width = 0;
-  for (const char of text) {
-    width += estimateCharWidth(char, fontSize, fontWeight) + letterSpacing;
-  }
-  return width;
-}
-
-/**
- * Word-wrap `rawText` to fit inside `maxWidth`, matching the behaviour of
- * Konva's `wrap="word"` mode. Explicit newlines in the source text are
- * preserved as paragraph breaks, then each paragraph is greedily wrapped.
- */
-function wrapTextLines(
-  rawText: string,
-  maxWidth: number,
-  fontSize: number,
-  fontWeight: number,
-  letterSpacing: number
-): string[] {
-  const result: string[] = [];
-
-  for (const paragraph of rawText.split(/\r?\n/)) {
-    const trimmed = paragraph.trimEnd();
-
-    if (trimmed === "") {
-      result.push("");
-      continue;
-    }
-
-    const words = trimmed.split(" ");
-    let currentLine = "";
-
-    for (const word of words) {
-      const candidate = currentLine === "" ? word : `${currentLine} ${word}`;
-      const candidateWidth = estimateStringWidth(candidate, fontSize, fontWeight, letterSpacing);
-
-      if (candidateWidth > maxWidth && currentLine !== "") {
-        result.push(currentLine);
-        currentLine = word;
-      } else {
-        currentLine = candidate;
-      }
-    }
-
-    if (currentLine !== "") {
-      result.push(currentLine);
-    }
-  }
-
-  return result.length > 0 ? result : [""];
-}
+/** Reading-page pixels at the qualified print DPI (74 x 105 mm). */
+export const READING_PAGE_WIDTH_PX = Math.round((MIN_READING_PAGE_MM.widthMm / 25.4) * PRINT_PROFILE_DPI);
+export const READING_PAGE_HEIGHT_PX = Math.round((MIN_READING_PAGE_MM.heightMm / 25.4) * PRINT_PROFILE_DPI);
 
 function getImageHref(asset: AssetSource): string {
   return `data:${asset.mimeType};base64,${asset.buffer.toString("base64")}`;
 }
 
 function renderTextElement(element: Extract<EditorElement, { type: "text" }>) {
-  const lines = wrapTextLines(
-    element.text,
-    element.width,
-    element.fontSize,
-    element.fontWeight,
-    element.letterSpacing
-  );
+  // Same measurement as QA: a book that passes QA must wrap identically in print.
+  const lines = wrapTextLines(element.text, element.width, {
+    fontSize: element.fontSize,
+    fontWeight: element.fontWeight,
+    letterSpacing: element.letterSpacing,
+  });
   const anchor =
     element.align === "center"
       ? "middle"
@@ -143,7 +53,15 @@ function renderTextElement(element: Extract<EditorElement, { type: "text" }>) {
       : element.align === "right"
       ? element.x + element.width
       : element.x;
-  const baseY = element.y + element.fontSize;
+  const lineStep = element.fontSize * element.lineHeight;
+  const blockHeight = Math.max(lineStep, lines.length * lineStep);
+  const topY =
+    element.verticalAlign === "middle"
+      ? element.y + (element.height - blockHeight) / 2
+      : element.verticalAlign === "bottom"
+      ? element.y + element.height - blockHeight
+      : element.y;
+  const baseY = topY + element.fontSize;
   const rotationCenterX = element.x + element.width / 2;
   const rotationCenterY = element.y + element.height / 2;
 
@@ -160,7 +78,7 @@ function renderTextElement(element: Extract<EditorElement, { type: "text" }>) {
       >
         ${lines
           .map((line: string, index: number) => {
-            const dy = index === 0 ? 0 : element.fontSize * element.lineHeight;
+            const dy = index === 0 ? 0 : lineStep;
             return `<tspan x="${x}" dy="${dy}">${escapeXml(line)}</tspan>`;
           })
           .join("")}
@@ -287,13 +205,28 @@ function renderSvgElement(element: EditorElement, assets: Map<string, AssetSourc
   return renderShapeElement(element);
 }
 
-export async function renderEditorSceneForPanel(
+/**
+ * Render one canonical, upright page at an exact pixel size.
+ *
+ * The scene keeps its aspect ratio (aspect-preserving containment) and is
+ * centred inside the requested box; the surrounding area is filled with the
+ * page background. Both the reading PDF and the imposition sheet use this one
+ * function, so the two outputs can never disagree about the book's content.
+ */
+export async function renderSceneTile(
   scene: EditorScene,
-  panel: PanelDefinition,
+  targetWidthPx: number,
+  targetHeightPx: number,
   assets: Map<string, AssetSource>
 ): Promise<Buffer> {
-  const widthPx = mmToPixels(panel.width);
-  const heightPx = mmToPixels(panel.height);
+  const scale = Math.min(
+    targetWidthPx / scene.page.widthPx,
+    targetHeightPx / scene.page.heightPx
+  );
+  const drawWidth = scene.page.widthPx * scale;
+  const drawHeight = scene.page.heightPx * scale;
+  const offsetX = (targetWidthPx - drawWidth) / 2;
+  const offsetY = (targetHeightPx - drawHeight) / 2;
   const elements = scene.elements
     .slice()
     .sort((left, right) => left.zIndex - right.zIndex)
@@ -303,26 +236,54 @@ export async function renderEditorSceneForPanel(
   const svg = `
     <svg
       xmlns="http://www.w3.org/2000/svg"
-      width="${widthPx}"
-      height="${heightPx}"
-      viewBox="0 0 ${scene.page.widthPx} ${scene.page.heightPx}"
+      width="${targetWidthPx}"
+      height="${targetHeightPx}"
+      viewBox="0 0 ${targetWidthPx} ${targetHeightPx}"
     >
-      <rect
-        x="0"
-        y="0"
-        width="${scene.page.widthPx}"
-        height="${scene.page.heightPx}"
-        fill="${scene.page.backgroundColor}"
-      />
-      ${elements}
+      <rect x="0" y="0" width="${targetWidthPx}" height="${targetHeightPx}" fill="${scene.page.backgroundColor}" />
+      <g transform="translate(${offsetX} ${offsetY}) scale(${scale})">
+        <rect
+          x="0"
+          y="0"
+          width="${scene.page.widthPx}"
+          height="${scene.page.heightPx}"
+          fill="${scene.page.backgroundColor}"
+        />
+        ${elements}
+      </g>
     </svg>
   `;
 
-  let pipeline = sharp(Buffer.from(svg)).png();
+  return sharp(Buffer.from(svg))
+    .flatten({ background: scene.page.backgroundColor })
+    .png()
+    .toBuffer();
+}
 
+/**
+ * Canonical upright page render for the 74 x 105 mm reading PDF. No rotation
+ * happens here; rotation belongs to the A4 imposition step.
+ */
+export async function renderEditorSceneForReading(
+  scene: EditorScene,
+  assets: Map<string, AssetSource>
+): Promise<Buffer> {
+  return renderSceneTile(scene, READING_PAGE_WIDTH_PX, READING_PAGE_HEIGHT_PX, assets);
+}
+
+/**
+ * Panel-sized render for the foldable A4 sheet. The page is rendered upright
+ * first (same canonical content) and only then rotated 180 degrees for the
+ * bottom row, which is what the fold/cut sequence requires.
+ */
+export async function renderEditorSceneForPanel(
+  scene: EditorScene,
+  panel: PanelDefinition,
+  assets: Map<string, AssetSource>
+): Promise<Buffer> {
+  const upright = await renderSceneTile(scene, mmToPixels(panel.width), mmToPixels(panel.height), assets);
   if (panel.rotation === 180) {
-    pipeline = pipeline.rotate(180);
+    return sharp(upright).rotate(180).png().toBuffer();
   }
-
-  return pipeline.toBuffer();
+  return upright;
 }

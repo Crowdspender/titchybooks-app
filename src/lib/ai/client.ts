@@ -16,7 +16,7 @@ export function getOpenAIClient(): OpenAI {
 }
 
 export function getOpenAIModel(): string {
-  return process.env.OPENAI_MODEL || "gpt-4o";
+  return process.env.OPENAI_MODEL || "gpt-6-sol";
 }
 
 export function isAIConfigured(): boolean {

@@ -4,10 +4,15 @@ import { downloadFromS3, uploadToS3 } from '@/lib/s3';
 import { BACK_COVER_BRAND_BAND_PX, BACK_COVER_BRAND_TEXT, EDITOR_PAGE_HEIGHT_PX, EDITOR_PAGE_WIDTH_PX, EDITOR_SAFE_MARGIN_PX } from '@/lib/editor/constants';
 import type { RenderSnapshot } from './snapshot';
 import type { PageLabel } from '@/lib/constants';
+import type { ArtifactManifest } from './artifacts';
 
 export interface RenderArtifacts {
+  /** Print-sheet key. Kept as the compatibility field for existing consumers. */
   pdfS3Key: string;
+  /** Reading-order key. Both artifacts are always published together. */
+  readingPdfS3Key: string;
   previews: Array<{ pageLabel: PageLabel; s3Key: string }>;
+  artifactManifest: ArtifactManifest;
 }
 export async function loadAssetBuffers(input: RenderSnapshot) {
   return new Map(await Promise.all(input.assets.map(async asset => {
@@ -22,6 +27,13 @@ export async function uploadPreview(prefix: string, pageLabel: PageLabel, png: B
   const buffer = await sharp(png).resize(200, null, { withoutEnlargement: true }).png().toBuffer();
   await uploadToS3(s3Key, buffer, 'image/png');
   return { pageLabel, s3Key };
+}
+
+/** Upload one PDF artifact under the attempt prefix and return its key. */
+export async function uploadPdfArtifact(prefix: string, filename: string, bytes: Buffer): Promise<string> {
+  const s3Key = `${prefix}/${filename}`;
+  await uploadToS3(s3Key, bytes, 'application/pdf');
+  return s3Key;
 }
 
 // Shared branding preserves the existing raster/vector imposition geometry.

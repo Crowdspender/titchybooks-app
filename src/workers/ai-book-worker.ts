@@ -1,8 +1,11 @@
 import 'dotenv/config';
 import { setTimeout as sleep } from 'node:timers/promises';
+import { assertProductionEnv } from '@/lib/env-validation';
 import { prisma } from '@/lib/prisma';
 import { claimAiBookJob } from '@/lib/ai/ai-book-job';
 import { processAiBookJob } from '@/lib/ai/pipeline';
+
+assertProductionEnv();
 
 let stopping = false;
 const pollMs = Number(process.env.AI_WORKER_POLL_MS ?? 2000);
