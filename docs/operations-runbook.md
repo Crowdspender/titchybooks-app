@@ -229,6 +229,18 @@ the queue-health checks mean anything.
 
    Whatever it lists as not yet applied is exactly what `migrate deploy` will
    run in step 6.
+
+   Note that `migrate status` only reports on the migrations table. Production
+   also carries tables that no migration created and `prisma/schema.prisma`
+   does not declare - a lowercase set (`user`, `account`, `session`,
+   `verification`, `organization`, `member`, `invitation`, `jwks`,
+   `project_config`) left over from an earlier authentication schema. As of
+   2026-11-10 all of them are empty except `project_config` (1 row). They are
+   inert: `migrate deploy` only executes pending SQL files and will not touch
+   them. **Never run `prisma db push` against production** - it reconciles the
+   database to the schema and would propose dropping them. Removing them is a
+   separate, deliberate migration once someone has confirmed nothing external
+   still reads them.
 3. Capture a restore point.
    `20261110100000_drop_deprecated_user_business_columns` is destructive and has
    no down migration, so before this release set:
