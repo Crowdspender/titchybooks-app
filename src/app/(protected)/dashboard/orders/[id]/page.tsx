@@ -2,12 +2,16 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
+import { isStripeConfigured } from "@/lib/stripe";
+import PayNowButton from "@/components/orders/PayNowButton";
 import { type Zone, ZONE_LABELS } from "@/lib/pricing/constants";
 
 export default async function OrderDetailPage({
     params,
+    searchParams,
 }: {
     params: Promise<{ id: string }>;
+    searchParams: Promise<{ checkout?: string }>;
 }) {
     const session = await auth();
     if (!session?.user?.id) {
@@ -15,6 +19,7 @@ export default async function OrderDetailPage({
     }
 
     const { id } = await params;
+    const { checkout } = await searchParams;
     const order = await prisma.order.findUnique({
         where: { id },
         include: {
@@ -29,8 +34,42 @@ export default async function OrderDetailPage({
 
     const fmt = (v: number) => `${v.toLocaleString("en-US")} HUF`;
 
+    // Banner for the return trip from Stripe Checkout. The webhook usually
+    // lands before the browser redirect, but treat "still pending" as a
+    // timing gap rather than a failure.
+    let banner: { text: string; color: string; bg: string } | null = null;
+    if (checkout === "success") {
+        banner = order.status === "PAID"
+            ? {
+                text: "Payment received. Your order is confirmed.",
+                color: "#166534",
+                bg: "#DCFCE7",
+            }
+            : {
+                text:
+                    "Payment completed - confirmation is on its way, refresh in a few seconds.",
+                color: "#92400E",
+                bg: "var(--color-accent-light)",
+            };
+    } else if (checkout === "canceled") {
+        banner = {
+            text: "Checkout was canceled. You can retry payment below.",
+            color: "#991B1B",
+            bg: "#FEE2E2",
+        };
+    }
+
     return (
         <div className="page-container py-10">
+            {banner && (
+                <div
+                    className="mb-6 rounded-xl px-4 py-3 text-sm font-medium"
+                    style={{ color: banner.color, background: banner.bg }}
+                    role="status"
+                >
+                    {banner.text}
+                </div>
+            )}
             {/* Header */}
             <div className="mb-8 flex items-start justify-between">
                 <div>
@@ -42,12 +81,18 @@ export default async function OrderDetailPage({
                         Order {order.id.slice(0, 8)}
                     </h1>
                 </div>
-                <Link
-                    href="/dashboard/orders"
-                    className="btn btn-ghost btn-sm"
-                >
-                    ← All orders
-                </Link>
+                <div className="flex items-center gap-3">
+                    {order.status === "PENDING_PAYMENT" &&
+                        isStripeConfigured() && (
+                        <PayNowButton orderId={order.id} />
+                    )}
+                    <Link
+                        href="/dashboard/orders"
+                        className="btn btn-ghost btn-sm"
+                    >
+                        ← All orders
+                    </Link>
+                </div>
             </div>
 
             <div className="grid gap-4 md:grid-cols-2">

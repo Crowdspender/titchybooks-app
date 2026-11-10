@@ -39,7 +39,7 @@ export default function Hero() {
                             Create Titchybooks
                         </Link>
                         <Link
-                            href="/register?audience=business"
+                            href="/register"
                             className="btn btn-outline btn-lg"
                         >
                             For Businesses

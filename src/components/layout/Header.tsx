@@ -49,6 +49,7 @@ export default function Header() {
                     <NavLink href="/admin">Admin</NavLink>
                     <NavLink href="/admin/templates">Templates</NavLink>
                     <NavLink href="/admin/pricing">Pricing</NavLink>
+                    <NavLink href="/admin/queue">Queue</NavLink>
                   </>
                 )}
                 <NavDivider />
@@ -172,6 +173,12 @@ export default function Header() {
                         onClick={() => setMobileOpen(false)}
                       >
                         Pricing
+                      </MobileNavLink>
+                      <MobileNavLink
+                        href="/admin/queue"
+                        onClick={() => setMobileOpen(false)}
+                      >
+                        Queue
                       </MobileNavLink>
                     </>
                   )}

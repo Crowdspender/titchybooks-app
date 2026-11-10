@@ -63,7 +63,7 @@ export default function TwoWorlds() {
                             ))}
                         </ul>
                         <Link
-                            href="/register?audience=business"
+                            href="/register"
                             className="mt-10 inline-flex w-fit items-center gap-2 px-5 py-3 rounded-lg font-medium hover:bg-white/90 transition-colors"
                             style={{
                                 background: "var(--color-surface)",

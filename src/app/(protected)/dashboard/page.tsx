@@ -1,6 +1,7 @@
 import SubmissionList from "@/components/submissions/SubmissionList";
 import Link from "next/link";
 import ContinueEditingButton from "@/components/dashboard/ContinueEditingButton";
+import AiBookJobs from "@/components/dashboard/AiBookJobs";
 
 export default function DashboardPage() {
   return (
@@ -40,6 +41,9 @@ export default function DashboardPage() {
           </svg>
           My Orders
         </Link>
+        <Link href="/dashboard/vault" className="btn btn-outline btn-sm">
+          My Vault
+        </Link>
         <Link href="/create/templates" className="btn btn-outline btn-sm">
           From Template
         </Link>
@@ -53,6 +57,7 @@ export default function DashboardPage() {
         </Link>
       </div>
 
+      <AiBookJobs />
       <SubmissionList />
     </div>
   );

@@ -922,22 +922,20 @@ export default function EditorCanvas({
   }, [cropModeId]);
 
   // Exit crop mode if the crop-target element no longer exists or selection
-  // has moved to a different element.
-  useEffect(() => {
-    if (!cropModeId) {
-      return;
-    }
+  // has moved to a different element. Adjusted during render (React's
+  // "state adjustment" pattern) rather than in a syncing effect, so the crop
+  // mode cannot render another frame against a stale element.
+  if (cropModeId) {
     const stillExists = scene.elements.some((element) =>
       element.id === cropModeId && element.type === "image"
     );
-    if (!stillExists) {
+    if (
+      !stillExists ||
+      (selectedElementId && selectedElementId !== cropModeId)
+    ) {
       setCropModeId(null);
-      return;
     }
-    if (selectedElementId && selectedElementId !== cropModeId) {
-      setCropModeId(null);
-    }
-  }, [cropModeId, scene.elements, selectedElementId]);
+  }
 
   function updateElement(
     elementId: string,

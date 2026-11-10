@@ -24,7 +24,7 @@ export default function FooterCTA() {
                 </p>
                 <div className="mt-10 grid sm:grid-cols-2 gap-4 max-w-2xl">
                     <Link
-                        href="/register?audience=business"
+                        href="/register"
                         className="flex flex-col justify-between p-7 rounded-xl no-underline min-h-[150px] transition-all hover:-translate-y-1 hover:shadow-xl"
                         style={{
                             background: "var(--color-primary)",

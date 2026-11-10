@@ -4,6 +4,12 @@ import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
 
+interface TemplateIssue {
+    code: string;
+    message: string;
+    pageLabel: string | null;
+}
+
 interface TemplateItem {
     id: string;
     title: string | null;
@@ -12,6 +18,10 @@ interface TemplateItem {
     publishedAt: string | null;
     createdAt: string;
     instanceCount: number;
+    /** Whether the AI pipeline may generate against this template. */
+    aiReady: boolean;
+    aiSummary: string;
+    aiIssues: TemplateIssue[];
 }
 
 export default function TemplateManager() {
@@ -71,15 +81,28 @@ export default function TemplateManager() {
             const res = await fetch(`/api/admin/templates/${id}/publish`, {
                 method: "POST",
             });
+            const data = await res.json().catch(() => ({}));
 
             if (!res.ok) {
-                throw new Error("Could not publish template");
+                // A 422 lists the preflight issues that block AI readiness.
+                throw new Error(data.error ?? "Could not publish template");
             }
 
-            toast.success("Template published");
+            if (data.readiness?.ok) {
+                toast.success("Template published and AI-ready");
+            } else {
+                // Manual-only publication is still useful: the template works in
+                // the editor, it just never becomes an AI candidate.
+                toast.warning(
+                    `Published for manual use only — ${
+                        data.readiness?.summary ?? "not AI-ready"
+                    }`,
+                );
+            }
+
             // Refresh the list
-            const data = await (await fetch("/api/admin/templates")).json();
-            setTemplates(data.templates || []);
+            const list = await (await fetch("/api/admin/templates")).json();
+            setTemplates(list.templates || []);
         } catch (error) {
             toast.error(
                 error instanceof Error
@@ -240,6 +263,9 @@ export default function TemplateManager() {
                                             Status
                                         </th>
                                         <th className="text-left px-5 py-3 section-label">
+                                            AI
+                                        </th>
+                                        <th className="text-left px-5 py-3 section-label">
                                             Version
                                         </th>
                                         <th className="text-left px-5 py-3 section-label">
@@ -282,6 +308,46 @@ export default function TemplateManager() {
                                                     {template.status}
                                                 </span>
                                             </td>
+                                            <td className="px-5 py-4">
+                                                <span
+                                                    className={`badge ${
+                                                        template.aiReady
+                                                            ? "badge-approved"
+                                                            : "badge-draft"
+                                                    }`}
+                                                    title={template.aiSummary}
+                                                >
+                                                    {template.aiReady
+                                                        ? "AI-ready"
+                                                        : "Manual only"}
+                                                </span>
+                                                {!template.aiReady &&
+                                                    template.aiIssues.length >
+                                                        0 &&
+                                                    (
+                                                        <p
+                                                            className="text-xs mt-1"
+                                                            style={{
+                                                                color:
+                                                                    "var(--color-text-muted)",
+                                                            }}
+                                                        >
+                                                            {template
+                                                                    .aiIssues[0]
+                                                                    .pageLabel
+                                                                ? `${
+                                                                    template
+                                                                        .aiIssues[
+                                                                            0
+                                                                        ].pageLabel
+                                                                }: `
+                                                                : ""}
+                                                            {template
+                                                                .aiIssues[0]
+                                                                .message}
+                                                        </p>
+                                                    )}
+                                            </td>
                                             <td
                                                 className="px-5 py-4"
                                                 style={{
@@ -321,8 +387,9 @@ export default function TemplateManager() {
                                                     >
                                                         Edit
                                                     </button>
-                                                    {template.status !==
-                                                            "APPROVED" && (
+                                                    {(template.status !==
+                                                            "APPROVED" ||
+                                                        !template.aiReady) && (
                                                         <button
                                                             onClick={() =>
                                                                 handlePublish(
@@ -330,7 +397,10 @@ export default function TemplateManager() {
                                                                 )}
                                                             className="btn btn-success btn-sm text-xs"
                                                         >
-                                                            Publish
+                                                            {template.status ===
+                                                                    "APPROVED"
+                                                                ? "Republish"
+                                                                : "Publish"}
                                                         </button>
                                                     )}
                                                     <button
