@@ -29,7 +29,9 @@ jobs:
           PROD_URL: ${{ secrets.PROD_URL }}
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
         run: |
-          curl -sS -X POST "$PROD_URL/api/ai/drain" \
+          # --fail-with-body makes 4xx/5xx responses fail this step (and alert
+          # via GitHub notifications) instead of silently exiting 0.
+          curl -sS --fail-with-body -X POST "$PROD_URL/api/ai/drain" \
             -H "authorization: Bearer $CRON_SECRET" \
             --max-time 90 -w "\n[ai drain http %{http_code}]\n"
 
@@ -38,6 +40,19 @@ jobs:
           PROD_URL: ${{ secrets.PROD_URL }}
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
         run: |
-          curl -sS -X POST "$PROD_URL/api/render/drain" \
+          curl -sS --fail-with-body -X POST "$PROD_URL/api/render/drain" \
             -H "authorization: Bearer $CRON_SECRET" \
             --max-time 90 -w "\n[render drain http %{http_code}]\n"
+
+      - name: Check queue health
+        env:
+          PROD_URL: ${{ secrets.PROD_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          # 503 means the scheduler is stale, work has backed up past the
+          # alert threshold, or the last drain errored. Failing the step turns
+          # that into a GitHub Actions notification while later cron ticks keep
+          # draining.
+          curl -sS --fail-with-body "$PROD_URL/api/queue/health" \
+            -H "authorization: Bearer $CRON_SECRET" \
+            --max-time 30 -w "\n[queue health http %{http_code}]\n"

@@ -7,7 +7,7 @@
     "build": "prisma generate && next build",
     "start": "next start",
     "lint": "eslint",
-    "audit:dependencies": "npm audit --audit-level=low",
+    "audit:dependencies": "npm audit --omit=dev --audit-level=low && npm audit --audit-level=critical",
     "test:pricing": "tsx src/lib/pricing/__tests__/engine.test.ts",
     "test:email": "tsx test-email.ts",
     "typecheck": "tsc --noEmit",
@@ -16,7 +16,8 @@
     "test:integration": "tsx scripts/test-db.ts integration",
     "test:browser": "tsx scripts/test-db.ts browser",
     "worker:render": "tsx src/workers/render-worker.ts",
-    "worker:ai": "tsx src/workers/ai-book-worker.ts"
+    "worker:ai": "tsx src/workers/ai-book-worker.ts",
+    "s3:configure": "tsx scripts/configure-s3.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1009.0",
@@ -25,7 +26,7 @@
     "bcryptjs": "^3.0.3",
     "dotenv": "^17.3.1",
     "konva": "^10.2.5",
-    "next": "16.3.5",
+    "next": "^16.4.2",
     "next-auth": "^5.0.0-beta.32",
     "openai": "^6.39.1",
     "pdf-lib": "^1.17.1",
@@ -36,6 +37,7 @@
     "resend": "^6.12.4",
     "sharp": "^0.35.4",
     "sonner": "^2.0.7",
+    "stripe": "^23.0.0",
     "tsx": "^4.23.15",
     "zod": "^4.3.6"
   },
@@ -52,7 +54,7 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
-    "eslint-config-next": "16.3.5",
+    "eslint-config-next": "^16.4.2",
     "jsdom": "^26.1.0",
     "prisma": "^5.22.0",
     "tailwindcss": "^4",

@@ -30,6 +30,13 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      # Gate: any production dependency vulnerability fails CI, and any
+      # critical vulnerability anywhere fails CI. The one accepted finding is
+      # the dev-only braces->micromatch->fast-glob chain pulled in by
+      # @next/eslint-plugin-next (lint-time DoS via untrusted glob patterns,
+      # which we never parse). No patched braces exists, and the audit
+      # --force "fix" downgrades eslint-config-next to a flat-config-
+      # incompatible 14.x. Re-check with `npm audit` after each Next upgrade.
       - run: npm run audit:dependencies
       - run: npx prisma generate
       - run: npx prisma validate
