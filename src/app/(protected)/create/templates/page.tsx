@@ -195,7 +195,7 @@ export default function TemplateGallery() {
                                                             "var(--color-text-subtle)",
                                                     }}
                                                 >
-                                                    Preview coming soon
+                                                    No preview yet
                                                 </p>
                                             </div>
                                         )}

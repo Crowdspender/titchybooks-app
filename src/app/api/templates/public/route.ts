@@ -1,6 +1,7 @@
 ﻿import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
+import { getPresignedDownloadUrl } from "@/lib/s3";
 import { SubmissionStatus } from "@/lib/constants";
 import { evaluateTemplateReadiness } from "@/lib/ai/template-readiness";
 
@@ -63,12 +64,34 @@ export async function GET(request: Request) {
       ).filter((template): template is (typeof templates)[number] => template !== null)
     : templates;
 
-  const result = eligible.map((t) => ({
-    id: t.id,
-    title: t.title,
-    previewImage: null as string | null, // TODO: generate preview images
-    createdAt: t.createdAt.toISOString(),
-  }));
+  // The card thumbnail is the cover page preview the render pipeline already
+  // produced, so no separate preview path is needed. A template approved
+  // without ever being rendered - the seeded starters, for instance - simply
+  // has none, and the gallery falls back to its placeholder. URLs are signed
+  // per request because they expire.
+  const covers = await prisma.submissionPage.findMany({
+    where: {
+      submissionId: { in: eligible.map((template) => template.id) },
+      pageLabel: "FRONT_COVER",
+    },
+    select: { submissionId: true, previewS3Key: true },
+  });
+  const coverKeys = new Map<string, string>();
+  for (const cover of covers) {
+    if (cover.previewS3Key) coverKeys.set(cover.submissionId, cover.previewS3Key);
+  }
+
+  const result = await Promise.all(
+    eligible.map(async (t) => {
+      const coverKey = coverKeys.get(t.id);
+      return {
+        id: t.id,
+        title: t.title,
+        previewImage: coverKey ? await getPresignedDownloadUrl(coverKey) : null,
+        createdAt: t.createdAt.toISOString(),
+      };
+    }),
+  );
 
   return NextResponse.json({ templates: result });
 }
