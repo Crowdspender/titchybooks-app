@@ -9,7 +9,7 @@ const slots: TemplateTextSlot[] = [
 ];
 
 function plan(overrides: Array<{ templateElementId: string; text: string }>, title = 'T'): ContentPlan {
-  return { title, overrides };
+  return { version: 1, title, overrides };
 }
 
 describe('validatePlanAgainstTemplate', () => {

@@ -42,17 +42,17 @@ describe('isRetryable', () => {
   const check = (id: string, passed: boolean, severity: 'terminal' | 'retry') => ({ id, passed, detail: '', severity });
 
   it('is retryable when a retry-severity check failed', () => {
-    const report: QaReport = { passed: false, checks: [check('text-fits', false, 'retry')] };
+    const report: QaReport = { passed: false, checks: [check('text-fits', false, 'retry')], artifact: null };
     expect(isRetryable(report)).toBe(true);
   });
 
   it('is not retryable when only terminal checks failed', () => {
-    const report: QaReport = { passed: false, checks: [check('dpi', false, 'terminal')] };
+    const report: QaReport = { passed: false, checks: [check('dpi', false, 'terminal')], artifact: null };
     expect(isRetryable(report)).toBe(false);
   });
 
   it('is not retryable when everything passed', () => {
-    const report: QaReport = { passed: true, checks: [check('text-fits', true, 'retry')] };
+    const report: QaReport = { passed: true, checks: [check('text-fits', true, 'retry')], artifact: null };
     expect(isRetryable(report)).toBe(false);
   });
 });

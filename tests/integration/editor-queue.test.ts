@@ -7,6 +7,7 @@ import { createEmptyEditorScene } from '@/lib/editor/schema';
 import { canAccessAssetViaTemplate, savePage, saveTitle } from '@/lib/editor/submission-store';
 import { claimRenderJob, enqueueRenderJob, failRender, heartbeat, processRenderJob, publishRender } from '@/lib/pdf/render-job';
 import { parseRenderSnapshot } from '@/lib/pdf/snapshot';
+import type { RenderArtifacts } from '@/lib/pdf/render-output';
 import { prisma } from '@/lib/prisma';
 import { POST as create } from '@/app/api/submissions/route';
 import { GET as load, PATCH as title } from '@/app/api/submissions/[id]/route';
@@ -22,6 +23,9 @@ const session = vi.hoisted(() => ({ user: null as null | { id: string; role: str
 vi.mock('@/auth', () => ({ auth: async () => session.user ? { user: session.user } : null }));
 vi.mock('@/lib/s3', () => ({
   getPresignedDownloadUrl: vi.fn(async () => 'https://storage.example.invalid/test.pdf'),
+  // POST /api/submissions HEAD-verifies every uploaded key before accepting
+  // it; tests default to a small, present object (individual cases override).
+  headS3Object: vi.fn(async () => ({ size: 1024, contentType: 'image/png' })),
   buildRenderAttemptPrefix: (user: string, submission: string, job: string, attempt: number, token: string) =>
     `renders/${user}/${submission}/${job}/${attempt}-${token}`,
 }));
@@ -31,7 +35,33 @@ const request = (body?: unknown) => new Request('http://localhost/test', {
 });
 const params = (id: string) => ({ params: Promise.resolve({ id }) });
 const pageParams = (id: string, pageLabel = 'FRONT_COVER') => ({ params: Promise.resolve({ id, pageLabel }) });
-const artifacts = { pdfS3Key: 'test/output.pdf', previews: [{ pageLabel: 'FRONT_COVER' as const, s3Key: 'test/front.png' }] };
+const descriptor = (s3Key: string) => ({
+  s3Key,
+  bytes: 1024,
+  sha256: 'a'.repeat(64),
+  contentType: 'application/pdf',
+  pageCount: 1,
+  widthPt: 841.89,
+  heightPt: 595.28,
+});
+const artifacts: RenderArtifacts = {
+  pdfS3Key: 'test/output.pdf',
+  readingPdfS3Key: 'test/reading.pdf',
+  previews: [{ pageLabel: 'FRONT_COVER' as const, s3Key: 'test/front.png' }],
+  artifactManifest: {
+    schemaVersion: 1,
+    submissionId: 'test-submission',
+    submissionRevision: 0,
+    renderJobId: 'test-render-job',
+    printProfile: 'titchybook-single-sheet-rgb-v2',
+    templateId: null,
+    templateVersion: null,
+    title: null,
+    createdAt: new Date(0).toISOString(),
+    print: descriptor('test/output.pdf'),
+    reading: descriptor('test/reading.pdf'),
+  },
+};
 
 beforeEach(async () => {
   expect(await db.renderJob.count({ where: { status: { in: ['QUEUED', 'PROCESSING'] } } })).toBe(0);
@@ -55,7 +85,6 @@ async function due(id: string) {
 
 describe('editor API and transactional submission', () => {
   it('creates eight pages, saves unique content, reloads, and freezes on submit', async () => {
-    expect((await db.user.findUniqueOrThrow({ where: { id: session.user!.id } })).businessName).toBe('Test Only');
     const created = await create(request({ mode: 'EDITOR', title: 'Eight pages' }));
     expect(created.status).toBe(201);
     const id = (await created.json()).submission.id as string;

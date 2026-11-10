@@ -1,7 +1,19 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { runDrain, isCronAuthorized, drainBudgetMs } from '../../src/lib/queue-drain';
+import { runDrain, isCronAuthorized, drainBudgetMs, type DrainSummary } from '../../src/lib/queue-drain';
 
 const ORIGINAL_ENV = { ...process.env };
+
+// Shared assertions for the counters plus the run framing fields added for
+// drain-run metrics: timestamps must be coherent and duration derived from them.
+function expectCounts(
+  summary: DrainSummary,
+  expected: { claimed: number; finished: number; yielded: number },
+) {
+  expect(summary).toMatchObject(expected);
+  expect(summary.errored).toBe(false);
+  expect(summary.finishedAt.getTime()).toBeGreaterThanOrEqual(summary.startedAt.getTime());
+  expect(summary.durationMs).toBe(summary.finishedAt.getTime() - summary.startedAt.getTime());
+}
 
 afterEach(() => {
   process.env = { ...ORIGINAL_ENV };
@@ -16,13 +28,13 @@ describe('runDrain', () => {
       async (job) => { processed.push(job.id); },
       5_000,
     );
-    expect(summary).toEqual({ claimed: 2, finished: 2, yielded: 0 });
+    expectCounts(summary, { claimed: 2, finished: 2, yielded: 0 });
     expect(processed).toEqual(['a', 'b']);
   });
 
   it('reports nothing when there is no due work', async () => {
     const summary = await runDrain(async () => null, async () => {}, 5_000);
-    expect(summary).toEqual({ claimed: 0, finished: 0, yielded: 0 });
+    expectCounts(summary, { claimed: 0, finished: 0, yielded: 0 });
   });
 
   it('stops safely when claim throws (transient DB error)', async () => {
@@ -31,7 +43,8 @@ describe('runDrain', () => {
       async () => {},
       5_000,
     );
-    expect(summary).toEqual({ claimed: 0, finished: 0, yielded: 0 });
+    // A claim failure is surfaced instead of looking like an empty queue.
+    expect(summary).toMatchObject({ claimed: 0, finished: 0, yielded: 0, errored: true });
   });
 
   it('yields the in-flight job when the budget is exhausted', async () => {
@@ -42,7 +55,7 @@ describe('runDrain', () => {
       () => new Promise((resolve) => setTimeout(resolve, 1_000)),
       50,
     );
-    expect(summary).toEqual({ claimed: 1, finished: 0, yielded: 1 });
+    expectCounts(summary, { claimed: 1, finished: 0, yielded: 1 });
   });
 
   it('treats a rejecting processor as settled (processors mark FAILED themselves)', async () => {
@@ -52,7 +65,38 @@ describe('runDrain', () => {
       async () => { throw new Error('stage failed'); },
       5_000,
     );
-    expect(summary).toEqual({ claimed: 1, finished: 1, yielded: 0 });
+    expectCounts(summary, { claimed: 1, finished: 1, yielded: 0 });
+  });
+
+  it('passes the drain deadline to the processor', async () => {
+    const before = Date.now();
+    let seenDeadline = 0;
+    const jobs = [{ id: 'a' }];
+    await runDrain(
+      async () => jobs.shift() ?? null,
+      async (_job, deadlineMs) => { seenDeadline = deadlineMs; },
+      5_000,
+    );
+    // Deadline is the wall-clock budget horizon; claim latency can eat into it,
+    // so allow slack either side of the nominal before + budget horizon.
+    expect(seenDeadline).toBeGreaterThan(before);
+    expect(seenDeadline - before).toBeLessThan(6_000);
+  });
+
+  it('stops and counts yielded when the processor voluntarily yields', async () => {
+    const jobs = [{ id: 'a' }, { id: 'b' }];
+    const processed: string[] = [];
+    const summary = await runDrain(
+      async () => jobs.shift() ?? null,
+      async (job) => {
+        processed.push(job.id);
+        return job.id === 'a' ? 'yielded' : undefined;
+      },
+      5_000,
+    );
+    // The yielded job is left for a later drain; the next job is not claimed.
+    expectCounts(summary, { claimed: 1, finished: 0, yielded: 1 });
+    expect(processed).toEqual(['a']);
   });
 });
 

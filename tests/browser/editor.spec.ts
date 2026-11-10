@@ -86,7 +86,9 @@ test('failed saves block navigation and submission and recover after retry', asy
   expect(submitRequests).toBe(0);
   expect(await db.renderJob.count({ where: { submissionId: id } })).toBe(0);
   await page.unroute(`**/api/submissions/${id}/pages/*`);
-  await page.getByRole('button', { name: 'Retry saving', exact: true }).click();
+  // A successful retry unmounts this button immediately; dispatch directly so
+  // Playwright does not retry the click against a detached element.
+  await page.getByRole('button', { name: 'Retry saving', exact: true }).dispatchEvent('click');
   await expect(page.getByRole('status').filter({ hasText: /^Saved$/ })).toBeVisible();
   await page.reload();
   await expect(page.getByRole('textbox', { name: 'Book title' })).toBeVisible();
