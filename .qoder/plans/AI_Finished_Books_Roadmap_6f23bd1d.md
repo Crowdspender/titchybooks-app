@@ -129,9 +129,9 @@ against an isolated Dockerized Postgres 16:
 | `tsc --noEmit` | pass |
 | `eslint --max-warnings 0` | pass |
 | `vitest run` (unit) | 15 files / 103 tests pass |
-| `npm run test:db:migrate` | 13 migrations applied, `prisma migrate diff` reports no drift |
-| `npm run test:integration` | 9 files / 58 tests pass |
-| `npm run test:browser` | see the current run; the eight-page editor regression needed an explicit `aria-current` wait because a page switch awaits the outgoing autosave |
+| `npm run test:db:migrate` | 14 migrations applied, `prisma migrate diff` reports no drift |
+| `npm run test:integration` | 11 files / 78 tests pass |
+| `npm run test:browser` | 3 specs / 10 tests pass; the eight-page editor regression needed an explicit `aria-current` wait because a page switch awaits the outgoing autosave |
 | `npm run build` | pass, route table contains `ƒ Proxy (Middleware)` |
 
 These are baselines, not acceptance of future changes. Live services, the deployed

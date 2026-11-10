@@ -11,6 +11,7 @@ the operational surfaces added for production readiness.
 | `GET /api/health`       | none                                 | `200` with `checks.database = "up"`     | `503` with `checks.database = "down"` |
 | `GET /api/queue/health` | `Authorization: Bearer $CRON_SECRET` | `200`                                   | `503` with `reasons[]`                |
 | `/admin/queue`          | ADMIN session                        | queue cards, failed jobs, drain history | red banner with reasons               |
+| `/admin/orders`         | ADMIN session                        | order table                             | amber "Payment reconciliation" banner |
 
 - Point an external uptime monitor at `/api/health` (1-minute interval). Alert
   on any non-200 response or timeout.
@@ -24,6 +25,39 @@ the operational surfaces added for production readiness.
   error messages and attempt counts. Failed jobs have already exhausted their
   automatic retries; fix the root cause before asking the user to resubmit.
   Render jobs owned by a `FAILED` submission can be retried from the editor.
+
+## Payments and reconciliation
+
+Checkout runs through Stripe. `/api/stripe/webhook` is the only path that marks
+an order `PAID` automatically, and its authenticity comes solely from the
+signature, so `STRIPE_WEBHOOK_SECRET` must match the dashboard endpoint.
+
+| Surface                          | Auth             | Purpose                                                                                                                                                                                                 |
+| -------------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /api/orders/:id/pay`        | owner or ADMIN   | (Re)issue a Checkout session for a `PENDING_PAYMENT` order; the returned session id replaces the stored one. Capped at 30 attempts per user per hour. Returns `503` when `STRIPE_SECRET_KEY` is unset. |
+| `POST /api/stripe/webhook`       | signature        | Applies `checkout.session.completed`. Idempotent across retried deliveries.                                                                                                                             |
+| `GET /api/admin/payment-alerts`  | ADMIN            | Open reconciliation alerts.                                                                                                                                                                             |
+| `PATCH /api/admin/payment-alerts/:id` | ADMIN       | Dismiss one alert. Dismissing does not change the order.                                                                                                                                                |
+
+The webhook deliberately does not fail on ambiguous events, because a non-2xx
+makes Stripe retry a delivery that can never succeed. Each of those decisions is
+recorded as a `PaymentAlert` row and listed in the banner on `/admin/orders`:
+
+| Kind                  | Meaning                                                                                                                                            | Action                                                                                                                                                                       |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `stale-session`       | The buyer paid on a Checkout session that a later retry had superseded. The payment is signature-verified, so the order was still marked `PAID`.    | Check the Stripe dashboard for more than one charge on the order. Refund the duplicate if there is one, then dismiss.                                                        |
+| `unpaid-completion`   | Checkout completed without payment (an expired or declined card), so the order was left `PENDING_PAYMENT`.                                          | Contact the buyer, or cancel the order, then dismiss.                                                                                                                        |
+| `vault-entry-failed`  | An admin marked the order `PAID` but the vault copy could not be created. The buyer has paid for storage that does not exist.                        | Fix the cause, then save `PAID` again from `/admin/orders`: the vault side-effect is idempotent and re-runs on an order that is already paid. Then dismiss.                   |
+
+Alerts are counted rather than duplicated: a retried delivery increments
+`occurrences` on the existing row. A dismissed alert reopens if the same
+condition happens again, so dismissing is never permanent suppression. The
+`console.warn` lines are still emitted for log-based alerting, but on Vercel the
+banner is the surface an operator will actually see.
+
+A paid order missing its vault entry can also be repaired by re-delivering the
+original event from the Stripe dashboard: the webhook re-runs vault creation on
+an `already-paid` transition.
 
 ## AI book lifecycle
 
@@ -189,11 +223,18 @@ refuses to boot by design.
    secrets used by `drain.yml`.
 5. Confirm `CORS_ALLOWED_ORIGINS` includes every production origin and re-run
    the S3 configurator if the origin changed.
-6. Verify `GET /api/health` returns `200` after deploy, then trigger `drain.yml`
+6. If online checkout is enabled, confirm the Stripe dashboard has a webhook
+   endpoint for `https://<production-origin>/api/stripe/webhook` subscribed to
+   `checkout.session.completed` and `checkout.session.expired`, and that
+   `STRIPE_WEBHOOK_SECRET` is that endpoint's signing secret. A missing or
+   mismatched endpoint fails silently: buyers are still charged, but every
+   order stays `PENDING_PAYMENT` and vault entries are never created.
+7. Verify `GET /api/health` returns `200` after deploy, then trigger `drain.yml`
    manually once so `/api/queue/health` has a drain heartbeat. Also confirm a
    logged-out `GET /dashboard` returns `307` to `/login?callbackUrl=...`; page
    protection depends on the `Proxy` entry in the build.
-7. Check `/admin/queue` after the first scheduled drain.
+8. Check `/admin/queue` after the first scheduled drain, and `/admin/orders` to
+   confirm the payment reconciliation banner is empty.
 
 ## Incident checklist
 
@@ -206,6 +247,14 @@ refuses to boot by design.
   long-running jobs.
 - **Failed job:** reproduce with the stored `errorMessage` and stage. AI jobs
   persist stage output, so a retry resumes from the last completed stage.
+- **Payment reconciliation banner on `/admin/orders`:** every entry is a
+  payment that was handled without failing, so money and fulfilment may
+  disagree. Work the action column in
+  [Payments and reconciliation](#payments-and-reconciliation), then dismiss.
+- **Orders stuck in `PENDING_PAYMENT` after buyers report paying:** the webhook
+  is not reaching the app or its secret does not match. Check the endpoint's
+  delivery log in the Stripe dashboard, then re-deliver the event; the handler
+  is idempotent, so a repeat is safe.
 - **Accidental deletion or bad migration:** create a Neon branch at the
   pre-incident timestamp, validate it, then promote; restore the nightly dump
   only if PITR is outside its window.
