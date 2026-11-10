@@ -201,6 +201,13 @@ refuses to boot by design.
 
 1. Apply migrations explicitly: `npx prisma migrate deploy` against the
    production `DATABASE_URL`. (`npm run build` only regenerates the client.)
+   Every migration in the set is additive except
+   `20261110100000_drop_deprecated_user_business_columns`, which drops the four
+   legacy `User` business-registration columns. No code has read or written
+   them since authentication was unified into a single signup flow, but the
+   stored values are unrecoverable and there is no down migration: capture a
+   Neon PITR timestamp and a fresh logical dump before deploying (see
+   "Database backups and restore").
 2. Seed the managed starter templates: `npx prisma db seed`. **This is
    required, not optional**: autonomous AI book generation only offers
    templates that pass the shared preflight, and a job enqueued with no
