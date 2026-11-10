@@ -43,7 +43,13 @@ test('saves all eight pages, reopens exact scenes, and submits with the worker p
   const id = await openDraft(page);
   await page.getByRole('textbox', { name: 'Book title' }).fill('Eight-page browser regression');
   for (const label of PAGE_LABELS) {
-    await page.getByRole('button', { name: `Edit ${PAGE_LABEL_DISPLAY[label]}`, exact: true }).click();
+    const pageButton = page.getByRole('button', { name: `Edit ${PAGE_LABEL_DISPLAY[label]}`, exact: true });
+    await pageButton.click();
+    // Switching pages awaits the outgoing autosave before it commits, and a
+    // switch click is ignored while one is already in flight. Wait for
+    // aria-current so the elements below cannot land on the page being left,
+    // which is what happens when the database is slow enough to widen the gap.
+    await expect(pageButton).toHaveAttribute('aria-current', 'page');
     await addText(page, `Unique text ${label}`);
     await page.getByRole('button', { name: 'Add Shape' }).hover();
     await page.getByRole('button', { name: 'Rectangle', exact: true }).click();
