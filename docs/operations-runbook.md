@@ -199,16 +199,70 @@ refuses to boot by design.
 
 ## Deploy checklist
 
-1. Apply migrations explicitly: `npx prisma migrate deploy` against the
+Order matters. Migrations run before the new code serves traffic, the seed runs
+before any AI job is enqueued, and the drain scheduler needs a heartbeat before
+the queue-health checks mean anything.
+
+### Before deploying
+
+1. Confirm CI is green on the exact commit being deployed.
+   `.github/workflows/ci.yml` runs the whole gate (dependency audit, migrate,
+   lint, typecheck, unit, integration, build, browser) against an ephemeral
+   Postgres service, so a green run is the evidence that this release candidate
+   works. It needs no repository secrets.
+2. Ask production what it is actually missing, rather than trusting a count
+   from a plan or a PR description — migrations are added between releases:
+
+   ```bash
+   npx prisma migrate status   # against the production DATABASE_URL
+   ```
+
+   Whatever it lists as not yet applied is exactly what `migrate deploy` will
+   run in step 6.
+3. Capture a restore point. `20261110100000_drop_deprecated_user_business_columns`
+   is destructive and has no down migration, so before this release set:
+
+   - note the current Neon timestamp so a point-in-time branch can be created
+     at it, and
+   - run `.github/workflows/backup.yml` manually (`workflow_dispatch`) and wait
+     for the verified dump artifact.
+
+   For a release whose migrations are all additive, the most recent nightly
+   dump is sufficient.
+4. Confirm every Vercel environment variable is present and non-placeholder.
+   `assertProductionEnv()` ([`src/lib/env-validation.ts`](../src/lib/env-validation.ts))
+   throws at boot in production, so a bad value fails the deploy loudly instead
+   of degrading weeks later:
+
+   - Required: `DATABASE_URL`, `NEXTAUTH_SECRET`, `CRON_SECRET`, `AWS_REGION`,
+     `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `S3_BUCKET_NAME`.
+   - Optional, warn and self-disable: `OPENAI_API_KEY` (AI generation),
+     `RESEND_API_KEY` (transactional email), `STRIPE_SECRET_KEY` /
+     `STRIPE_WEBHOOK_SECRET` (online checkout).
+   - Queue timings are validated against each other, not merely for presence:
+     `AI_BOOK_LEASE_MS` must exceed `DRAIN_BUDGET_MS` and be at least twice
+     `AI_HEARTBEAT_MS`, and `DRAIN_BUDGET_MS` must stay under the drain routes'
+     60s `maxDuration`. Boot is refused otherwise, because the failure mode is
+     a live drainer being evicted mid-budget and its job double-claimed.
+
+   `CORS_ALLOWED_ORIGINS` must list every production origin; re-run
+   `npm run s3:configure -- --apply` if any of them changed.
+5. Confirm the GitHub repository secrets and variables the workflows need:
+
+   | Workflow     | Required                                                       | Optional                                                                                     |
+   | ------------ | -------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+   | `drain.yml`  | `PROD_URL` (no trailing slash), `CRON_SECRET`                  | —                                                                                            |
+   | `backup.yml` | `DATABASE_URL`                                                 | `BACKUP_S3_BUCKET` + `AWS_REGION` variables, `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` secrets |
+
+   `CRON_SECRET` must be byte-identical to the Vercel value: the drain routes
+   fail closed with `401` on a mismatch, which stops both queues silently. Note
+   that `PROD_URL` is a GitHub secret only and must **not** be added to Vercel.
+
+### Deploying and verifying
+
+6. Apply migrations explicitly: `npx prisma migrate deploy` against the
    production `DATABASE_URL`. (`npm run build` only regenerates the client.)
-   Every migration in the set is additive except
-   `20261110100000_drop_deprecated_user_business_columns`, which drops the four
-   legacy `User` business-registration columns. No code has read or written
-   them since authentication was unified into a single signup flow, but the
-   stored values are unrecoverable and there is no down migration: capture a
-   Neon PITR timestamp and a fresh logical dump before deploying (see
-   "Database backups and restore").
-2. Seed the managed starter templates: `npx prisma db seed`. **This is
+7. Seed the managed starter templates: `npx prisma db seed`. **This is
    required, not optional**: autonomous AI book generation only offers
    templates that pass the shared preflight, and a job enqueued with no
    `aiReady` template available fails terminally at `CONCEPT` with
@@ -216,7 +270,7 @@ refuses to boot by design.
    matched by `Submission.managedKey`, so re-running updates the three
    seed-owned templates and never touches an admin-authored one (whose
    `managedKey` is `NULL`).
-3. Confirm the AI template inventory is non-empty before announcing the
+8. Confirm the AI template inventory is non-empty before announcing the
    feature:
 
    ```bash
@@ -226,22 +280,22 @@ refuses to boot by design.
 
    A count of `0` means every AI book request will fail. Publish a template
    from `/admin/templates` or re-run the seed.
-4. Ensure `CRON_SECRET` is identical in Vercel and in the GitHub repository
-   secrets used by `drain.yml`.
-5. Confirm `CORS_ALLOWED_ORIGINS` includes every production origin and re-run
-   the S3 configurator if the origin changed.
-6. If online checkout is enabled, confirm the Stripe dashboard has a webhook
+9. If online checkout is enabled, confirm the Stripe dashboard has a webhook
    endpoint for `https://<production-origin>/api/stripe/webhook` subscribed to
    `checkout.session.completed` and `checkout.session.expired`, and that
    `STRIPE_WEBHOOK_SECRET` is that endpoint's signing secret. A missing or
    mismatched endpoint fails silently: buyers are still charged, but every
    order stays `PENDING_PAYMENT` and vault entries are never created.
-7. Verify `GET /api/health` returns `200` after deploy, then trigger `drain.yml`
-   manually once so `/api/queue/health` has a drain heartbeat. Also confirm a
-   logged-out `GET /dashboard` returns `307` to `/login?callbackUrl=...`; page
-   protection depends on the `Proxy` entry in the build.
-8. Check `/admin/queue` after the first scheduled drain, and `/admin/orders` to
-   confirm the payment reconciliation banner is empty.
+10. Verify `GET /api/health` returns `200` after deploy, then trigger `drain.yml`
+    manually once so `/api/queue/health` has a drain heartbeat. Also confirm a
+    logged-out `GET /dashboard` returns `307` to `/login?callbackUrl=...`; page
+    protection depends on the `Proxy` entry in the build.
+11. Check `/admin/queue` after the first scheduled drain, and `/admin/orders` to
+    confirm the payment reconciliation banner is empty.
+12. Point an external uptime monitor at `/api/health` on a 1-minute interval and
+    alert on any non-200. Nothing else in this stack notifies you that the app
+    itself is down: `drain.yml` only reports queue health, and only every five
+    minutes.
 
 ## Incident checklist
 
