@@ -122,9 +122,33 @@ staging deployment at it, verify the data, then promote it during a maintenance
 window. Do not restore directly over the production branch without first
 capturing a fresh backup.
 
+After any restore, re-check the managed templates. Restoring to a timestamp
+before `20261024120000_add_template_managed_key` (or before the seed first ran)
+leaves the database with no `aiReady` template, so re-run `npx prisma db seed`
+against the restored branch and repeat the inventory query from the deploy
+checklist before promoting it.
+
 ## Release verification
 
 Run the CI gate locally before tagging a release:
+
+0. Start an isolated test database and point `TEST_DATABASE_URL` at it in
+   `.env`. Steps 3, 5 and 7 refuse to run without it, and they never fall back
+   to the application `DATABASE_URL`. The URL must be local
+   (`127.0.0.1`/`localhost`) and the database name must contain `test`:
+
+   ```bash
+   docker run -d --name titchybook-test -p 127.0.0.1:55432:5432 \
+     -e POSTGRES_USER=titchybook_test \
+     -e POSTGRES_PASSWORD=local_test_only \
+     -e POSTGRES_DB=titchybook_test \
+     postgres:16
+   ```
+
+   ```bash
+   # .env (never .env.example, which is committed)
+   TEST_DATABASE_URL="postgresql://titchybook_test:local_test_only@127.0.0.1:55432/titchybook_test"
+   ```
 
 1. `npm ci` to install exactly the audited lockfile.
 2. `npm run audit:dependencies` (production findings fail; the only accepted
@@ -143,15 +167,33 @@ refuses to boot by design.
 
 1. Apply migrations explicitly: `npx prisma migrate deploy` against the
    production `DATABASE_URL`. (`npm run build` only regenerates the client.)
-2. Ensure `CRON_SECRET` is identical in Vercel and in the GitHub repository
+2. Seed the managed starter templates: `npx prisma db seed`. **This is
+   required, not optional**: autonomous AI book generation only offers
+   templates that pass the shared preflight, and a job enqueued with no
+   `aiReady` template available fails terminally at `CONCEPT` with
+   `This template is not AI-ready yet`. Seeding is idempotent — recipes are
+   matched by `Submission.managedKey`, so re-running updates the three
+   seed-owned templates and never touches an admin-authored one (whose
+   `managedKey` is `NULL`).
+3. Confirm the AI template inventory is non-empty before announcing the
+   feature:
+
+   ```bash
+   psql "$DATABASE_URL" -c 'SELECT count(*) AS ai_ready_templates FROM "Submission" \
+     WHERE "isTemplate" = true AND "aiReady" = true AND status = '\''APPROVED'\'';'
+   ```
+
+   A count of `0` means every AI book request will fail. Publish a template
+   from `/admin/templates` or re-run the seed.
+4. Ensure `CRON_SECRET` is identical in Vercel and in the GitHub repository
    secrets used by `drain.yml`.
-3. Confirm `CORS_ALLOWED_ORIGINS` includes every production origin and re-run
+5. Confirm `CORS_ALLOWED_ORIGINS` includes every production origin and re-run
    the S3 configurator if the origin changed.
-4. Verify `GET /api/health` returns `200` after deploy, then trigger `drain.yml`
+6. Verify `GET /api/health` returns `200` after deploy, then trigger `drain.yml`
    manually once so `/api/queue/health` has a drain heartbeat. Also confirm a
    logged-out `GET /dashboard` returns `307` to `/login?callbackUrl=...`; page
    protection depends on the `Proxy` entry in the build.
-5. Check `/admin/queue` after the first scheduled drain.
+7. Check `/admin/queue` after the first scheduled drain.
 
 ## Incident checklist
 
