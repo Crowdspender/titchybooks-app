@@ -75,15 +75,6 @@ model User {
   passwordResetToken   String?
   passwordResetExpires DateTime?
 
-  // DEPRECATED: legacy business-registration fields. No longer written or read
-  // by application code since authentication was unified (single signup flow).
-  // Columns are retained so existing accounts keep their historical data.
-  // Plan: drop in a follow-up migration once no rollback is needed.
-  audience     String  @default("creator") // "creator" or "business" (unused)
-  businessName String? // legacy
-  businessType String? // legacy
-  companySize  String? // legacy
-
   assets      Asset[]
   submissions Submission[]
   orders      Order[]
