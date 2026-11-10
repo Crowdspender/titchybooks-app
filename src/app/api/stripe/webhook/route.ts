@@ -6,6 +6,7 @@ import {
   createVaultEntryForOrder,
   transitionOrderToPaid,
 } from "@/lib/orders/lifecycle";
+import { recordPaymentAlert } from "@/lib/orders/payment-alerts";
 
 export const dynamic = "force-dynamic";
 
@@ -94,6 +95,25 @@ async function handleCompletedSession(session: Stripe.Checkout.Session) {
         paymentStatus: session.payment_status,
       }),
     );
+    // The buyer reached a completion without paying, so the order stays as it
+    // is and an operator decides whether to chase it. orderId is a foreign key
+    // and this branch runs before the order is loaded, so attach the alert only
+    // when there is a row to attach it to.
+    const known = await prisma.order.findUnique({
+      where: { id: orderId },
+      select: { id: true },
+    });
+    await recordPaymentAlert({
+      kind: "unpaid-completion",
+      orderId: known?.id ?? null,
+      subject: session.id,
+      message: `Checkout completed without payment (${session.payment_status}); the order was left unchanged.`,
+      context: {
+        sessionId: session.id,
+        paymentStatus: session.payment_status,
+        referencedOrderId: orderId,
+      },
+    });
     return;
   }
 
@@ -121,6 +141,16 @@ async function handleCompletedSession(session: Stripe.Checkout.Session) {
         storedSessionId: order.stripeSessionId,
       }),
     );
+    await recordPaymentAlert({
+      kind: "stale-session",
+      orderId: order.id,
+      subject: session.id,
+      message: "Paid on a superseded Checkout session; the order was still marked PAID.",
+      context: {
+        sessionId: session.id,
+        storedSessionId: order.stripeSessionId,
+      },
+    });
   }
 
   await prisma.$transaction(async (tx) => {

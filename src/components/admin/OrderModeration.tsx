@@ -26,8 +26,25 @@ interface AdminOrderRow {
 
 const STATUS_FILTERS: Array<"" | OrderStatus> = ["", ...ORDER_STATUSES];
 
+interface PaymentAlertRow {
+    id: string;
+    orderId: string | null;
+    kind: string;
+    message: string;
+    occurrences: number;
+    firstSeenAt: string;
+    lastSeenAt: string;
+}
+
+const ALERT_KIND_LABELS: Record<string, string> = {
+    "stale-session": "Superseded session",
+    "unpaid-completion": "Unpaid completion",
+    "vault-entry-failed": "Missing vault entry",
+};
+
 export default function OrderModeration() {
     const [orders, setOrders] = useState<AdminOrderRow[]>([]);
+    const [alerts, setAlerts] = useState<PaymentAlertRow[]>([]);
     const [loading, setLoading] = useState(true);
     const [filter, setFilter] = useState<"" | OrderStatus>("");
     const [refreshKey, setRefreshKey] = useState(0);
@@ -53,6 +70,25 @@ export default function OrderModeration() {
         };
     }, [filter, refreshKey]);
 
+    // Independent of the status filter: an operator editing a FULFILLED order
+    // still has to see a reconciliation alert raised against a PENDING one.
+    // Re-read on refreshKey because marking an order PAID can raise one.
+    useEffect(() => {
+        let cancelled = false;
+        async function loadAlerts() {
+            const res = await fetch("/api/admin/payment-alerts");
+            if (!res.ok) return;
+            const data = await res.json();
+            if (!cancelled) {
+                setAlerts(data.alerts || []);
+            }
+        }
+        loadAlerts();
+        return () => {
+            cancelled = true;
+        };
+    }, [refreshKey]);
+
     function startEdit(order: AdminOrderRow) {
         setEditingId(order.id);
         setPendingStatus(order.status);
@@ -77,12 +113,34 @@ export default function OrderModeration() {
             body: JSON.stringify(body),
         });
         if (res.ok) {
-            toast.success("Order updated");
+            const data = await res.json();
+            // The update landed but a side-effect did not: say so instead of
+            // reporting an unqualified success.
+            const warning = data.warnings?.[0];
+            if (warning) {
+                toast.warning(warning);
+            } else {
+                toast.success("Order updated");
+            }
             setEditingId(null);
             setRefreshKey((k) => k + 1);
         } else {
             const data = await res.json();
             toast.error(data.error || "Update failed");
+        }
+    }
+
+    async function dismissAlert(id: string) {
+        const res = await fetch(`/api/admin/payment-alerts/${id}`, {
+            method: "PATCH",
+        });
+        if (res.ok) {
+            setAlerts((current) => current.filter((alert) => alert.id !== id));
+            toast.success("Alert dismissed");
+        } else {
+            const data = await res.json();
+            toast.error(data.error || "Could not dismiss the alert");
+            setRefreshKey((k) => k + 1);
         }
     }
 
@@ -97,6 +155,87 @@ export default function OrderModeration() {
                     Order Moderation
                 </h1>
             </div>
+
+            {alerts.length > 0 && (
+                <div
+                    className="card p-5 mb-6"
+                    style={{
+                        background: "var(--color-accent-light)",
+                        border: "1px solid var(--color-accent)",
+                    }}
+                >
+                    <h2
+                        className="font-semibold mb-1"
+                        style={{ color: "var(--color-text)" }}
+                    >
+                        Payment reconciliation
+                    </h2>
+                    <p
+                        className="text-sm mb-4"
+                        style={{ color: "var(--color-text-muted)" }}
+                    >
+                        {alerts.length}
+                        {" "}
+                        {alerts.length === 1 ? "event needs" : "events need"}
+                        {" "}
+                        a decision. These were handled without failing the
+                        payment, so they are listed here rather than only in the
+                        server log.
+                    </p>
+                    <ul className="space-y-3">
+                        {alerts.map((alert) => (
+                            <li
+                                key={alert.id}
+                                className="flex items-start justify-between gap-4 text-sm"
+                            >
+                                <div className="min-w-0">
+                                    <span
+                                        className="badge text-[11px] mr-2"
+                                        style={{
+                                            background: "var(--color-accent)",
+                                            color:
+                                                "var(--color-text-inverse)",
+                                        }}
+                                    >
+                                        {ALERT_KIND_LABELS[alert.kind] ??
+                                            alert.kind}
+                                    </span>
+                                    <span style={{ color: "var(--color-text)" }}>
+                                        {alert.message}
+                                    </span>
+                                    <div
+                                        className="text-xs mt-1"
+                                        style={{
+                                            color:
+                                                "var(--color-text-muted)",
+                                        }}
+                                    >
+                                        Seen
+                                        {" "}
+                                        {new Date(alert.lastSeenAt)
+                                            .toLocaleString()}
+                                        {alert.occurrences > 1
+                                            ? ` · ${alert.occurrences}× since ${
+                                                new Date(alert.firstSeenAt)
+                                                    .toLocaleDateString()
+                                            }`
+                                            : ""}
+                                        {alert.orderId
+                                            ? ` · order ${alert.orderId}`
+                                            : ""}
+                                    </div>
+                                </div>
+                                <button
+                                    onClick={() => dismissAlert(alert.id)}
+                                    className="btn btn-ghost btn-sm text-xs shrink-0"
+                                >
+                                    Dismiss
+                                </button>
+                            </li>
+                        ))}
+                    </ul>
+                </div>
+            )}
 
             <div
                 className="flex flex-wrap gap-2 mb-6 pb-6"

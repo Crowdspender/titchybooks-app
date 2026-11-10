@@ -245,6 +245,7 @@ model Order {
 
   notes        String?
   vaultEntries VaultEntry[]
+  paymentAlerts PaymentAlert[]
   createdAt    DateTime     @default(now())
   updatedAt    DateTime     @updatedAt
 
@@ -407,4 +408,35 @@ model RateLimitBucket {
   expiresAt   DateTime
 
   @@index([expiresAt])
+}
+
+// Payment reconciliation alerts (see src/lib/orders/payment-alerts.ts).
+// The checkout webhook deliberately does not fail on ambiguous events: a
+// signature-verified payment against a superseded session still completes, and
+// an unpaid completion is acknowledged and dropped. Those decisions are correct
+// but need human review, and on serverless hosting a log line is not a place an
+// operator will ever look, so they are recorded here and surfaced in /admin/orders.
+model PaymentAlert {
+  id      String  @id @default(cuid())
+  orderId String?
+  order   Order?  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  /// One of PAYMENT_ALERT_KINDS; a plain string so a new kind never needs a migration.
+  kind    String
+  /// Operator-facing summary.
+  message String
+  /// JSON string with the detail needed to act (session ids, error text).
+  context String?
+
+  /// Unique per condition, so Stripe's retried deliveries update one row
+  /// instead of appending a duplicate alert for the same event.
+  dedupeKey   String   @unique
+  occurrences Int      @default(1)
+  firstSeenAt DateTime @default(now())
+  lastSeenAt  DateTime @default(now())
+  /// Null while the alert needs attention; a recurrence reopens a resolved row.
+  resolvedAt  DateTime?
+
+  @@index([resolvedAt, lastSeenAt])
+  @@index([orderId])
 }
