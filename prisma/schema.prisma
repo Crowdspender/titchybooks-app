@@ -7,65 +7,142 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// State-machine columns are native Postgres enums: a typo or an undeclared
+// value is rejected by the database instead of silently persisting.
+enum UserRole {
+  USER
+  ADMIN
+}
+
+enum SubmissionMode {
+  LEGACY_UPLOAD
+  EDITOR
+  TEMPLATE
+}
+
+enum SubmissionStatus {
+  DRAFT
+  PENDING
+  APPROVED
+  REJECTED
+  PROCESSING
+  FAILED
+}
+
+enum OrderStatus {
+  PENDING_PAYMENT
+  PAID
+  IN_PRODUCTION
+  SHIPPED
+  DELIVERED
+  CANCELLED
+}
+
+enum VaultEntryStatus {
+  STORED
+  WITHDRAWN
+  CANCELLED
+}
+
+enum AiBookJobStatus {
+  QUEUED
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum AiBookStage {
+  CONCEPT
+  CONTENT
+  COMPOSE
+  RENDER
+  QA
+}
+
+enum RenderJobStatus {
+  QUEUED
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
 model User {
-  id                      String       @id @default(cuid())
-  email                   String       @unique
-  passwordHash            String
-  name                    String?
-  role                    String       @default("USER")
-  passwordResetToken      String?
-  passwordResetExpires    DateTime?
-  
-  // Business registration fields
-  audience                String       @default("creator") // "creator" or "business"
-  businessName            String?      // Required for business accounts
-  businessType            String?      // e.g., "cafe", "retail", "restaurant", "other"
-  companySize             String?      // e.g., "1-10", "11-50", "51-200", "200+"
-  
-  assets                  Asset[]
-  submissions             Submission[]
-  orders                  Order[]
-  aiBookJobs              AiBookJob[]
-  createdAt               DateTime     @default(now())
-  updatedAt               DateTime     @updatedAt
+  id                   String    @id @default(cuid())
+  email                String    @unique
+  passwordHash         String
+  name                 String?
+  role                 UserRole  @default(USER)
+  passwordResetToken   String?
+  passwordResetExpires DateTime?
+
+  // DEPRECATED: legacy business-registration fields. No longer written or read
+  // by application code since authentication was unified (single signup flow).
+  // Columns are retained so existing accounts keep their historical data.
+  // Plan: drop in a follow-up migration once no rollback is needed.
+  audience     String  @default("creator") // "creator" or "business" (unused)
+  businessName String? // legacy
+  businessType String? // legacy
+  companySize  String? // legacy
+
+  assets      Asset[]
+  submissions Submission[]
+  orders      Order[]
+  aiBookJobs  AiBookJob[]
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
 }
 
 model Submission {
-  id              String            @id @default(cuid())
+  id              String           @id @default(cuid())
   userId          String
-  user            User              @relation(fields: [userId], references: [id])
-  mode            String            @default("LEGACY_UPLOAD")
+  user            User             @relation(fields: [userId], references: [id])
+  mode            SubmissionMode   @default(LEGACY_UPLOAD)
   title           String?
-  status          String            @default("PENDING")
-  pdfS3Key        String?
+  status          SubmissionStatus @default(PENDING)
+  pdfS3Key        String? // Print-sheet compatibility field
+  // Reading-order PDF produced alongside the print sheet. Nullable so
+  // historical print-only submissions stay readable rather than inventing one.
+  readingPdfS3Key String?
+  // Checksums and artifact identity published under the render fence.
+  artifactManifest Json?
   previewS3Key    String?
   rejectionReason String?
-  editorVersion   Int               @default(1)
-  revision        Int               @default(0)
+  editorVersion   Int              @default(1)
+  revision        Int              @default(0)
   submittedAt     DateTime?
 
   // Template system fields
-  templateId      String?           // Self-reference to parent template (set on instances)
-  templateVersion Int?              // Snapshot of template version when instance was created
-  isTemplate      Boolean           @default(false) // True for template submissions
-  version         Int               @default(1) // Template version counter (incremented on publish)
-  publishedAt     DateTime?         // When a template was published
+  templateId      String? // Self-reference to parent template (set on instances)
+  templateVersion Int? // Snapshot of template version when instance was created
+  isTemplate      Boolean   @default(false) // True for template submissions
+  version         Int       @default(1) // Template version counter (incremented on publish)
+  publishedAt     DateTime? // When a template was published
+  aiReady         Boolean   @default(false) // Template passed the AI preflight when published
+  aiManifest      Json? // Frozen AiTemplateManifest captured at publication
+  // Stable identity for starter content the seed owns. A template without a
+  // key was authored by an admin and is never overwritten by re-seeding.
+  managedKey      String?   @unique
+
+  // Frozen template scenes captured when an AI book is composed. Present means
+  // the book no longer depends on the live template: editing or unpublishing
+  // the source template cannot change an existing book.
+  pinnedTemplate  Json?
 
   // Autonomous AI pipeline fields
-  aiGenerated     Boolean           @default(false) // Created end-to-end by the AI book pipeline
-  qaSampled       Boolean           @default(false) // Flagged for admin spot-check after auto-approval
+  aiGenerated Boolean @default(false) // Created end-to-end by the AI book pipeline
+  qaSampled   Boolean @default(false) // Flagged for admin spot-check after auto-approval
 
-  images          SubmissionImage[]
-  pages           SubmissionPage[]
-  orders          Order[]
-  vaultEntries    VaultEntry[]
-  renderJobs      RenderJob[]
-  aiBookJobs      AiBookJob[]
+  images           SubmissionImage[]
+  pages            SubmissionPage[]
+  orders           Order[]
+  vaultEntries     VaultEntry[]
+  renderJobs       RenderJob[]
+  aiBookJobs       AiBookJob[]
   templateElements TemplateElement[] @relation("TemplateElements")
-  instances       Submission[]      @relation("TemplateInstances")
-  template        Submission?       @relation("TemplateInstances", fields: [templateId], references: [id])
-  createdAt       DateTime          @default(now())
-  updatedAt       DateTime          @updatedAt
+  instances        Submission[]      @relation("TemplateInstances")
+  template         Submission?       @relation("TemplateInstances", fields: [templateId], references: [id])
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
 
   @@index([userId])
   @@index([isTemplate])
@@ -99,9 +176,9 @@ model SubmissionPage {
   createdAt         DateTime   @default(now())
   updatedAt         DateTime   @updatedAt
 
-  @@index([submissionId])
   @@unique([submissionId, pageLabel])
   @@unique([submissionId, order])
+  @@index([submissionId])
 }
 
 model Asset {
@@ -121,50 +198,55 @@ model Asset {
 }
 
 model Order {
-  id                    String     @id @default(cuid())
-  userId                String
-  user                  User       @relation(fields: [userId], references: [id])
-  submissionId          String
-  submission            Submission @relation(fields: [submissionId], references: [id])
+  id           String     @id @default(cuid())
+  userId       String
+  user         User       @relation(fields: [userId], references: [id])
+  submissionId String
+  submission   Submission @relation(fields: [submissionId], references: [id])
 
-  quantity              Int
-  zone                  String
-  weightGrams           Int
-  shippingBand          Int
+  quantity     Int
+  zone         String
+  weightGrams  Int
+  shippingBand Int
 
   // Vault storage add-on
-  vaultAddOn            Boolean  @default(false)
-  vaultFeeHuf           Int      @default(0)
+  vaultAddOn  Boolean @default(false)
+  vaultFeeHuf Int     @default(0)
 
-  unitPriceHuf          Int
-  printCostHuf          Int
-  handlingCostHuf       Int        @default(0)
-  shippingCostHuf       Int
-  discountHuf           Int        @default(0)
-  totalHuf              Int
-  currency              String     @default("HUF")
+  unitPriceHuf    Int
+  printCostHuf    Int
+  handlingCostHuf Int    @default(0)
+  shippingCostHuf Int
+  discountHuf     Int    @default(0)
+  totalHuf        Int
+  currency        String @default("HUF")
 
-  status                String     @default("PENDING_PAYMENT")
-  pricingConfigVersion  Int
+  status               OrderStatus @default(PENDING_PAYMENT)
+  pricingConfigVersion Int
+
+  // Online payment (Stripe Checkout). The webhook only honors events whose
+  // session id matches the one stored here, so spoofed references fail.
+  stripeSessionId String?   @unique
+  paidAt          DateTime?
 
   // Shipping address snapshot
-  recipientName         String
-  line1                 String
-  line2                 String?
-  city                  String
-  postalCode            String
-  countryCode           String
-  phone                 String?
+  recipientName String
+  line1         String
+  line2         String?
+  city          String
+  postalCode    String
+  countryCode   String
+  phone         String?
 
   // Future-proofing fields (not used yet)
-  fulfilmentHub         String?
-  couponCode            String?
-  parentBatchId         String?
+  fulfilmentHub String?
+  couponCode    String?
+  parentBatchId String?
 
-  notes                 String?
-  vaultEntries          VaultEntry[]
-  createdAt             DateTime   @default(now())
-  updatedAt             DateTime   @updatedAt
+  notes        String?
+  vaultEntries VaultEntry[]
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
 
   @@index([userId])
   @@index([submissionId])
@@ -172,77 +254,97 @@ model Order {
 }
 
 model TemplateElement {
-  id          String   @id @default(cuid())
+  id          String     @id @default(cuid())
   templateId  String
   template    Submission @relation("TemplateElements", fields: [templateId], references: [id], onDelete: Cascade)
   pageLabel   String
   order       Int
-  elementJson String   // JSON string of the element, same schema as EditorElement
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  elementJson String // JSON string of the element, same schema as EditorElement
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
 
   @@index([templateId])
   @@index([templateId, pageLabel])
 }
 
 model PricingConfig {
-  id                  String   @id @default("default")
-  version             Int      @default(1)
-  weightPerBookGrams  Int      @default(6)
-  handlingFixedHuf    Int      @default(0)
-  handlingPercent     Float    @default(0)
-  enabledZones        String   // JSON string
-  weightBands         String   // JSON string
-  shippingTable       String   // JSON string
-  priceTiers          String   // JSON string
-  currencyRates       String   @default("{\"HUF\":1,\"EUR\":0.0026,\"GBP\":0.0022}") // JSON string: HUF→currency factors
-  vaultFeeHuf         Int      @default(2000) // Flat fee for 2-copy vault storage add-on
-  updatedAt           DateTime @updatedAt
-  updatedByUserId     String?
+  id                 String   @id @default("default")
+  version            Int      @default(1)
+  weightPerBookGrams Int      @default(6)
+  handlingFixedHuf   Int      @default(0)
+  handlingPercent    Float    @default(0)
+  enabledZones       String // JSON string
+  weightBands        String // JSON string
+  shippingTable      String // JSON string
+  priceTiers         String // JSON string
+  currencyRates      String   @default("{\"HUF\":1,\"EUR\":0.0026,\"GBP\":0.0022}") // JSON string: HUF→currency factors
+  vaultFeeHuf        Int      @default(2000) // Flat fee for 2-copy vault storage add-on
+  updatedAt          DateTime @updatedAt
+  updatedByUserId    String?
 }
 
 model VaultEntry {
-  id             String     @id @default(cuid())
-  orderId        String
-  order          Order      @relation(fields: [orderId], references: [id])
-  submissionId   String
-  submission     Submission @relation(fields: [submissionId], references: [id])
-  title          String
-  authorName     String     // snapshot of user.name at vault time
-  quantity       Int        @default(2)
-  status         String     @default("STORED")  // STORED, WITHDRAWN, CANCELLED
-  storedAt       DateTime   @default(now())
-  withdrawnAt    DateTime?
-  createdAt      DateTime   @default(now())
-  updatedAt      DateTime   @updatedAt
+  id            String           @id @default(cuid())
+  orderId       String
+  order         Order            @relation(fields: [orderId], references: [id])
+  submissionId  String
+  submission    Submission       @relation(fields: [submissionId], references: [id])
+  title         String
+  authorName    String // snapshot of user.name at vault time
+  quantity      Int              @default(2)
+  status        VaultEntryStatus @default(STORED)
+  // Owner opt-in for showing this entry in the public /vault directory.
+  // Defaults to false: entries are private until the author consents.
+  publicConsent Boolean          @default(false)
+  storedAt      DateTime         @default(now())
+  withdrawnAt   DateTime?
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
 
   @@index([submissionId])
   @@index([status])
 }
 
 model AiBookJob {
-  id             String      @id @default(cuid())
+  id             String          @id @default(cuid())
   userId         String
-  user           User        @relation(fields: [userId], references: [id])
-  concept        String      // user prompt, max 2000 chars enforced in API
-  templateId     String?     // optional user-chosen template; otherwise AI-selected
-  submissionId   String?     // set once COMPOSE succeeds
-  submission     Submission? @relation(fields: [submissionId], references: [id])
-  renderJobId    String?     // set once RENDER is enqueued
-  status         String      @default("QUEUED")  // QUEUED, PROCESSING, COMPLETED, FAILED
-  stage          String      @default("CONCEPT") // CONCEPT, CONTENT, COMPOSE, RENDER, QA
-  stageOutput    Json?       // { contentPlan?, templateId?, qaReport? } persisted per stage
-  attempts       Int         @default(0)
-  maxAttempts    Int         @default(3)
-  nextAttemptAt  DateTime    @default(now())
+  user           User            @relation(fields: [userId], references: [id])
+  concept        String // user prompt, max 2000 chars enforced in API
+  templateId     String? // optional user-chosen template; otherwise AI-selected
+  submissionId   String? // set once COMPOSE succeeds
+  submission     Submission?     @relation(fields: [submissionId], references: [id])
+  renderJobId    String? // set once RENDER is enqueued
+  status         AiBookJobStatus @default(QUEUED)
+  stage          AiBookStage     @default(CONCEPT)
+  stageOutput    Json? // { manifest?, contentPlan?, qaReport? } persisted per stage
+
+  // Claim telemetry. `attempts` counts how often the job was claimed; it is not
+  // a failure budget (waits and voluntary continuations re-claim the job).
+  attempts       Int             @default(0)
+  // Execution-failure budget. Exhaustion is failureCount >= maxAttempts.
+  failureCount   Int             @default(0)
+  maxAttempts    Int             @default(3)
+  // Content-repair cycles spent on QA-rejected text (independent of failures).
+  repairCount    Int             @default(0)
+  maxRepairs     Int             @default(2)
+  // Hard lifetime of a text job, set on first claim.
+  deadlineAt     DateTime?
+
+  // Request idempotency: replaying a key with the same payload returns the
+  // original job; the same key with a different payload is a conflict.
+  requestKey     String?
+  payloadDigest  String?
+
+  nextAttemptAt  DateTime        @default(now())
   leaseExpiresAt DateTime?
   claimToken     String?
   errorMessage   String?
   startedAt      DateTime?
   completedAt    DateTime?
-  createdAt      DateTime    @default(now())
-  updatedAt      DateTime    @updatedAt
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
 
+  @@unique([userId, requestKey])
   @@index([userId])
   @@index([submissionId])
   @@index([status, nextAttemptAt])
@@ -250,25 +352,59 @@ model AiBookJob {
 }
 
 model RenderJob {
-  id              String     @id @default(cuid())
-  submissionId    String
-  submission      Submission @relation(fields: [submissionId], references: [id])
-  status          String     @default("QUEUED")  // QUEUED, PROCESSING, COMPLETED, FAILED
-  attempts        Int        @default(0)
-  maxAttempts     Int        @default(3)
-  inputSnapshot   Json?
-  nextAttemptAt   DateTime   @default(now())
-  leaseExpiresAt  DateTime?
-  claimToken      String?
-  errorMessage    String?
-  pdfS3Key        String?
-  startedAt       DateTime?
-  completedAt     DateTime?
-  createdAt       DateTime   @default(now())
-  updatedAt       DateTime   @updatedAt
+  id             String          @id @default(cuid())
+  submissionId   String
+  submission     Submission      @relation(fields: [submissionId], references: [id])
+  status         RenderJobStatus @default(QUEUED)
+  attempts       Int             @default(0)
+  maxAttempts    Int             @default(3)
+  inputSnapshot  Json?
+  nextAttemptAt  DateTime        @default(now())
+  leaseExpiresAt DateTime?
+  claimToken     String?
+  errorMessage   String?
+  pdfS3Key       String?
+  readingPdfS3Key String?
+  artifactManifest Json?
+  startedAt      DateTime?
+  completedAt    DateTime?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
 
   @@index([submissionId])
   @@index([status])
   @@index([status, nextAttemptAt])
   @@index([status, leaseExpiresAt])
+}
+
+// One row per queue drain invocation. This is the scheduler's heartbeat:
+// the health endpoint compares the latest row per queue against the 5-minute
+// cron cadence to detect a stopped scheduler even when the queues are empty.
+// Rows older than the retention window are pruned opportunistically.
+model QueueDrainRun {
+  id         String   @id @default(cuid())
+  queue      String // "ai" | "render"
+  startedAt  DateTime
+  finishedAt DateTime
+  durationMs Int
+  claimed    Int
+  finished   Int
+  yielded    Int
+  errored    Boolean  @default(false) // claim loop stopped on a transient error
+  createdAt  DateTime @default(now())
+
+  @@index([queue, startedAt])
+  @@index([createdAt])
+}
+
+// Durable fixed-window rate limit buckets (see src/lib/rate-limit.ts).
+// In-memory maps do not survive restarts and cannot coordinate across
+// serverless instances, so limits are enforced in the primary database.
+model RateLimitBucket {
+  bucketKey   String   @id
+  windowStart DateTime
+  count       Int
+  expiresAt   DateTime
+
+  @@index([expiresAt])
 }

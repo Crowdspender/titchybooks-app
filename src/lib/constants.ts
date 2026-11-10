@@ -1,27 +1,32 @@
 /**
- * Submission status enum for type safety.
- * SQLite doesn't support native enums, so we use string in DB
- * but enforce type safety in code.
+ * Submission state values. Kept in sync with the SubmissionStatus enum in
+ * prisma/schema.prisma. Declared as a const object rather than a TS enum so
+ * the values remain plain string literals: assignable to Prisma's generated
+ * enum types and safe to import from client components.
  */
-export enum SubmissionStatus {
-  DRAFT = "DRAFT",
-  PENDING = "PENDING",
-  APPROVED = "APPROVED",
-  REJECTED = "REJECTED",
-  PROCESSING = "PROCESSING",
-  FAILED = "FAILED",
-}
+export const SubmissionStatus = {
+  DRAFT: "DRAFT",
+  PENDING: "PENDING",
+  APPROVED: "APPROVED",
+  REJECTED: "REJECTED",
+  PROCESSING: "PROCESSING",
+  FAILED: "FAILED",
+} as const;
 
-/**
- * Valid status values for validation
- */
+export type SubmissionStatus =
+  (typeof SubmissionStatus)[keyof typeof SubmissionStatus];
+
+/** Valid status values for validation. */
 export const VALID_STATUSES = Object.values(SubmissionStatus);
 
-export enum SubmissionMode {
-  LEGACY_UPLOAD = "LEGACY_UPLOAD",
-  EDITOR = "EDITOR",
-  TEMPLATE = "TEMPLATE",
-}
+export const SubmissionMode = {
+  LEGACY_UPLOAD: "LEGACY_UPLOAD",
+  EDITOR: "EDITOR",
+  TEMPLATE: "TEMPLATE",
+} as const;
+
+export type SubmissionMode =
+  (typeof SubmissionMode)[keyof typeof SubmissionMode];
 
 export const VALID_SUBMISSION_MODES = Object.values(SubmissionMode);
 
