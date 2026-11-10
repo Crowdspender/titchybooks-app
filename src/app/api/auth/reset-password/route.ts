@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { hash } from "bcryptjs";
 import { z } from "zod";
 import { createHash } from "crypto";
+import { consumeRateLimit, clientIp, tooManyRequests } from "@/lib/rate-limit";
 
 const resetSchema = z.object({
   token: z.string().min(1, "Token is required"),
@@ -11,6 +12,16 @@ const resetSchema = z.object({
 
 export async function POST(request: Request) {
   try {
+    // Durable per-IP cap: reset tokens are 32 random bytes, but throttle
+    // guessing attempts and abuse of valid tokens alike.
+    const rl = await consumeRateLimit(`reset:ip:${clientIp(request)}`, {
+      limit: 10,
+      windowMs: 15 * 60_000,
+    });
+    if (!rl.allowed) {
+      return tooManyRequests(rl, "Too many reset attempts - please try again later.");
+    }
+
     const body = await request.json();
     const parsed = resetSchema.safeParse(body);
 

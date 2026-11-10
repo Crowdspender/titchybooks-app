@@ -2,29 +2,14 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { hash } from "bcryptjs";
 import { z } from "zod";
+import { consumeRateLimit, clientIp, tooManyRequests } from "@/lib/rate-limit";
 import { sendWelcomeEmail } from "@/lib/email";
 
 const registerSchema = z.object({
   name: z.string().min(1, "Name is required"),
   email: z.string().email("Invalid email"),
   password: z.string().min(8, "Password must be at least 8 characters"),
-  audience: z.enum(["creator", "business"]).optional().default("creator"),
-  businessName: z.string().optional(),
-  businessType: z.string().optional(),
-  companySize: z.string().optional(),
-}).refine(
-  (data) => {
-    // If audience is business, businessName is required
-    if (data.audience === "business") {
-      return data.businessName && data.businessName.trim().length > 0;
-    }
-    return true;
-  },
-  {
-    message: "Business name is required for business accounts",
-    path: ["businessName"],
-  }
-);
+});
 
 export async function POST(request: Request) {
   try {
@@ -42,8 +27,18 @@ export async function POST(request: Request) {
       );
     }
 
-    const { name, email, password, audience, businessName, businessType, companySize } = parsed.data;
-    console.log('🔵 [REGISTER] Creating user:', { name, email, audience });
+    const { name, email, password } = parsed.data;
+
+    // Durable per-IP signup cap (bcrypt hashing + welcome email make
+    // unbounded registration both a CPU and a sending-quota risk).
+    const rl = await consumeRateLimit(`register:ip:${clientIp(request)}`, {
+      limit: 5,
+      windowMs: 10 * 60_000,
+    });
+    if (!rl.allowed) {
+      return tooManyRequests(rl, "Too many sign-up attempts - please try again later.");
+    }
+    console.log('🔵 [REGISTER] Creating user:', { name, email });
 
     const existing = await prisma.user.findUnique({ where: { email } });
     if (existing) {
@@ -60,13 +55,9 @@ export async function POST(request: Request) {
         name,
         email,
         passwordHash,
-        audience,
-        businessName: audience === "business" ? businessName : null,
-        businessType: audience === "business" ? businessType : null,
-        companySize: audience === "business" ? companySize : null,
       },
     });
-    console.log('✅ [REGISTER] User created successfully:', user.id, `(${audience})`);
+    console.log('✅ [REGISTER] User created successfully:', user.id);
 
     // Send welcome email (non-blocking, don't fail registration if email fails)
     console.log('🔵 [REGISTER] Attempting to send welcome email...');

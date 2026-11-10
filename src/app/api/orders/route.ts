@@ -2,6 +2,9 @@
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { SubmissionStatus } from "@/lib/constants";
+import { consumeRateLimit, tooManyRequests } from "@/lib/rate-limit";
+import { createCheckoutSession, isStripeConfigured } from "@/lib/stripe";
+import { isCurrency, type Currency } from "@/lib/pricing/currency";
 import { loadPricingConfig } from "@/lib/pricing/config";
 import { calculateOrder } from "@/lib/pricing/engine";
 import { createOrderInputSchema } from "@/lib/pricing/schema";
@@ -33,6 +36,16 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  // Durable per-user cap on order creation (pricing recompute is DB+CPU work,
+  // and orders become fulfillment instructions - they must not be spammable).
+  const rl = await consumeRateLimit(`order:user:${session.user.id}`, {
+    limit: 10,
+    windowMs: 60 * 60_000,
+  });
+  if (!rl.allowed) {
+    return tooManyRequests(rl, "Too many order attempts - please try again later.");
+  }
+
   let body: unknown;
   try {
     body = await request.json();
@@ -59,6 +72,7 @@ export async function POST(request: Request) {
       userId: true,
       status: true,
       pdfS3Key: true,
+      title: true,
     },
   });
 
@@ -132,5 +146,40 @@ export async function POST(request: Request) {
     },
   });
 
-  return NextResponse.json({ order }, { status: 201 });
+  // Mint a Stripe Checkout session when configured. A Stripe failure must
+  // not lose the order: it stays PENDING_PAYMENT and can be paid later via
+  // POST /api/orders/[id]/pay.
+  let checkoutUrl: string | null = null;
+  let paymentError: string | undefined;
+  if (isStripeConfigured()) {
+    try {
+      const chargeCurrency: Currency = isCurrency(selectedCurrency)
+        ? selectedCurrency
+        : "HUF";
+      const { url, sessionId } = await createCheckoutSession({
+        orderId: order.id,
+        submissionTitle: submission.title ?? "TitchyBook",
+        amountHuf: order.totalHuf,
+        currency: chargeCurrency,
+        rates: cfg.currencyRates,
+        customerEmail: session.user.email ?? null,
+      });
+      await prisma.order.update({
+        where: { id: order.id },
+        data: { stripeSessionId: sessionId },
+      });
+      checkoutUrl = url;
+    } catch (err) {
+      paymentError =
+        err instanceof Error ? err.message : "Payment session creation failed";
+      console.error(
+        JSON.stringify({ event: "checkout-session-failed", orderId: order.id, error: paymentError }),
+      );
+    }
+  }
+
+  return NextResponse.json(
+    { order, checkoutUrl, ...(paymentError ? { paymentError } : {}) },
+    { status: 201 },
+  );
 }

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 
 export const dynamic = "force-dynamic";
@@ -8,7 +9,12 @@ export async function GET(request: NextRequest) {
   const limit = Math.min(Math.max(Number(url.searchParams.get("limit") ?? 50), 1), 200);
   const offset = Math.max(Number(url.searchParams.get("offset") ?? 0), 0);
 
-  const where = { status: "STORED" };
+  // Public directory: only entries whose owners opted in (see
+  // PATCH /api/vault/[id]/consent). Entries are private by default.
+  const where = {
+    status: "STORED",
+    publicConsent: true,
+  } satisfies Prisma.VaultEntryWhereInput;
 
   const [entries, total] = await Promise.all([
     prisma.vaultEntry.findMany({

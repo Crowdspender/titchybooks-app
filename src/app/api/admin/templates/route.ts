@@ -3,9 +3,14 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { SubmissionMode, SubmissionStatus } from "@/lib/constants";
 import { createEmptySubmissionPageSeeds } from "@/lib/editor/validation";
+import { summarizePreflight } from "@/lib/ai/template-preflight";
+import { evaluateTemplateReadiness } from "@/lib/ai/template-readiness";
 import { z } from "zod";
 
 export const dynamic = "force-dynamic";
+
+/** How many preflight issues the list returns per template. */
+const LISTED_ISSUES = 5;
 
 
 const createTemplateSchema = z.object({
@@ -27,8 +32,14 @@ export async function GET() {
       status: true,
       version: true,
       isTemplate: true,
+      aiReady: true,
       publishedAt: true,
       createdAt: true,
+      pages: { select: { pageLabel: true, sceneJson: true } },
+      templateElements: {
+        orderBy: { order: "asc" },
+        select: { pageLabel: true, elementJson: true },
+      },
       _count: {
         select: { instances: true },
       },
@@ -36,16 +47,36 @@ export async function GET() {
     orderBy: { createdAt: "desc" },
   });
 
-  const result = templates.map((t) => ({
-    id: t.id,
-    title: t.title,
-    status: t.status,
-    version: t.version,
-    isTemplate: t.isTemplate,
-    publishedAt: t.publishedAt?.toISOString() ?? null,
-    createdAt: t.createdAt.toISOString(),
-    instanceCount: t._count.instances,
-  }));
+  // Readiness is evaluated live rather than read from the stored flag: an admin
+  // may have edited a published template since, and the row would then claim it
+  // is AI-ready when the next job would reject it.
+  const readiness = await Promise.all(
+    templates.map((t) =>
+      evaluateTemplateReadiness({
+        templateId: t.id,
+        templateVersion: t.version,
+        elements: t.templateElements,
+        pages: t.pages,
+      }),
+    ),
+  );
+
+  const result = templates.map((t, index) => {
+    const { result: preflight } = readiness[index];
+    return {
+      id: t.id,
+      title: t.title,
+      status: t.status,
+      version: t.version,
+      isTemplate: t.isTemplate,
+      aiReady: preflight.ok,
+      aiSummary: summarizePreflight(preflight),
+      aiIssues: preflight.issues.slice(0, LISTED_ISSUES),
+      publishedAt: t.publishedAt?.toISOString() ?? null,
+      createdAt: t.createdAt.toISOString(),
+      instanceCount: t._count.instances,
+    };
+  });
 
   return NextResponse.json({ templates: result });
 }
