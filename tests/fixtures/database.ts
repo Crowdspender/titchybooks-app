@@ -70,6 +70,11 @@ export async function cleanupFixtures() {
     await tx.renderJob.deleteMany({ where: { submission: { userId: { in: users } } } });
     // Vault entries reference orders and submissions; orders reference submissions.
     await tx.vaultEntry.deleteMany({ where: { order: { userId: { in: users } } } });
+    // Payment alerts cascade from their order, but an alert raised for an order
+    // id that was never stored has no parent row to cascade from. The suite runs
+    // one file at a time against a dedicated test database, so clearing the
+    // orphaned ones here cannot touch another test's data.
+    await tx.paymentAlert.deleteMany({ where: { orderId: null } });
     await tx.order.deleteMany({ where: { userId: { in: users } } });
     await tx.submission.updateMany({ where: { userId: { in: users } }, data: { templateId: null } });
     await tx.submission.deleteMany({ where: { userId: { in: users } } });
