@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useId, useState } from "react";
+import { useCallback, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import ImageUploader from "./ImageUploader";
@@ -13,9 +13,26 @@ interface UploadedImage {
   mimeType: string;
 }
 
+/**
+ * A real per-session id. `useId` only identifies a position in the tree, so it
+ * repeats on every mount and two upload sessions would share object keys.
+ * Falling back keeps the id a valid presign token in non-secure contexts.
+ */
+function createUploadSessionId(): string {
+  const cryptoApi = globalThis.crypto;
+  if (cryptoApi && typeof cryptoApi.randomUUID === "function") {
+    return cryptoApi.randomUUID();
+  }
+  const chunk = () =>
+    Math.floor(Math.random() * 16 ** 8).toString(16).padStart(8, "0");
+  return `${chunk()}-${chunk()}-${chunk()}-${chunk()}`;
+}
+
 export default function UploadGrid() {
   const router = useRouter();
-  const submissionId = useId().replace(/:/g, "").slice(0, 12) + Date.now();
+  // One id for the whole mount: every page in this batch is uploaded under it,
+  // and the server mints a distinct object key per upload on top of it.
+  const [uploadSessionId] = useState(createUploadSessionId);
   const [uploads, setUploads] = useState<Map<PageLabel, UploadedImage>>(
     new Map(),
   );
@@ -90,7 +107,7 @@ export default function UploadGrid() {
           <ImageUploader
             key={label}
             pageLabel={label}
-            submissionId={submissionId}
+            submissionId={uploadSessionId}
             onUploaded={handleUploaded}
           />
         ))}

@@ -14,7 +14,21 @@ export interface DrainSummary {
   claimed: number;
   finished: number;
   yielded: number;
+  /** True when claiming threw (transient DB error) and the loop stopped early. */
+  errored: boolean;
+  startedAt: Date;
+  finishedAt: Date;
+  durationMs: number;
 }
+
+/**
+ * Processes one claimed job. Receives the drain deadline (epoch ms) so
+ * budget-aware processors can finish cleanly before the function is frozen.
+ * Resolving the literal string "yielded" means the processor voluntarily gave
+ * the job back before completing it; the drain stops and a later invocation
+ * resumes the job from its last persisted stage.
+ */
+export type DrainProcessor<T> = (job: T, deadlineMs: number) => Promise<unknown>;
 
 /** Wall-clock budget per drain invocation. Must stay below the function's maxDuration. */
 export function drainBudgetMs(): number {
@@ -37,18 +51,30 @@ export function isCronAuthorized(req: Request): boolean {
  */
 export async function runDrain<T>(
   claim: () => Promise<T | null>,
-  process: (job: T) => Promise<unknown>,
+  process: DrainProcessor<T>,
   budgetMs: number,
 ): Promise<DrainSummary> {
-  const summary: DrainSummary = { claimed: 0, finished: 0, yielded: 0 };
-  const deadline = Date.now() + budgetMs;
+  const startedAt = new Date();
+  const summary: DrainSummary = {
+    claimed: 0,
+    finished: 0,
+    yielded: 0,
+    errored: false,
+    startedAt,
+    finishedAt: startedAt,
+    durationMs: 0,
+  };
+  const deadline = startedAt.getTime() + budgetMs;
 
   while (Date.now() < deadline) {
     let job: T | null;
     try {
       job = await claim();
     } catch {
-      break; // transient DB error; stop and let the next invocation retry
+      // Transient DB error: stop and let the next invocation retry. Recorded
+      // so the drain run is visible as unhealthy rather than silently empty.
+      summary.errored = true;
+      break;
     }
     if (!job) break; // no due work
     summary.claimed += 1;
@@ -61,14 +87,14 @@ export async function runDrain<T>(
       break;
     }
 
-    const outcome = await new Promise<"settled" | "budget">((resolve) => {
+    const outcome = await new Promise<"settled" | "yielded" | "budget">((resolve) => {
       const timer = setTimeout(() => resolve("budget"), remaining);
       Promise.resolve()
-        .then(() => process(job as T))
+        .then(() => process(job as T, deadline))
         .then(
-          () => {
+          (result) => {
             clearTimeout(timer);
-            resolve("settled");
+            resolve(result === "yielded" ? "yielded" : "settled");
           },
           () => {
             clearTimeout(timer);
@@ -77,14 +103,17 @@ export async function runDrain<T>(
         );
     });
 
-    if (outcome === "budget") {
-      // Abandon the in-flight job; its lease expires and a later drain resumes
-      // it from the last persisted stage.
+    if (outcome !== "settled") {
+      // Either the processor yielded before the deadline (job left at its last
+      // persisted stage) or the budget ran out mid-flight (job abandoned; its
+      // lease expires and a later drain reclaims it). Both resume next run.
       summary.yielded += 1;
       break;
     }
     summary.finished += 1;
   }
 
+  summary.finishedAt = new Date();
+  summary.durationMs = summary.finishedAt.getTime() - startedAt.getTime();
   return summary;
 }

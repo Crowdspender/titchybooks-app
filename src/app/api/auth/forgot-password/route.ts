@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { randomBytes, createHash } from "crypto";
 import { sendPasswordResetEmail } from "@/lib/email";
+import { consumeRateLimit, clientIp, tooManyRequests } from "@/lib/rate-limit";
 
 export async function POST(request: Request) {
   try {
@@ -14,6 +15,25 @@ export async function POST(request: Request) {
         { error: "Email is required" },
         { status: 400 }
       );
+    }
+
+    // Durable limits: per-IP flood cap and a per-account cap on reset emails
+    // (both survive restarts and coordinate across serverless instances).
+    const ipRl = await consumeRateLimit(`forgot:ip:${clientIp(request)}`, {
+      limit: 8,
+      windowMs: 15 * 60_000,
+    });
+    if (!ipRl.allowed) {
+      return tooManyRequests(ipRl, "Too many reset requests - please try again later.");
+    }
+    const acctRl = await consumeRateLimit(`forgot:email:${String(email).toLowerCase()}`, {
+      limit: 3,
+      windowMs: 60 * 60_000,
+    });
+    if (!acctRl.allowed) {
+      // Same generic success as a normal "unknown email" response to avoid
+      // leaking that the account exists while still refusing to send.
+      return NextResponse.json({ success: true });
     }
 
     // Find user by email

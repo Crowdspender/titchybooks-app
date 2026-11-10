@@ -14,6 +14,7 @@
 - [content-plan.ts](file://src/lib/ai/content-plan.ts)
 - [composer.ts](file://src/lib/ai/composer.ts)
 - [qa.ts](file://src/lib/ai/qa.ts)
+- [ai-create page.tsx](file://src/app/(protected)/create/ai/page.tsx)
 - [ai-book-pipeline.test.ts](file://tests/integration/ai-book-pipeline.test.ts)
 </cite>
 
@@ -24,6 +25,8 @@
 - Implemented transaction-scoped QA approval workflow to prevent stale worker approvals
 - Added defensive programming in COMPOSE stage with lazy slot reloading
 - Expanded integration test coverage for lease loss scenarios and P2025 error mapping
+- **New**: Enhanced AI book creation UI with improved worker status tracking, distinguishing between QUEUED and PROCESSING states
+- **New**: Added stale worker detection with visual feedback when background workers are not running
 
 ## Table of Contents
 1. [Introduction](#introduction)
@@ -45,12 +48,13 @@ The repository also includes a visual editor, order management, pricing configur
 - [README.md:1-37](file://README.md#L1-L37)
 
 ## Project Structure
-At a high level, the AI book feature spans API routes, worker processes, domain libraries, and database models:
+At a high level, the AI book feature spans API routes, worker processes, domain libraries, database models, and an enhanced UI:
 
 - API layer exposes endpoints to start and poll AI book jobs.
 - Worker processes claim and execute jobs from the database.
 - Domain libraries implement job leasing, pipeline orchestration, content planning, composition, and QA.
 - Database schema defines users, submissions, templates, orders, render jobs, and AI book jobs.
+- Enhanced UI provides real-time status tracking with worker state awareness.
 
 ```mermaid
 graph TB
@@ -65,6 +69,8 @@ Pipeline --> ContentPlan["content-plan.ts"]
 Pipeline --> QA["qa.ts"]
 Pipeline --> RenderJob["Render queue (external)"]
 RenderJob --> DB
+UI["AI Create UI"] --> StatusAPI
+UI --> WorkerStatus["Worker State Detection"]
 ```
 
 **Diagram sources**
@@ -72,9 +78,7 @@ RenderJob --> DB
 - [book status route.ts:1-36](file://src/app/api/ai/books/[id]/route.ts#L1-L36)
 - [ai-book-job.ts:1-186](file://src/lib/ai/ai-book-job.ts#L1-L186)
 - [pipeline.ts:1-371](file://src/lib/ai/pipeline.ts#L1-L371)
-- [composer.ts:1-68](file://src/lib/ai/composer.ts#L1-L68)
-- [content-plan.ts:1-30](file://src/lib/ai/content-plan.ts#L1-L30)
-- [qa.ts:1-181](file://src/lib/ai/qa.ts#L1-L181)
+- [ai-create page.tsx:1-386](file://src/app/(protected)/create/ai/page.tsx#L1-L386)
 
 **Section sources**
 - [package.json:1-63](file://package.json#L1-L63)
@@ -86,6 +90,7 @@ RenderJob --> DB
 - Template-aware content generation: resolves approved templates, extracts editable text slots, validates LLM output, and builds per-page overrides.
 - Automated QA: structural checks, text fit estimation, image DPI validation, and content moderation.
 - Background workers: separate processes for AI book processing and PDF rendering.
+- **Enhanced UI**: Real-time status tracking with worker state detection and stale worker warnings.
 
 Key responsibilities by file:
 - ai-book-job.ts: job model helpers, enhanced lease fencing with Prisma transactions, retries, and progress persistence.
@@ -97,6 +102,7 @@ Key responsibilities by file:
 - render-worker.ts: polling loop for render jobs.
 - books route.ts: authenticated endpoint to start a job with rate limiting.
 - book status route.ts: authenticated endpoint to poll job status.
+- ai-create page.tsx: enhanced UI with worker status tracking and stale worker detection.
 
 **Section sources**
 - [ai-book-job.ts:1-186](file://src/lib/ai/ai-book-job.ts#L1-L186)
@@ -108,21 +114,28 @@ Key responsibilities by file:
 - [render-worker.ts:1-33](file://src/workers/render-worker.ts#L1-L33)
 - [books route.ts:1-53](file://src/app/api/ai/books/route.ts#L1-L53)
 - [book status route.ts:1-36](file://src/app/api/ai/books/[id]/route.ts#L1-L36)
+- [ai-create page.tsx:1-386](file://src/app/(protected)/create/ai/page.tsx#L1-L386)
 
 ## Architecture Overview
-The AI book system follows a durable queue pattern backed by PostgreSQL. Clients submit concepts; the API enqueues a job and returns a job ID. Workers poll for work, claim it with a time-bound lease, and advance through stages. Each stage persists partial results so retries resume safely. Rendering is delegated to a separate render queue and worker.
+The AI book system follows a durable queue pattern backed by PostgreSQL. Clients submit concepts; the API enqueues a job and returns a job ID. Workers poll for work, claim it with a time-bound lease, and advance through stages. Each stage persists partial results so retries resume safely. Rendering is delegated to a separate render queue and worker. The enhanced UI provides real-time feedback about job status and worker availability.
 
 ```mermaid
 sequenceDiagram
 participant Client as "Client"
+participant UI as "AI Create UI"
 participant API as "Books API"
 participant DB as "PostgreSQL"
 participant Worker as "AI Book Worker"
 participant Pipeline as "Pipeline"
 participant Render as "Render Queue"
-Client->>API : POST /api/ai/books {concept, templateId?}
+Client->>UI : Submit concept
+UI->>API : POST /api/ai/books {concept, templateId?}
 API->>DB : Create AiBookJob (QUEUED)
-API-->>Client : 202 {jobId}
+API-->>UI : 202 {jobId}
+UI->>API : Poll GET /api/ai/books/ : id
+API-->>UI : {status, stage, submissionId}
+Note over UI : Detect QUEUED vs PROCESSING states
+UI->>UI : Stale worker detection (>45s in QUEUED)
 Worker->>DB : Claim next eligible job (lease)
 Worker->>Pipeline : processAiBookJob(job)
 Pipeline->>Pipeline : CONCEPT -> CONTENT -> COMPOSE
@@ -138,9 +151,10 @@ end
 
 **Diagram sources**
 - [books route.ts:1-53](file://src/app/api/ai/books/route.ts#L1-L53)
+- [book status route.ts:1-36](file://src/app/api/ai/books/[id]/route.ts#L1-L36)
 - [ai-book-job.ts:1-186](file://src/lib/ai/ai-book-job.ts#L1-L186)
 - [pipeline.ts:1-371](file://src/lib/ai/pipeline.ts#L1-L371)
-- [ai-book-worker.ts:1-34](file://src/workers/ai-book-worker.ts#L1-L34)
+- [ai-create page.tsx:61-105](file://src/app/(protected)/create/ai/page.tsx#L61-L105)
 
 ## Detailed Component Analysis
 
@@ -209,6 +223,40 @@ Retryable --> |No| Fail["Mark FAILED with terminal error"]
 
 **Section sources**
 - [pipeline.ts:1-371](file://src/lib/ai/pipeline.ts#L1-L371)
+
+### Enhanced UI with Worker Status Tracking
+The AI book creation UI now provides enhanced status tracking with worker state awareness:
+- Distinguishes between QUEUED (waiting for worker) and PROCESSING (actively working) states.
+- Implements stale worker detection when jobs remain in QUEUED state for >45 seconds.
+- Provides visual feedback with different messages: "queued..." vs "waiting for worker...".
+- Shows warning message when no background worker is detected.
+- Maintains real-time polling with 3-second intervals for status updates.
+
+```mermaid
+flowchart TD
+Submit["User submits concept"] --> Enqueue["Job created (QUEUED)"]
+Enqueue --> StartPolling["Start polling every 3s"]
+StartPolling --> CheckStatus{"Check job status"}
+CheckStatus --> QUEUED{"Status = QUEUED?"}
+QUEUED --> |Yes| TimeCheck{"Time in QUEUED > 45s?"}
+TimeCheck --> |Yes| Stale["Set workerStale = true<br/>Show 'waiting for worker...'"]
+TimeCheck --> |No| Queued["Show 'queued...'"]
+QUEUED --> |No| Processing["Status = PROCESSING<br/>Show 'working...'"]
+Processing --> Completed{"Status = COMPLETED?"}
+Completed --> |Yes| Done["Show success state"]
+Completed --> |No| Failed{"Status = FAILED?"}
+Failed --> |Yes| Error["Show error state"]
+Failed --> |No| CheckStatus
+```
+
+**New** Enhanced UI with worker status tracking and stale worker detection
+
+**Diagram sources**
+- [ai-create page.tsx:61-105](file://src/app/(protected)/create/ai/page.tsx#L61-L105)
+- [ai-create page.tsx:283-304](file://src/app/(protected)/create/ai/page.tsx#L283-L304)
+
+**Section sources**
+- [ai-create page.tsx:1-386](file://src/app/(protected)/create/ai/page.tsx#L1-L386)
 
 ### Template Resolution and Text Slot Discovery
 Template resolution supports:
@@ -351,26 +399,32 @@ Severity --> |No| ManualReview["Leave for manual review"]
 ```mermaid
 sequenceDiagram
 participant Client as "Client"
+participant UI as "AI Create UI"
 participant API as "Books API"
 participant Auth as "Auth"
 participant JobLib as "ai-book-job.ts"
-Client->>API : POST /api/ai/books
+Client->>UI : Submit concept
+UI->>API : POST /api/ai/books
 API->>Auth : Verify session
 Auth-->>API : Session
 API->>API : Rate limit check
 API->>JobLib : enqueueAiBookJob(userId, concept, templateId?)
 JobLib-->>API : jobId
-API-->>Client : 202 {jobId}
-Client->>API : GET /api/ai/books/ : id
+API-->>UI : 202 {jobId}
+UI->>API : GET /api/ai/books/ : id (polling)
 API->>Auth : Verify session
 Auth-->>API : Session
-API-->>Client : {status, stage, submissionId, errorMessage, qaReport}
+API-->>UI : {status, stage, submissionId, errorMessage, qaReport}
+Note over UI : Track QUEUED vs PROCESSING states
 ```
+
+**Updated** Enhanced UI integration with worker status tracking
 
 **Diagram sources**
 - [books route.ts:1-53](file://src/app/api/ai/books/route.ts#L1-L53)
 - [book status route.ts:1-36](file://src/app/api/ai/books/[id]/route.ts#L1-L36)
 - [ai-book-job.ts:42-60](file://src/lib/ai/ai-book-job.ts#L42-L60)
+- [ai-create page.tsx:61-105](file://src/app/(protected)/create/ai/page.tsx#L61-L105)
 
 **Section sources**
 - [books route.ts:1-53](file://src/app/api/ai/books/route.ts#L1-L53)
@@ -401,7 +455,7 @@ Log --> Poll
 - [render-worker.ts:1-33](file://src/workers/render-worker.ts#L1-L33)
 
 ## Dependency Analysis
-The AI book system has clear boundaries between API, workers, and domain logic with enhanced error handling:
+The AI book system has clear boundaries between API, workers, and domain logic with enhanced error handling and UI integration:
 
 ```mermaid
 graph LR
@@ -412,8 +466,12 @@ Pipeline --> JobLib
 Pipeline --> Composer["composer.ts"]
 Pipeline --> ContentPlan["content-plan.ts"]
 Pipeline --> QA["qa.ts"]
+UI["ai-create page.tsx"] --> StatusAPI
+UI --> WorkerDetection["Worker State Detection"]
 DBModel["schema.prisma"] --> All["All components"]
 ```
+
+**Updated** Added UI dependency for worker state detection
 
 **Diagram sources**
 - [books route.ts:1-53](file://src/app/api/ai/books/route.ts#L1-L53)
@@ -423,6 +481,7 @@ DBModel["schema.prisma"] --> All["All components"]
 - [composer.ts:1-68](file://src/lib/ai/composer.ts#L1-L68)
 - [content-plan.ts:1-30](file://src/lib/ai/content-plan.ts#L1-L30)
 - [qa.ts:1-181](file://src/lib/ai/qa.ts#L1-L181)
+- [ai-create page.tsx:1-386](file://src/app/(protected)/create/ai/page.tsx#L1-L386)
 - [schema.prisma:1-275](file://prisma/schema.prisma#L1-L275)
 
 **Section sources**
@@ -436,6 +495,7 @@ DBModel["schema.prisma"] --> All["All components"]
 - Render polling: Rendering waits with bounded polling intervals and caps total wait time.
 - Rate limiting: Simple in-memory per-user throttling reduces bursty requests to the API.
 - **Enhanced**: Transaction-scoped operations improve consistency and reduce race conditions.
+- **New**: UI polling optimization with 3-second intervals and stale worker detection prevents excessive API calls.
 
 ## Troubleshooting Guide
 Common issues and diagnostics:
@@ -445,12 +505,14 @@ Common issues and diagnostics:
 - Rendering timeouts: Pipeline treats render timeouts as retryable; verify render worker health and queue backlog.
 - QA failures: Review the QA report attached to the job; retryable failures regenerate content, while terminal failures require manual review.
 - **New**: P2025 errors during completion indicate missing submissions and should be treated as terminal failures.
+- **New**: Stale worker detection shows "waiting for worker..." when jobs remain in QUEUED state for >45 seconds, indicating background worker may not be running.
 
 Operational tips:
 - Monitor worker logs for claimed and finished events.
 - Inspect job status via the polling endpoint to track stage transitions and errors.
 - Ensure environment variables for polling intervals and lease durations are valid.
 - **Updated**: Watch for `LeaseLostError` exceptions which indicate concurrent access conflicts.
+- **New**: Check UI for stale worker warnings - if jobs stay in QUEUED state, ensure the AI worker process is running.
 
 **Section sources**
 - [ai-book-job.ts:27-186](file://src/lib/ai/ai-book-job.ts#L27-L186)
@@ -458,8 +520,9 @@ Operational tips:
 - [qa.ts:22-25](file://src/lib/ai/qa.ts#L22-L25)
 - [ai-book-worker.ts:18-33](file://src/workers/ai-book-worker.ts#L18-L33)
 - [render-worker.ts:17-32](file://src/workers/render-worker.ts#L17-L32)
+- [ai-create page.tsx:68-76](file://src/app/(protected)/create/ai/page.tsx#L68-L76)
 
 ## Conclusion
 The AI book generation system combines robust job leasing with enhanced transaction support, staged orchestration, template-aware content generation, and automated QA to deliver reliable, scalable booklet creation. Its separation of concerns—API, workers, and domain libraries—supports maintainability and observability. With careful tuning of lease durations, polling intervals, and retry policies, the system can handle variable workloads while preserving correctness and safety.
 
-**Updated** Recent enhancements include improved lease fencing with Prisma transactions, better error classification with dedicated error classes, transaction-scoped QA approval, defensive programming patterns, and comprehensive integration test coverage for edge cases like lease loss and missing submissions.
+**Updated** Recent enhancements include improved lease fencing with Prisma transactions, better error classification with dedicated error classes, transaction-scoped QA approval, defensive programming patterns, comprehensive integration test coverage for edge cases like lease loss and missing submissions, and an enhanced UI with worker status tracking that distinguishes between QUEUED and PROCESSING states with stale worker detection capabilities.

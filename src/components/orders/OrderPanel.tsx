@@ -112,18 +112,25 @@ export default function OrderPanel({
 
     // Load public pricing meta + last-used zone once.
     useEffect(() => {
-        if (typeof window !== "undefined") {
-            const storedZone = window.localStorage.getItem(ZONE_STORAGE_KEY);
+        // Read stored preferences synchronously: the persist effects below
+        // run later in this same commit and would otherwise clobber the
+        // stored values with defaults before they are read. The setState
+        // itself is deferred off the effect's synchronous path (a microtask)
+        // so it does not cause a cascading render wave.
+        const storedZone = typeof window !== "undefined"
+            ? window.localStorage.getItem(ZONE_STORAGE_KEY)
+            : null;
+        const storedCurrency = typeof window !== "undefined"
+            ? window.localStorage.getItem(CURRENCY_STORAGE_KEY)
+            : null;
+        queueMicrotask(() => {
             if (storedZone) {
                 setZone(storedZone as Zone);
             }
-            const storedCurrency = window.localStorage.getItem(
-                CURRENCY_STORAGE_KEY,
-            );
             if (isCurrency(storedCurrency)) {
                 setCurrency(storedCurrency);
             }
-        }
+        });
 
         let cancelled = false;
         (async () => {
@@ -325,7 +332,18 @@ export default function OrderPanel({
             if (!res.ok) {
                 throw new Error(data.error || "Could not place order");
             }
-            toast.success("Order placed. Awaiting payment.");
+            // Stripe configured: continue straight to the hosted Checkout.
+            if (data.checkoutUrl) {
+                window.location.assign(data.checkoutUrl);
+                return;
+            }
+            if (data.paymentError) {
+                toast.error(
+                    "Order placed, but the payment page could not be created. You can retry payment from the order page.",
+                );
+            } else {
+                toast.success("Order placed. Awaiting payment.");
+            }
             router.push(`/dashboard/orders/${data.order.id}`);
             router.refresh();
         } catch (error) {
@@ -538,10 +556,10 @@ export default function OrderPanel({
                                 className="mt-0.5 text-xs"
                                 style={{ color: "var(--color-text-muted)" }}
                             >
-                                Two printed copies will be stored indefinitely in
-                                the Titchybook Vault, a long-term paper storage
-                                service. Your book will be catalogued with its
-                                title and author in the{" "}
+                                Two printed copies will be stored indefinitely
+                                in the Titchybook Vault, a long-term paper
+                                storage service. Your book will be catalogued
+                                with its title and author in the{" "}
                                 <a
                                     href="/vault"
                                     className="underline"
@@ -556,13 +574,11 @@ export default function OrderPanel({
                                     className="mt-1 text-xs font-medium"
                                     style={{ color: "var(--color-primary)" }}
                                 >
-                                    +{" "}
-                                    {formatMoney(
+                                    + {formatMoney(
                                         config.vaultFeeHuf,
                                         currency,
                                         config.currencyRates,
-                                    )}{" "}
-                                    flat fee
+                                    )} flat fee
                                 </p>
                             )}
                         </div>

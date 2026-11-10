@@ -1,5 +1,7 @@
 ﻿import { NextRequest, NextResponse } from "next/server";
+import type { Prisma } from "@prisma/client";
 import { auth } from "@/auth";
+import { SubmissionStatus, VALID_STATUSES } from "@/lib/constants";
 import { prisma } from "@/lib/prisma";
 import { getPresignedDownloadUrl } from "@/lib/s3";
 
@@ -13,12 +15,23 @@ export async function GET(request: NextRequest) {
   }
 
   const { searchParams } = new URL(request.url);
-  const status = searchParams.get("status");
+  const requestedStatus = searchParams.get("status");
   // Spot-check view: AI books that were auto-approved and sampled for review.
   const spotCheck = searchParams.get("spotCheck") === "true";
 
-  const where = spotCheck
-    ? { qaSampled: true, status: "APPROVED" }
+  // Reject unknown filters instead of letting Prisma fail on the enum column.
+  const status = requestedStatus
+    ? VALID_STATUSES.find((value) => value === requestedStatus)
+    : undefined;
+  if (requestedStatus && !status) {
+    return NextResponse.json(
+      { error: "Unknown status", allowed: VALID_STATUSES },
+      { status: 400 }
+    );
+  }
+
+  const where: Prisma.SubmissionWhereInput = spotCheck
+    ? { qaSampled: true, status: SubmissionStatus.APPROVED }
     : status
       ? { status }
       : {};

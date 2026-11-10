@@ -8,7 +8,10 @@ import {
   PAGE_LABELS,
   SubmissionMode,
   SubmissionStatus,
+  MAX_FILE_SIZE,
 } from "@/lib/constants";
+import { headS3Object } from "@/lib/s3";
+import { consumeRateLimit, tooManyRequests } from "@/lib/rate-limit";
 import { createEmptySubmissionPageSeeds } from "@/lib/editor/validation";
 
 export const dynamic = "force-dynamic";
@@ -53,6 +56,15 @@ export async function POST(request: Request) {
   const session = await auth();
   if (!session?.user?.id) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  // Durable per-user cap on submission creation.
+  const rl = await consumeRateLimit(`submission:user:${session.user.id}`, {
+    limit: 20,
+    windowMs: 60 * 60_000,
+  });
+  if (!rl.allowed) {
+    return tooManyRequests(rl, "Too many submissions - please try again later.");
   }
 
   try {
@@ -118,6 +130,27 @@ export async function POST(request: Request) {
     if (images.some(image => !image.s3Key.startsWith(`uploads/${session.user.id}/`))) {
       throw new SubmissionError(403, "An uploaded image belongs to another account");
     }
+
+    // Verify the uploaded objects server-side: presigned PUTs are open to the
+    // client for their validity window, so confirm each key exists, is
+    // non-empty, and stays within MAX_FILE_SIZE before accepting them.
+    const uploads = await Promise.all(images.map((img) => headS3Object(img.s3Key)));
+    for (const [i, head] of uploads.entries()) {
+      const pageLabel = images[i].pageLabel;
+      if (!head) {
+        return NextResponse.json(
+          { error: `The upload for ${pageLabel} is missing. Please upload it again.` },
+          { status: 400 }
+        );
+      }
+      if (head.size === 0 || head.size > MAX_FILE_SIZE) {
+        return NextResponse.json(
+          { error: `The upload for ${pageLabel} must be between 1 byte and ${MAX_FILE_SIZE / (1024 * 1024)} MB.` },
+          { status: 400 }
+        );
+      }
+    }
+
     const actor = { id: session.user.id, role: session.user.role };
     const result = await prisma.$transaction(async (tx) => {
     const submission = await tx.submission.create({

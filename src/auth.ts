@@ -1,6 +1,7 @@
 import NextAuth from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 import { prisma } from "@/lib/prisma";
+import { consumeRateLimit } from "@/lib/rate-limit";
 import { compare } from "bcryptjs";
 
 declare module "next-auth" {
@@ -40,6 +41,16 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         const email = credentials.email as string;
         const password = credentials.password as string;
 
+        // Durable brute-force guard: cap verification attempts per email per
+        // window. This also bounds the bcrypt CPU cost an attacker can force.
+        // Exceeding the limit looks exactly like a wrong password to the
+        // caller (no account-enumeration signal).
+        const rl = await consumeRateLimit(`login:${email.toLowerCase()}`, {
+          limit: 15,
+          windowMs: 15 * 60_000,
+        });
+        if (!rl.allowed) return null;
+
         const user = await prisma.user.findUnique({
           where: { email },
         });
@@ -62,16 +73,13 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
   pages: {
     signIn: "/login",
   },
-  // In NextAuth v5, the URL is determined at runtime from the request
-  // but we can influence it with trustHost and explicit URL config
-  trustHost: true,
+  // Trust the Host header only when explicitly configured (AUTH_TRUST_HOST=true
+  // on Vercel, where the host varies per deployment). Blanket trust lets a
+  // spoofed Host header influence callback URLs and redirects.
+  trustHost: process.env.AUTH_TRUST_HOST === "true",
   callbacks: {
-    authorized({ auth }) {
-      // Proxy matcher limits this to protected paths, so any hit here
-      // requires an authenticated session. Returning false redirects to
-      // pages.signIn ("/login") with a callbackUrl query param.
-      return !!auth?.user;
-    },
+    // Page protection lives in src/proxy.ts: passing a custom handler to auth()
+    // bypasses the `authorized` callback, so it must not be relied on here.
     async jwt({ token, user }) {
       if (user) {
         token.id = user.id!;

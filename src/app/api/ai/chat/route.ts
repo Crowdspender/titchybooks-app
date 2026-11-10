@@ -2,6 +2,7 @@
 import { auth } from "@/auth";
 import { getOpenAIClient, getOpenAIModel, isAIConfigured } from "@/lib/ai/client";
 import { buildSystemPrompt, type BookContext } from "@/lib/ai/system-prompt";
+import { consumeRateLimit, tooManyRequests } from "@/lib/rate-limit";
 import { PAGE_LABELS, type PageLabel } from "@/lib/constants";
 import { z } from "zod";
 
@@ -28,9 +29,10 @@ const requestSchema = z.object({
   }),
 });
 
-// Simple per-user rate limiting (in-memory, resets on server restart)
-const rateLimitMap = new Map<string, number>();
-const RATE_LIMIT_MS = 2000;
+// Minimum spacing between two chat messages per user. Durable Postgres
+// bucket: an in-memory map neither survives restarts nor coordinates across
+// serverless instances.
+const CHAT_SPACING = { limit: 1, windowMs: 2_000 };
 
 export async function POST(request: Request) {
   const session = await auth();
@@ -45,17 +47,12 @@ export async function POST(request: Request) {
     );
   }
 
-  // Rate limiting
+  // Rate limiting (durable): at most one message per spacing window.
   const userId = session.user.id;
-  const lastRequest = rateLimitMap.get(userId) ?? 0;
-  const now = Date.now();
-  if (now - lastRequest < RATE_LIMIT_MS) {
-    return NextResponse.json(
-      { error: "Please wait a moment before sending another message." },
-      { status: 429 },
-    );
+  const rl = await consumeRateLimit(`ai-chat:user:${userId}`, CHAT_SPACING);
+  if (!rl.allowed) {
+    return tooManyRequests(rl, "Please wait a moment before sending another message.");
   }
-  rateLimitMap.set(userId, now);
 
   // Parse and validate request body
   let body: z.infer<typeof requestSchema>;
@@ -95,8 +92,8 @@ export async function POST(request: Request) {
         })),
       ],
       stream: true,
-      temperature: 0.8,
-      max_tokens: 2000,
+      reasoning_effort: "low",
+      max_completion_tokens: 4000,
     });
 
     const encoder = new TextEncoder();

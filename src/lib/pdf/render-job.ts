@@ -1,14 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import type { RenderJob } from '@prisma/client';
+import { Prisma, type RenderJob } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { lockSubmission, SubmissionError, type Actor, type Transaction } from '@/lib/editor/submission-store';
 import { captureSnapshot, InvalidRenderInput, parseRenderSnapshot, type RenderSnapshot } from './snapshot';
 import type { RenderArtifacts } from './render-output';
 
-export enum RenderJobStatus {
-  QUEUED = 'QUEUED', PROCESSING = 'PROCESSING', COMPLETED = 'COMPLETED', FAILED = 'FAILED',
-}
 export const LEASE_MS = 120_000;
 export const HEARTBEAT_MS = 20_000;
 const RETRY_DELAYS = [5_000, 30_000];
@@ -66,14 +63,28 @@ async function fence(tx: Transaction, job: ClaimedJob) {
   return rows.length === 1;
 }
 export async function publishRender(job: ClaimedJob, artifacts: RenderArtifacts) {
+  // One publication step for the whole artifact set: if either key is missing
+  // the attempt is not published as a completed book.
+  if (!artifacts.pdfS3Key || !artifacts.readingPdfS3Key || !artifacts.artifactManifest) {
+    throw new InvalidRenderInput('Render produced an incomplete artifact set');
+  }
   return prisma.$transaction(async tx => {
     if (!await fence(tx, job)) return false;
-    await tx.submission.update({ where: { id: job.submissionId }, data: { status: 'PENDING', pdfS3Key: artifacts.pdfS3Key } });
+    await tx.submission.update({ where: { id: job.submissionId }, data: {
+      status: 'PENDING',
+      pdfS3Key: artifacts.pdfS3Key,
+      readingPdfS3Key: artifacts.readingPdfS3Key,
+      artifactManifest: artifacts.artifactManifest as unknown as Prisma.InputJsonValue,
+    } });
     for (const preview of artifacts.previews) {
       await tx.submissionPage.updateMany({ where: { submissionId: job.submissionId, pageLabel: preview.pageLabel }, data: { previewS3Key: preview.s3Key } });
     }
     await tx.renderJob.update({ where: { id: job.id }, data: {
-      status: 'COMPLETED', pdfS3Key: artifacts.pdfS3Key, completedAt: new Date(), errorMessage: null, leaseExpiresAt: null, claimToken: null,
+      status: 'COMPLETED',
+      pdfS3Key: artifacts.pdfS3Key,
+      readingPdfS3Key: artifacts.readingPdfS3Key,
+      artifactManifest: artifacts.artifactManifest as unknown as Prisma.InputJsonValue,
+      completedAt: new Date(), errorMessage: null, leaseExpiresAt: null, claimToken: null,
     } });
     return true;
   });
@@ -115,7 +126,11 @@ export async function processRenderJob(job: ClaimedJob, render?: (input: RenderS
     if (input.submissionId !== job.submissionId) throw new InvalidRenderInput('Snapshot identity mismatch');
     const generator = render ?? (await import('./generate')).generateTitchybookPdf;
     const { buildRenderAttemptPrefix } = await import('@/lib/s3');
-    const artifacts = await generator(input, buildRenderAttemptPrefix(input.userId, job.submissionId, job.id, job.attempts, job.claimToken!));
+    const artifacts = await generator(
+      input,
+      buildRenderAttemptPrefix(input.userId, job.submissionId, job.id, job.attempts, job.claimToken!),
+      { renderJobId: job.id },
+    );
     if (!lostLease) await publishRender(job, artifacts);
   } catch (error) {
     console.error(JSON.stringify({ event: 'render-failed', jobId: job.id, attempt: job.attempts }));

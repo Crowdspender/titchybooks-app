@@ -84,7 +84,7 @@ S3LIB["src/lib/s3.ts"]
 PRISMA["src/lib/prisma.ts"]
 AUTH["src/auth.ts"]
 CONST["src/lib/constants.ts"]
-AI["src/lib/ai/*"]
+AILIB["src/lib/ai/*"]
 end
 subgraph "Cloud Services"
 S3["AWS S3"]
@@ -102,6 +102,7 @@ SUBMIT --> PRISMA
 SUBGET --> PRISMA
 PDFGEN --> PRISMA
 AIROUTE --> OPENAI
+AIROUTE --> AILIB
 AUTH --> PRESIGN
 AUTH --> SUBMIT
 AUTH --> SUBGET

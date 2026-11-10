@@ -38,6 +38,13 @@ export default async function AdminOrdersPage() {
                 >
                     Pricing
                 </Link>
+                <Link
+                    href="/admin/queue"
+                    className="px-4 py-2.5 font-medium no-underline hover:text-stone-900 transition-colors"
+                    style={{ color: "var(--color-text-muted)" }}
+                >
+                    Queue
+                </Link>
             </div>
             <OrderModeration />
         </>

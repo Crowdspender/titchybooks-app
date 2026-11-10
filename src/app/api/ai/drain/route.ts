@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { claimAiBookJob } from "@/lib/ai/ai-book-job";
 import { processAiBookJob } from "@/lib/ai/pipeline";
 import { drainBudgetMs, isCronAuthorized, runDrain } from "@/lib/queue-drain";
+import { recordDrainRun } from "@/lib/queue-health";
 
 // Serverless drain for the AI book queue. Invoked on a schedule (see
 // .github/workflows/drain.yml) because Vercel cannot host the long-lived
@@ -14,7 +15,16 @@ async function drain(req: Request) {
   if (!isCronAuthorized(req)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
-  const summary = await runDrain(claimAiBookJob, processAiBookJob, drainBudgetMs());
+  // The pipeline receives the drain deadline so it can yield from the render
+  // wait before the function is frozen, instead of stranding the job until
+  // its lease expires.
+  const summary = await runDrain(
+    claimAiBookJob,
+    (job, deadlineMs) => processAiBookJob(job, { deadlineMs }),
+    drainBudgetMs(),
+  );
+  // Persist the run as the scheduler heartbeat; never blocks the response.
+  await recordDrainRun("ai", summary);
   return NextResponse.json({ queue: "ai", ...summary });
 }
 

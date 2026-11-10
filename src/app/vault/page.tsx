@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import type { Prisma } from "@prisma/client";
 import Link from "next/link";
 
 export const dynamic = "force-dynamic";
@@ -14,7 +15,12 @@ export default async function VaultDirectoryPage({
   const page = Math.max(Number(pageStr ?? 1), 1);
   const offset = (page - 1) * PAGE_SIZE;
 
-  const where = { status: "STORED" };
+  // Public directory: only consented entries are listed (owners opt in via
+  // their dashboard's My Vault page); entries are private by default.
+  const where = {
+    status: "STORED",
+    publicConsent: true,
+  } satisfies Prisma.VaultEntryWhereInput;
 
   let entries: {
     id: string;

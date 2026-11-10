@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { ORDER_STATUS_TRANSITIONS, type OrderStatus } from "@/lib/pricing/constants";
+import { createVaultEntryForOrder } from "@/lib/orders/lifecycle";
+import { recordPaymentAlert } from "@/lib/orders/payment-alerts";
 import { adminUpdateOrderSchema } from "@/lib/pricing/schema";
 
 export const dynamic = "force-dynamic";
@@ -86,43 +88,48 @@ export async function PATCH(
     where: { id },
     data: {
       status: parsed.data.status ?? undefined,
+      // Mirror the webhook: stamp paidAt when manually flipping to PAID.
+      paidAt:
+        parsed.data.status === "PAID" && order.status !== "PAID"
+          ? new Date()
+          : undefined,
       notes: parsed.data.notes === undefined ? undefined : parsed.data.notes,
     },
   });
 
-  // Auto-create VaultEntry when order transitions to PAID with vault add-on.
-  if (
-    parsed.data.status === "PAID" &&
-    order.vaultAddOn &&
-    order.submission
-  ) {
+  // Shared side-effect with the Stripe webhook path: idempotently create
+  // the vault entry when a paid order carries the vault add-on.
+  let vaultEntryFailed = false;
+  if (parsed.data.status === "PAID") {
     try {
-      // Avoid duplicates: check if a vault entry already exists for this order.
-      const existing = await prisma.vaultEntry.findFirst({
-        where: { orderId: order.id },
-      });
-      if (!existing) {
-        // Require explicit name for public vault listing; fall back to "Anonymous" to protect privacy.
-        const authorName = order.user.name || "Anonymous";
-        await prisma.vaultEntry.create({
-          data: {
-            orderId: order.id,
-            submissionId: order.submissionId,
-            title: order.submission.title || "Untitled",
-            authorName,
-            quantity: 2,
-            status: "STORED",
-          },
-        });
-      }
+      await createVaultEntryForOrder(prisma, order.id);
     } catch (error) {
+      vaultEntryFailed = true;
       // Log error with context for recovery
       console.error(
-        `[VaultEntry] Failed to create vault entry for order ${order.id}, submission ${order.submissionId}:`,
+        `[VaultEntry] Failed to create vault entry for order ${order.id}:`,
         error
       );
-      // TODO: Enqueue admin alert for manual recovery
+      // The buyer has paid and the vault copy they paid for is missing, so an
+      // operator has to create it by hand. A log line is not a channel anyone
+      // watches on serverless hosting: record it for the reconciliation banner
+      // on /admin/orders and report it in this response.
+      await recordPaymentAlert({
+        kind: "vault-entry-failed",
+        orderId: order.id,
+        message: "Order marked PAID but the vault entry could not be created.",
+        context: { error: error instanceof Error ? error.message : String(error) },
+      });
     }
+  }
+
+  if (vaultEntryFailed) {
+    return NextResponse.json({
+      order: updated,
+      warnings: [
+        "Order is PAID but its vault entry could not be created - see the reconciliation banner.",
+      ],
+    });
   }
 
   return NextResponse.json({ order: updated });

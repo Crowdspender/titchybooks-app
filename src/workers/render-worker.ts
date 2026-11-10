@@ -1,7 +1,10 @@
 import 'dotenv/config';
 import { setTimeout as sleep } from 'node:timers/promises';
+import { assertProductionEnv } from '@/lib/env-validation';
 import { prisma } from '@/lib/prisma';
 import { claimRenderJob, processRenderJob } from '@/lib/pdf/render-job';
+
+assertProductionEnv();
 
 let stopping = false;
 const pollMs = Number(process.env.RENDER_WORKER_POLL_MS ?? 2000);

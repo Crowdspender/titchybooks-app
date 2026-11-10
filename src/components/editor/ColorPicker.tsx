@@ -85,12 +85,17 @@ export default function ColorPicker(
 ) {
     const [isOpen, setIsOpen] = useState(false);
     const [inputValue, setInputValue] = useState(value);
+    const [prevValue, setPrevValue] = useState(value);
     const pickerRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLInputElement>(null);
 
-    useEffect(() => {
+    // "Adjusting state during render" (React docs) instead of a syncing
+    // effect: the input follows the controlled value without an extra
+    // cascading render pass.
+    if (prevValue !== value) {
+        setPrevValue(value);
         setInputValue(value);
-    }, [value]);
+    }
 
     useEffect(() => {
         const handleClickOutside = (event: MouseEvent) => {

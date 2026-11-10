@@ -16,6 +16,10 @@
 /test-results
 /.npm-cache
 test-*.png
+# Manual browser-verification screenshots captured at the repo root during
+# registration/dashboard walkthroughs. They can contain real account data, so
+# they are never committed.
+/step*.png
 
 # next.js
 /.next/
@@ -28,11 +32,17 @@ test-*.png
 .DS_Store
 *.pem
 
+# local database backup drills (may contain user data)
+/backup/
+
 # debug
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
+# Local test/build run transcripts (verbose, machine-specific, regenerable).
+/integration-run.log
+/build-check.log
 
 # env files (can opt-in for committing if needed)
 .env*

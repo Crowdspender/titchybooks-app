@@ -1,3 +1,13 @@
+// Load .env before testEnvironment() reads TEST_DATABASE_URL: this script runs
+// under tsx, which (unlike Next.js and the Prisma CLI) does not read .env on its
+// own, so the documented `npm run test:*` commands would otherwise fail with
+// "Set TEST_DATABASE_URL explicitly" even when .env defines it. dotenv never
+// overrides a variable that is already set, so CI's real environment still wins.
+//
+// Loaded here rather than in test-environment.mts on purpose: that module is
+// also imported directly by the unit suite, and pulling a developer's real
+// credentials into unit tests would make them depend on local secrets.
+import 'dotenv/config';
 import { spawnSync } from 'node:child_process';
 import { testEnvironment } from './test-environment.mts';
 

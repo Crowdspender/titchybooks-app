@@ -1,8 +1,10 @@
 import type { Prisma, Submission } from '@prisma/client';
+import { Prisma as PrismaNamespace } from '@prisma/client';
 import { z } from 'zod';
 import { prisma } from '@/lib/prisma';
 import { editorElementSchema, editorSceneSchema, type EditorScene } from './schema';
 import { PAGE_LABELS, type PageLabel } from '@/lib/constants';
+import { parsePinnedTemplate, type PinnedTemplate } from '@/lib/ai/template-contract';
 
 export type Actor = { id: string; role: string };
 export type Transaction = Prisma.TransactionClient;
@@ -83,18 +85,32 @@ export async function mergedPages(tx: Transaction, submission: Submission) {
   if (pages.length !== 8 || PAGE_LABELS.some(label => !pages.some(page => page.pageLabel === label))) {
     throw new SubmissionError(400, 'All eight unique pages are required');
   }
+  const pinned = parsePinnedTemplate(submission.pinnedTemplate);
   const templateId = submission.isTemplate ? submission.id : submission.templateId;
-  // Lock the template too, so a multi-page edit cannot change the frozen input mid-snapshot.
-  if (templateId && templateId !== submission.id) await lockSubmission(tx, templateId);
-  const rows = templateId ? await tx.templateElement.findMany({ where: { templateId }, orderBy: { order: 'asc' } }) : [];
+  // A pinned AI book carries its own copy of the template scenes, so editing or
+  // unpublishing the source template can no longer change it.
+  let elementRows: Array<{ pageLabel: string; elementJson: string }> | null = null;
+  if (!pinned) {
+    // Lock the template too, so a multi-page edit cannot change the frozen input mid-snapshot.
+    if (templateId && templateId !== submission.id) await lockSubmission(tx, templateId);
+    elementRows = templateId ? await tx.templateElement.findMany({ where: { templateId }, orderBy: { order: 'asc' } }) : [];
+  }
+  const pinnedByPage = new Map(pinned?.pages.map(page => [page.pageLabel as PageLabel, page]) ?? []);
   return pages.map(page => {
     const scene = editorSceneSchema.parse(JSON.parse(page.sceneJson));
-    const elements = rows.filter(row => row.pageLabel === page.pageLabel).map(row => editorElementSchema.parse(JSON.parse(row.elementJson)));
+    const pinnedPage = pinnedByPage.get(page.pageLabel as PageLabel);
+    const elements = pinned
+      ? (pinnedPage?.elements ?? [])
+      : (elementRows ?? [])
+          .filter(row => row.pageLabel === page.pageLabel)
+          .map(row => editorElementSchema.parse(JSON.parse(row.elementJson)));
     const overrides = scene.templateTextOverrides ?? {};
     for (const key of Object.keys(overrides)) {
       if (!elements.some(el => el.id === key && el.type === 'text')) throw new SubmissionError(400, 'Template text has changed; reopen this draft.');
     }
-    const merged = editorSceneSchema.parse({ ...scene, elements: [
+    const merged = editorSceneSchema.parse({ ...scene,
+      page: pinnedPage ? { ...scene.page, backgroundColor: pinnedPage.backgroundColor } : scene.page,
+      elements: [
       ...elements.map(el => el.type === 'text' && overrides[el.id] !== undefined ? { ...el, text: overrides[el.id] } : el),
       ...scene.elements,
     ] });
@@ -153,14 +169,25 @@ export async function savePage(id: string, label: PageLabel, actor: Actor, input
 }
 
 /**
+ * Add same-transaction composition support to the AI pipeline: the caller can
+ * pass an existing transaction so creating/updating the submission commits
+ * together with the job's lease-fenced stage advance.
+ */
+export interface CreateInstanceOptions {
+  tx?: Transaction;
+  /** Frozen template scenes + manifest captured at CONCEPT time. */
+  pinnedTemplate?: PinnedTemplate;
+}
+
+/**
  * Atomically create a template instance whose pages carry AI-generated text
  * overrides. Server-side sibling of POST /api/submissions/from-template, but
  * override-aware and single-transaction so the autonomous pipeline can create
  * a fully populated draft in one shot.
  *
  * `overrides` maps pageLabel -> (templateTextElementId -> replacement text).
- * Every override key must reference a text-type TemplateElement on that page.
- * The instance starts as an empty user layer; overrides are stored in
+ * Every override key must reference a text-type slot on that page. The
+ * instance starts as an empty user layer; overrides are stored in
  * `templateTextOverrides` and merged at render-snapshot time by mergedPages().
  */
 export async function createInstanceWithOverrides(
@@ -168,23 +195,35 @@ export async function createInstanceWithOverrides(
   templateId: string,
   title: string,
   overrides: Record<string, Record<string, string>>,
+  options: CreateInstanceOptions = {},
 ): Promise<string> {
-  return prisma.$transaction(async tx => {
+  const run = async (tx: Transaction): Promise<string> => {
     const template = await lockSubmission(tx, templateId);
-    if (!template.isTemplate || template.status !== 'APPROVED') {
+    const pinned = options.pinnedTemplate ?? null;
+    // A pinned book is self-contained: unpublishing or editing the source
+    // template must not change a book that already exists.
+    if (!template.isTemplate || (!pinned && template.status !== 'APPROVED')) {
       throw new SubmissionError(404, 'Template not found or not published');
     }
-    const pages = await tx.submissionPage.findMany({ where: { submissionId: templateId }, orderBy: { order: 'asc' } });
-    if (pages.length !== 8 || PAGE_LABELS.some(label => !pages.some(page => page.pageLabel === label))) {
+    const templatePages = await tx.submissionPage.findMany({ where: { submissionId: templateId }, orderBy: { order: 'asc' } });
+    if (templatePages.length !== 8 || PAGE_LABELS.some(label => !templatePages.some(page => page.pageLabel === label))) {
       throw new SubmissionError(400, 'Template is missing pages');
     }
-    const elements = await tx.templateElement.findMany({ where: { templateId }, orderBy: { order: 'asc' } });
     // Override keys are element ids inside elementJson (see mergedPages/savePage),
     // not TemplateElement row ids. Build elementId -> pageLabel for text slots.
     const textSlotPage = new Map<string, string>();
-    for (const row of elements) {
-      const parsed = editorElementSchema.safeParse(JSON.parse(row.elementJson));
-      if (parsed.success && parsed.data.type === 'text') textSlotPage.set(parsed.data.id, row.pageLabel);
+    if (pinned) {
+      for (const page of pinned.pages) {
+        for (const el of page.elements) {
+          if (el.type === 'text') textSlotPage.set(el.id, page.pageLabel);
+        }
+      }
+    } else {
+      const elements = await tx.templateElement.findMany({ where: { templateId }, orderBy: { order: 'asc' } });
+      for (const row of elements) {
+        const parsed = editorElementSchema.safeParse(JSON.parse(row.elementJson));
+        if (parsed.success && parsed.data.type === 'text') textSlotPage.set(parsed.data.id, row.pageLabel);
+      }
     }
     // Validate every override references a text element on the matching page.
     for (const [pageLabel, pageOverrides] of Object.entries(overrides)) {
@@ -194,12 +233,14 @@ export async function createInstanceWithOverrides(
         }
       }
     }
-    const instancePages = pages.map(page => {
+    const pinnedByPage = new Map(pinned?.pages.map(page => [page.pageLabel, page]) ?? []);
+    const instancePages = templatePages.map(page => {
       const templateScene = editorSceneSchema.parse(JSON.parse(page.sceneJson));
+      const pinnedPage = pinnedByPage.get(page.pageLabel as PageLabel);
       const pageOverrides = overrides[page.pageLabel] ?? {};
       const instanceScene = editorSceneSchema.parse({
         version: templateScene.version,
-        page: templateScene.page,
+        page: pinnedPage ? { ...templateScene.page, backgroundColor: pinnedPage.backgroundColor } : templateScene.page,
         elements: [],
         ...(Object.keys(pageOverrides).length > 0 ? { templateTextOverrides: pageOverrides } : {}),
       });
@@ -214,23 +255,30 @@ export async function createInstanceWithOverrides(
         aiGenerated: true,
         templateId: template.id,
         templateVersion: template.version,
+        ...(pinned ? { pinnedTemplate: pinned as unknown as PrismaNamespace.InputJsonValue } : {}),
         pages: { create: instancePages },
       },
     });
     return submission.id;
-  }, { timeout: 20000 });
+  };
+  if (options.tx) return run(options.tx);
+  return prisma.$transaction(run, { timeout: 20000 });
 }
 
 /**
  * Rewrite the text overrides of an existing AI-generated template instance in
  * place and return it to DRAFT so it can be re-rendered. Used by the pipeline
  * when a QA retry regenerates content without creating a duplicate submission.
+ *
+ * Both artifacts and their previews are invalidated here: a repaired book must
+ * never be approved against the previous revision's PDFs.
  */
 export async function rewriteInstanceOverrides(
   id: string,
   overrides: Record<string, Record<string, string>>,
+  options: { tx?: Transaction; title?: string } = {},
 ): Promise<void> {
-  await prisma.$transaction(async tx => {
+  const run = async (tx: Transaction): Promise<void> => {
     const submission = await lockSubmission(tx, id);
     if (!submission.aiGenerated || submission.mode !== 'EDITOR') {
       throw new SubmissionError(400, 'Not an AI-generated editor instance');
@@ -242,8 +290,18 @@ export async function rewriteInstanceOverrides(
       const updated = editorSceneSchema.parse({ ...scene, elements: scene.elements, templateTextOverrides: pageOverrides });
       await tx.submissionPage.update({ where: { id: page.id }, data: {
         sceneJson: JSON.stringify(updated), revision: { increment: 1 },
+        previewS3Key: null, renderedPageS3Key: null,
       } });
     }
-    await tx.submission.update({ where: { id }, data: { status: 'DRAFT', pdfS3Key: null } });
-  }, { timeout: 20000 });
+    await tx.submission.update({ where: { id }, data: {
+      status: 'DRAFT',
+      pdfS3Key: null,
+      readingPdfS3Key: null,
+      artifactManifest: PrismaNamespace.JsonNull,
+      revision: { increment: 1 },
+      ...(options.title !== undefined ? { title: options.title } : {}),
+    } });
+  };
+  if (options.tx) return run(options.tx);
+  await prisma.$transaction(run, { timeout: 20000 });
 }

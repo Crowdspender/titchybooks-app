@@ -16,6 +16,9 @@ export function testEnvironment() {
     AUTH_TRUST_HOST: 'true',
     AUTH_URL: 'http://localhost:3100',
     NEXTAUTH_URL: 'http://localhost:3100',
+    // Production-mode `next start` runs assertProductionEnv(), which refuses to
+    // boot without this. The value never leaves the isolated test server.
+    CRON_SECRET: 'isolated-test-cron-secret-not-for-production',
     VECTOR_RENDER: 'false',
     AWS_REGION: 'us-east-1',
     AWS_ACCESS_KEY_ID: 'test-only',

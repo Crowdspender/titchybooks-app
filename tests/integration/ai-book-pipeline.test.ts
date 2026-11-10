@@ -2,20 +2,40 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vites
 import {
   db,
   createUser,
-  createApprovedTemplateWithText,
+  createAiReadyTemplate,
   cleanupFixtures,
 } from '../fixtures/database';
 import { prisma } from '@/lib/prisma';
 import type { Prisma } from '@prisma/client';
+import { SEED_RECIPES, type SeedTextElement } from '../../prisma/seed-recipes';
 
-// The content plan the fake LLM returns. Mutated per test to drive QA outcomes.
+// The fake LLM fills every generated slot of the starter recipe, because the
+// pipeline refuses a plan that skips a required slot. Tests override individual
+// slots (`ai.texts`) to drive QA outcomes.
 const ai = vi.hoisted(() => ({
-  plan: {
-    title: 'A Rainy Day',
-    overrides: [{ templateElementId: 'slot-1', text: 'A short, print-friendly line about rain.' }],
-  },
+  texts: {} as Record<string, string>,
   flagged: false,
 }));
+
+const RECIPE = SEED_RECIPES[0];
+const GENERATED_SLOTS = RECIPE.elements.filter(
+  (element): element is SeedTextElement => element.kind === 'text' && !element.locked,
+);
+const BODY_TEXT = 'Rain taps softly on the window while the lantern glows beside the bed.';
+const ROLE_TEXT: Record<string, string> = {
+  'story-cover-title': 'A Rainy Day',
+  'story-back-closing': 'Goodnight, little one. The lantern keeps its light until morning.',
+};
+
+function fakePlan() {
+  return {
+    title: 'A Rainy Day',
+    overrides: GENERATED_SLOTS.map((element) => ({
+      templateElementId: element.id,
+      text: ai.texts[element.id] ?? ROLE_TEXT[element.id] ?? BODY_TEXT,
+    })),
+  };
+}
 
 // Make the RENDER poll loop instant: the pipeline awaits sleep(RENDER_POLL_MS)
 // between status checks, and the mocked render job is already COMPLETED.
@@ -27,30 +47,57 @@ vi.mock('@/lib/ai/client', () => ({
   getOpenAIClient: () => ({
     chat: {
       completions: {
-        create: async () => ({ choices: [{ message: { content: JSON.stringify(ai.plan) } }] }),
+        create: async () => ({ choices: [{ message: { content: JSON.stringify(fakePlan()) } }] }),
       },
     },
     moderations: { create: async () => ({ results: [{ flagged: ai.flagged }] }) },
   }),
 }));
 
-vi.mock('@/lib/s3', () => ({ objectExists: vi.fn(async () => true) }));
+// In-memory object store standing in for S3. The bytes are real: the actual
+// renderer writes the PDFs and QA reads them back to verify checksums.
+const storage = vi.hoisted(() => ({ objects: new Map<string, Buffer>() }));
 
-// Stand in for the real render queue: publish the submission synchronously so
-// the AI pipeline advances to QA without waiting on a live render worker.
-vi.mock('@/lib/pdf/render-job', () => ({
-  enqueueRenderJob: async (submissionId: string) => {
-    const { db } = await import('../fixtures/database');
-    const job = await db.renderJob.create({
-      data: { submissionId, status: 'COMPLETED', pdfS3Key: 'renders/ai/test.pdf', completedAt: new Date() },
-    });
-    await db.submission.update({
-      where: { id: submissionId },
-      data: { status: 'PENDING', pdfS3Key: 'renders/ai/test.pdf' },
-    });
-    return { jobId: job.id };
-  },
-}));
+vi.mock('@/lib/s3', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/s3')>();
+  return {
+    ...actual,
+    objectExists: async (s3Key: string) => storage.objects.has(s3Key),
+    downloadFromS3: async (s3Key: string) => {
+      const bytes = storage.objects.get(s3Key);
+      if (!bytes) throw new Error(`No object at ${s3Key}`);
+      return bytes;
+    },
+    uploadToS3: async (s3Key: string, bytes: Buffer) => {
+      storage.objects.set(s3Key, Buffer.from(bytes));
+    },
+    deleteS3Object: async (s3Key: string) => {
+      storage.objects.delete(s3Key);
+    },
+    getPresignedDownloadUrl: async () => 'https://storage.example.invalid/test.pdf',
+  };
+});
+
+// The render queue itself is real. Only the wait for a worker is removed: the
+// enqueue is drained synchronously so QA receives genuine, freshly rendered
+// artifacts instead of stubbed keys.
+vi.mock('@/lib/pdf/render-job', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/pdf/render-job')>();
+  return {
+    ...actual,
+    enqueueRenderJob: async (submissionId: string) => {
+      const { db } = await import('../fixtures/database');
+      const submission = await db.submission.findUniqueOrThrow({
+        where: { id: submissionId },
+        include: { user: true },
+      });
+      const result = await actual.enqueueRenderJob(submissionId, submission.user);
+      const job = await actual.claimRenderJob();
+      if (job) await actual.processRenderJob(job);
+      return result;
+    },
+  };
+});
 
 import {
   enqueueAiBookJob,
@@ -61,6 +108,7 @@ import {
   AiBookTerminalError,
 } from '@/lib/ai/ai-book-job';
 import { processAiBookJob } from '@/lib/ai/pipeline';
+import { parseArtifactManifest } from '@/lib/pdf/artifacts';
 
 interface QaCheckOut { id: string; passed: boolean; detail: string; severity: string }
 interface StageOutput {
@@ -74,16 +122,12 @@ let user: { id: string; role: string };
 let templateId: string;
 
 beforeEach(async () => {
-  ai.plan = {
-    title: 'A Rainy Day',
-    overrides: [{ templateElementId: 'slot-1', text: 'A short, print-friendly line about rain.' }],
-  };
+  ai.texts = {};
   ai.flagged = false;
+  storage.objects.clear();
   const created = await createUser();
   user = { id: created.id, role: created.role };
-  const template = await createApprovedTemplateWithText(user.id, [
-    { pageLabel: 'FRONT_COVER', id: 'slot-1', text: 'Cover line', width: 600, height: 400, fontSize: 24 },
-  ]);
+  const template = await createAiReadyTemplate(user.id);
   templateId = template.id;
   vi.stubGlobal('fetch', vi.fn(() => { throw new Error('External HTTP is forbidden in integration tests'); }));
 });
@@ -121,7 +165,13 @@ describe('autonomous AI book pipeline', () => {
     expect(submission.aiGenerated).toBe(true);
     expect(submission.templateId).toBe(templateId);
     expect(submission.status).toBe('APPROVED');
-    expect(submission.pdfS3Key).toBe('renders/ai/test.pdf');
+    // Both deliverables were really rendered and published, and the manifest
+    // QA verified describes exactly the bytes now stored on the submission.
+    expect(submission.pdfS3Key).toMatch(/print-sheet-a4-fold\.pdf$/);
+    expect(submission.readingPdfS3Key).toMatch(/reading-74x105mm\.pdf$/);
+    expect(storage.objects.has(submission.pdfS3Key!)).toBe(true);
+    expect(storage.objects.has(submission.readingPdfS3Key!)).toBe(true);
+    expect(parseArtifactManifest(submission.artifactManifest)).not.toBeNull();
 
     // The render queue was reused: exactly one COMPLETED render job exists.
     expect(await db.renderJob.count({ where: { submissionId: submission.id, status: 'COMPLETED' } })).toBe(1);
@@ -131,7 +181,7 @@ describe('autonomous AI book pipeline', () => {
       where: { submissionId_pageLabel: { submissionId: submission.id, pageLabel: 'FRONT_COVER' } },
     });
     const scene = JSON.parse(cover.sceneJson) as { templateTextOverrides?: Record<string, string> };
-    expect(scene.templateTextOverrides).toMatchObject({ 'slot-1': ai.plan.overrides[0].text });
+    expect(scene.templateTextOverrides).toMatchObject({ 'story-cover-title': 'A Rainy Day' });
   });
 
   it('honors the QA sampling rate when flagging for admin spot-check', async () => {
@@ -147,8 +197,9 @@ describe('autonomous AI book pipeline', () => {
   });
 
   it('regenerates CONTENT on a retryable QA failure and reuses the same submission', async () => {
-    // Overflowing text fails the retry-severity `text-fits` check.
-    ai.plan = { title: 'Too Long', overrides: [{ templateElementId: 'slot-1', text: 'x'.repeat(2000) }] };
+    // Wide uppercase text that still fits the character budget but overflows the
+    // box when measured, so it survives plan validation and fails QA `text-fits`.
+    ai.texts['story-page2-body'] = 'MMMM '.repeat(104);
     const { jobId } = await enqueueAiBookJob(user.id, 'a very long book', templateId);
 
     await processAiBookJob((await claimAiBookJob())!);
@@ -167,7 +218,7 @@ describe('autonomous AI book pipeline', () => {
   });
 
   it('exhausts retries on persistent QA failure and leaves the submission PENDING', async () => {
-    ai.plan = { title: 'Too Long', overrides: [{ templateElementId: 'slot-1', text: 'x'.repeat(2000) }] };
+    ai.texts['story-page2-body'] = 'MMMM '.repeat(104);
     const { jobId } = await enqueueAiBookJob(user.id, 'a very long book', templateId);
 
     let submissionId: string | null = null;
@@ -286,7 +337,7 @@ describe('autonomous AI book pipeline', () => {
     await db.templateElement.deleteMany({ where: { templateId } });
     const stageOutput = {
       templateId,
-      contentPlan: { title: 'A Rainy Day', overrides: [{ templateElementId: 'slot-1', text: 'Rain falls.' }] },
+      contentPlan: { title: 'A Rainy Day', overrides: [{ templateElementId: 'story-cover-title', text: 'Rain falls.' }] },
     };
     await db.aiBookJob.update({ where: { id: jobId }, data: { stage: 'COMPOSE', stageOutput } });
     const job = { ...claimed, stage: 'COMPOSE', stageOutput } as typeof claimed;
