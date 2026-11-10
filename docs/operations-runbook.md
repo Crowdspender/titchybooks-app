@@ -32,22 +32,22 @@ Checkout runs through Stripe. `/api/stripe/webhook` is the only path that marks
 an order `PAID` automatically, and its authenticity comes solely from the
 signature, so `STRIPE_WEBHOOK_SECRET` must match the dashboard endpoint.
 
-| Surface                          | Auth             | Purpose                                                                                                                                                                                                 |
-| -------------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `POST /api/orders/:id/pay`        | owner or ADMIN   | (Re)issue a Checkout session for a `PENDING_PAYMENT` order; the returned session id replaces the stored one. Capped at 30 attempts per user per hour. Returns `503` when `STRIPE_SECRET_KEY` is unset. |
-| `POST /api/stripe/webhook`       | signature        | Applies `checkout.session.completed`. Idempotent across retried deliveries.                                                                                                                             |
-| `GET /api/admin/payment-alerts`  | ADMIN            | Open reconciliation alerts.                                                                                                                                                                             |
-| `PATCH /api/admin/payment-alerts/:id` | ADMIN       | Dismiss one alert. Dismissing does not change the order.                                                                                                                                                |
+| Surface                               | Auth           | Purpose                                                                                                                                                                                                |
+| ------------------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `POST /api/orders/:id/pay`            | owner or ADMIN | (Re)issue a Checkout session for a `PENDING_PAYMENT` order; the returned session id replaces the stored one. Capped at 30 attempts per user per hour. Returns `503` when `STRIPE_SECRET_KEY` is unset. |
+| `POST /api/stripe/webhook`            | signature      | Applies `checkout.session.completed`. Idempotent across retried deliveries.                                                                                                                            |
+| `GET /api/admin/payment-alerts`       | ADMIN          | Open reconciliation alerts.                                                                                                                                                                            |
+| `PATCH /api/admin/payment-alerts/:id` | ADMIN          | Dismiss one alert. Dismissing does not change the order.                                                                                                                                               |
 
 The webhook deliberately does not fail on ambiguous events, because a non-2xx
 makes Stripe retry a delivery that can never succeed. Each of those decisions is
 recorded as a `PaymentAlert` row and listed in the banner on `/admin/orders`:
 
-| Kind                  | Meaning                                                                                                                                            | Action                                                                                                                                                                       |
-| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `stale-session`       | The buyer paid on a Checkout session that a later retry had superseded. The payment is signature-verified, so the order was still marked `PAID`.    | Check the Stripe dashboard for more than one charge on the order. Refund the duplicate if there is one, then dismiss.                                                        |
-| `unpaid-completion`   | Checkout completed without payment (an expired or declined card), so the order was left `PENDING_PAYMENT`.                                          | Contact the buyer, or cancel the order, then dismiss.                                                                                                                        |
-| `vault-entry-failed`  | An admin marked the order `PAID` but the vault copy could not be created. The buyer has paid for storage that does not exist.                        | Fix the cause, then save `PAID` again from `/admin/orders`: the vault side-effect is idempotent and re-runs on an order that is already paid. Then dismiss.                   |
+| Kind                 | Meaning                                                                                                                                          | Action                                                                                                                                                      |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `stale-session`      | The buyer paid on a Checkout session that a later retry had superseded. The payment is signature-verified, so the order was still marked `PAID`. | Check the Stripe dashboard for more than one charge on the order. Refund the duplicate if there is one, then dismiss.                                       |
+| `unpaid-completion`  | Checkout completed without payment (an expired or declined card), so the order was left `PENDING_PAYMENT`.                                       | Contact the buyer, or cancel the order, then dismiss.                                                                                                       |
+| `vault-entry-failed` | An admin marked the order `PAID` but the vault copy could not be created. The buyer has paid for storage that does not exist.                    | Fix the cause, then save `PAID` again from `/admin/orders`: the vault side-effect is idempotent and re-runs on an order that is already paid. Then dismiss. |
 
 Alerts are counted rather than duplicated: a retried delivery increments
 `occurrences` on the existing row. A dismissed alert reopens if the same
@@ -185,8 +185,18 @@ Run the CI gate locally before tagging a release:
    ```
 
 1. `npm ci` to install exactly the audited lockfile.
-2. `npm run audit:dependencies` (production findings fail; the only accepted
-   finding is the dev-only `braces` chain pulled in by the ESLint plugin).
+2. `npm run audit:dependencies`. The first half (`--omit=dev
+   --audit-level=low`) must report zero findings: anything reachable from
+   production code fails the build. The second half only fails on *critical*
+   dev findings, so a residue of dev-only moderates is accepted - currently 9,
+   in the `vitest` / `@vitest/mocker` and `@typescript-eslint` → `minimatch`
+   chains. Do not clear that residue with a blanket `npm audit fix`, which can
+   pull a major version of a test tool; bump the offending dev dependency
+   deliberately instead.
+
+   Production advisories can be published at any time and will turn CI red on
+   this step before a single test runs, so re-run it locally rather than
+   assuming the last green run still holds.
 3. `npx prisma validate && npm run test:db:migrate`.
 4. `npx eslint --max-warnings 0 && npm run typecheck`.
 5. `npm run test:pricing && npm test && npm run test:integration`.
@@ -210,8 +220,8 @@ the queue-health checks mean anything.
    lint, typecheck, unit, integration, build, browser) against an ephemeral
    Postgres service, so a green run is the evidence that this release candidate
    works. It needs no repository secrets.
-2. Ask production what it is actually missing, rather than trusting a count
-   from a plan or a PR description — migrations are added between releases:
+2. Ask production what it is actually missing, rather than trusting a count from
+   a plan or a PR description — migrations are added between releases:
 
    ```bash
    npx prisma migrate status   # against the production DATABASE_URL
@@ -219,20 +229,22 @@ the queue-health checks mean anything.
 
    Whatever it lists as not yet applied is exactly what `migrate deploy` will
    run in step 6.
-3. Capture a restore point. `20261110100000_drop_deprecated_user_business_columns`
-   is destructive and has no down migration, so before this release set:
+3. Capture a restore point.
+   `20261110100000_drop_deprecated_user_business_columns` is destructive and has
+   no down migration, so before this release set:
 
-   - note the current Neon timestamp so a point-in-time branch can be created
-     at it, and
+   - note the current Neon timestamp so a point-in-time branch can be created at
+     it, and
    - run `.github/workflows/backup.yml` manually (`workflow_dispatch`) and wait
      for the verified dump artifact.
 
-   For a release whose migrations are all additive, the most recent nightly
-   dump is sufficient.
+   For a release whose migrations are all additive, the most recent nightly dump
+   is sufficient.
 4. Confirm every Vercel environment variable is present and non-placeholder.
-   `assertProductionEnv()` ([`src/lib/env-validation.ts`](../src/lib/env-validation.ts))
-   throws at boot in production, so a bad value fails the deploy loudly instead
-   of degrading weeks later:
+   `assertProductionEnv()`
+   ([`src/lib/env-validation.ts`](../src/lib/env-validation.ts)) throws at boot
+   in production, so a bad value fails the deploy loudly instead of degrading
+   weeks later:
 
    - Required: `DATABASE_URL`, `NEXTAUTH_SECRET`, `CRON_SECRET`, `AWS_REGION`,
      `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `S3_BUCKET_NAME`.
@@ -242,17 +254,17 @@ the queue-health checks mean anything.
    - Queue timings are validated against each other, not merely for presence:
      `AI_BOOK_LEASE_MS` must exceed `DRAIN_BUDGET_MS` and be at least twice
      `AI_HEARTBEAT_MS`, and `DRAIN_BUDGET_MS` must stay under the drain routes'
-     60s `maxDuration`. Boot is refused otherwise, because the failure mode is
-     a live drainer being evicted mid-budget and its job double-claimed.
+     60s `maxDuration`. Boot is refused otherwise, because the failure mode is a
+     live drainer being evicted mid-budget and its job double-claimed.
 
    `CORS_ALLOWED_ORIGINS` must list every production origin; re-run
    `npm run s3:configure -- --apply` if any of them changed.
 5. Confirm the GitHub repository secrets and variables the workflows need:
 
-   | Workflow     | Required                                                       | Optional                                                                                     |
-   | ------------ | -------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-   | `drain.yml`  | `PROD_URL` (no trailing slash), `CRON_SECRET`                  | —                                                                                            |
-   | `backup.yml` | `DATABASE_URL`                                                 | `BACKUP_S3_BUCKET` + `AWS_REGION` variables, `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` secrets |
+   | Workflow     | Required                                      | Optional                                                                                           |
+   | ------------ | --------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+   | `drain.yml`  | `PROD_URL` (no trailing slash), `CRON_SECRET` | —                                                                                                  |
+   | `backup.yml` | `DATABASE_URL`                                | `BACKUP_S3_BUCKET` + `AWS_REGION` variables, `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` secrets |
 
    `CRON_SECRET` must be byte-identical to the Vercel value: the drain routes
    fail closed with `401` on a mismatch, which stops both queues silently. Note
@@ -262,34 +274,33 @@ the queue-health checks mean anything.
 
 6. Apply migrations explicitly: `npx prisma migrate deploy` against the
    production `DATABASE_URL`. (`npm run build` only regenerates the client.)
-7. Seed the managed starter templates: `npx prisma db seed`. **This is
-   required, not optional**: autonomous AI book generation only offers
-   templates that pass the shared preflight, and a job enqueued with no
-   `aiReady` template available fails terminally at `CONCEPT` with
-   `This template is not AI-ready yet`. Seeding is idempotent — recipes are
-   matched by `Submission.managedKey`, so re-running updates the three
-   seed-owned templates and never touches an admin-authored one (whose
-   `managedKey` is `NULL`).
-8. Confirm the AI template inventory is non-empty before announcing the
-   feature:
+7. Seed the managed starter templates: `npx prisma db seed`. **This is required,
+   not optional**: autonomous AI book generation only offers templates that pass
+   the shared preflight, and a job enqueued with no `aiReady` template available
+   fails terminally at `CONCEPT` with `This template is not AI-ready yet`.
+   Seeding is idempotent — recipes are matched by `Submission.managedKey`, so
+   re-running updates the three seed-owned templates and never touches an
+   admin-authored one (whose `managedKey` is `NULL`).
+8. Confirm the AI template inventory is non-empty before announcing the feature:
 
    ```bash
    psql "$DATABASE_URL" -c 'SELECT count(*) AS ai_ready_templates FROM "Submission" \
      WHERE "isTemplate" = true AND "aiReady" = true AND status = '\''APPROVED'\'';'
    ```
 
-   A count of `0` means every AI book request will fail. Publish a template
-   from `/admin/templates` or re-run the seed.
+   A count of `0` means every AI book request will fail. Publish a template from
+   `/admin/templates` or re-run the seed.
 9. If online checkout is enabled, confirm the Stripe dashboard has a webhook
    endpoint for `https://<production-origin>/api/stripe/webhook` subscribed to
    `checkout.session.completed` and `checkout.session.expired`, and that
    `STRIPE_WEBHOOK_SECRET` is that endpoint's signing secret. A missing or
-   mismatched endpoint fails silently: buyers are still charged, but every
-   order stays `PENDING_PAYMENT` and vault entries are never created.
-10. Verify `GET /api/health` returns `200` after deploy, then trigger `drain.yml`
-    manually once so `/api/queue/health` has a drain heartbeat. Also confirm a
-    logged-out `GET /dashboard` returns `307` to `/login?callbackUrl=...`; page
-    protection depends on the `Proxy` entry in the build.
+   mismatched endpoint fails silently: buyers are still charged, but every order
+   stays `PENDING_PAYMENT` and vault entries are never created.
+10. Verify `GET /api/health` returns `200` after deploy, then trigger
+    `drain.yml` manually once so `/api/queue/health` has a drain heartbeat. Also
+    confirm a logged-out `GET /dashboard` returns `307` to
+    `/login?callbackUrl=...`; page protection depends on the `Proxy` entry in
+    the build.
 11. Check `/admin/queue` after the first scheduled drain, and `/admin/orders` to
     confirm the payment reconciliation banner is empty.
 12. Point an external uptime monitor at `/api/health` on a 1-minute interval and
@@ -308,9 +319,9 @@ the queue-health checks mean anything.
   long-running jobs.
 - **Failed job:** reproduce with the stored `errorMessage` and stage. AI jobs
   persist stage output, so a retry resumes from the last completed stage.
-- **Payment reconciliation banner on `/admin/orders`:** every entry is a
-  payment that was handled without failing, so money and fulfilment may
-  disagree. Work the action column in
+- **Payment reconciliation banner on `/admin/orders`:** every entry is a payment
+  that was handled without failing, so money and fulfilment may disagree. Work
+  the action column in
   [Payments and reconciliation](#payments-and-reconciliation), then dismiss.
 - **Orders stuck in `PENDING_PAYMENT` after buyers report paying:** the webhook
   is not reaching the app or its secret does not match. Check the endpoint's
