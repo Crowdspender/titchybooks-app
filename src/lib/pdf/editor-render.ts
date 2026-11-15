@@ -1,4 +1,6 @@
 import sharp from "sharp";
+import { layoutDesignText } from "@/lib/editor/design-text-layout";
+import { loadServerDesignFonts } from "./design-fonts-server";
 import { getImageCropRect } from "@/lib/editor/crop";
 import type { EditorElement, EditorScene } from "@/lib/editor/schema";
 import type { PanelDefinition } from "./layout";
@@ -35,6 +37,10 @@ function getImageHref(asset: AssetSource): string {
 }
 
 function renderTextElement(element: Extract<EditorElement, { type: "text" }>) {
+  if (element.typographyVersion) {
+    const layout = layoutDesignText(element);
+    return `<g opacity="${element.opacity}" transform="translate(${element.x} ${element.y}) rotate(${element.rotation})"><path fill="${element.color}" d="${layout.path}" /></g>`;
+  }
   // Same measurement as QA: a book that passes QA must wrap identically in print.
   const lines = wrapTextLines(element.text, element.width, {
     fontSize: element.fontSize,
@@ -219,6 +225,7 @@ export async function renderSceneTile(
   targetHeightPx: number,
   assets: Map<string, AssetSource>
 ): Promise<Buffer> {
+  loadServerDesignFonts(scene.elements);
   const scale = Math.min(
     targetWidthPx / scene.page.widthPx,
     targetHeightPx / scene.page.heightPx

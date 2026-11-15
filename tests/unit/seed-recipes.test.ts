@@ -23,11 +23,12 @@ function recipeBackgrounds(recipe: (typeof SEED_RECIPES)[number]) {
 }
 
 describe("starter recipes", () => {
-  it("ships the three text-first books the catalog promises", () => {
+  it("retains original recipes and adds a separately managed guided story", () => {
     expect(SEED_RECIPES.map((recipe) => recipe.key)).toEqual([
       "seed-story-v1",
       "seed-guide-v1",
       "seed-promo-v1",
+      "seed-story-guided-v1",
     ]);
     // Keys are the seed's ownership identity, so they must be unique.
     expect(new Set(SEED_RECIPES.map((recipe) => recipe.key)).size).toBe(SEED_RECIPES.length);

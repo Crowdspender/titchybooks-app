@@ -7,7 +7,7 @@ import {
 } from '../fixtures/database';
 import { prisma } from '@/lib/prisma';
 import type { Prisma } from '@prisma/client';
-import { SEED_RECIPES, type SeedTextElement } from '../../prisma/seed-recipes';
+import { SEED_RECIPES, elementSeeds, type SeedTextElement } from '../../prisma/seed-recipes';
 
 // The fake LLM fills every generated slot of the starter recipe, because the
 // pipeline refuses a plan that skips a required slot. Tests override individual
@@ -15,24 +15,61 @@ import { SEED_RECIPES, type SeedTextElement } from '../../prisma/seed-recipes';
 const ai = vi.hoisted(() => ({
   texts: {} as Record<string, string>,
   flagged: false,
+  /** Count of content-plan calls the stub provider has served. */
+  calls: 0,
+  /**
+   * When set, interior body slots return the short stub on the first plan call
+   * and the full-length body afterwards, so the paginator reports flow-underfull
+   * once and the repair expands the manuscript to fill the book.
+   */
+  shortFirst: false,
+  recipeIndex: 0,
+  palette: 'mist',
+  prompts: [] as string[],
 }));
 
 const RECIPE = SEED_RECIPES[0];
 const GENERATED_SLOTS = RECIPE.elements.filter(
   (element): element is SeedTextElement => element.kind === 'text' && !element.locked,
 );
-const BODY_TEXT = 'Rain taps softly on the window while the lantern glows beside the bed.';
+const BODY_SLOT_IDS = GENERATED_SLOTS.filter((element) => element.id.endsWith('-body')).map((element) => element.id);
+// A full page of prose. Six of these pack the interior manuscript to roughly the
+// middle of the measured character window, so pages 2-6 fill completely and
+// PAGE_7 carries a real closing page without overflowing.
+const BODY_TEXT =
+  'The lantern glows beside the window while the rain taps softly on the glass. ' +
+  'Beyond the dunes the sea keeps its long, patient breathing, and the little house ' +
+  'holds its warmth against the dark. A child counts the falling drops and wonders ' +
+  'where the light goes when morning comes, but the wick answers nothing at all. It ' +
+  'only burns on, steadily and without hurry, which is enough to read by and enough ' +
+  'to dream by, until the pages blur and sleep leans in to carry the story onward.';
+// Above the body minimum but far short of a filled book: drives flow-underfull.
+const SHORT_BODY = 'Rain taps softly on the window while the lantern glows beside the bed.';
 const ROLE_TEXT: Record<string, string> = {
   'story-cover-title': 'A Rainy Day',
   'story-back-closing': 'Goodnight, little one. The lantern keeps its light until morning.',
+  'guide-cover-title': 'A Rainy Day',
+  'guide-back-closing': 'Goodnight, little one. The lantern keeps its light until morning.',
 };
+
+function slotText(id: string): string {
+  if (ai.texts[id] !== undefined) return ai.texts[id];
+  if (ROLE_TEXT[id] !== undefined) return ROLE_TEXT[id];
+  if (id.endsWith('-heading')) return 'How the lantern keeps its light until morning';
+  if (ai.shortFirst && ai.calls <= 1 && id.endsWith('-body')) return SHORT_BODY;
+  return BODY_TEXT;
+}
 
 function fakePlan() {
   return {
+    version: 2,
+    brief: { purpose: 'A finished story', audience: 'Families', tone: 'Warm', progression: 'From rain to morning' },
+    outline: [{ pageLabel: 'FRONT_COVER', purpose: 'Introduce the story' }],
+    palette: ai.palette,
     title: 'A Rainy Day',
-    overrides: GENERATED_SLOTS.map((element) => ({
+    overrides: SEED_RECIPES[ai.recipeIndex].elements.filter((element): element is SeedTextElement => element.kind === 'text' && !element.locked).map((element) => ({
       templateElementId: element.id,
-      text: ai.texts[element.id] ?? ROLE_TEXT[element.id] ?? BODY_TEXT,
+      text: slotText(element.id),
     })),
   };
 }
@@ -47,7 +84,11 @@ vi.mock('@/lib/ai/client', () => ({
   getOpenAIClient: () => ({
     chat: {
       completions: {
-        create: async () => ({ choices: [{ message: { content: JSON.stringify(fakePlan()) } }] }),
+        create: async (request: { messages: Array<{ content: string }> }) => {
+          ai.prompts.push(request.messages.map((message) => message.content).join('\n'));
+          ai.calls += 1;
+          return { choices: [{ message: { content: JSON.stringify(fakePlan()) } }] };
+        },
       },
     },
     moderations: { create: async () => ({ results: [{ flagged: ai.flagged }] }) },
@@ -109,11 +150,21 @@ import {
 } from '@/lib/ai/ai-book-job';
 import { processAiBookJob } from '@/lib/ai/pipeline';
 import { parseArtifactManifest } from '@/lib/pdf/artifacts';
+import { buildManifestFromRows, parsePinnedTemplate } from '@/lib/ai/template-contract';
+import { isPrintSafeColor, printSafetyIssues } from '@/lib/ai/print-palette';
+import type { ContentPlan } from '@/lib/ai/content-plan';
+import { interiorFlowPages } from '@/lib/ai/flow';
+import { measureTextBlock, type TextStyle } from '@/lib/pdf/text-layout';
+import type { PageLabel } from '@/lib/constants';
 
 interface QaCheckOut { id: string; passed: boolean; detail: string; severity: string }
+interface FlowIssueOut { code: string; message: string; slotId: string | null; pageLabel: string | null }
 interface StageOutput {
   templateId?: string;
-  contentPlan?: { title: string };
+  contentPlan?: ContentPlan;
+  manuscriptPlan?: ContentPlan;
+  pinnedTemplate?: unknown;
+  flowIssues?: FlowIssueOut[];
   qaReport?: { passed: boolean; checks: QaCheckOut[] };
   qaSampled?: boolean;
 }
@@ -124,6 +175,11 @@ let templateId: string;
 beforeEach(async () => {
   ai.texts = {};
   ai.flagged = false;
+  ai.calls = 0;
+  ai.shortFirst = false;
+  ai.recipeIndex = 0;
+  ai.palette = 'mist';
+  ai.prompts = [];
   storage.objects.clear();
   const created = await createUser();
   user = { id: created.id, role: created.role };
@@ -137,6 +193,25 @@ afterAll(async () => { await prisma.$disconnect(); await db.$disconnect(); });
 /** Force a queued job to become claimable immediately (bypass the retry delay). */
 async function makeDue(id: string) {
   await db.aiBookJob.update({ where: { id }, data: { nextAttemptAt: new Date(0) } });
+}
+
+// The interior flow geometry, rebuilt from the same recipe the fixture template
+// was created from, so a composed page can be measured exactly as QA measures it.
+const FLOW_PAGES = interiorFlowPages(
+  buildManifestFromRows({
+    templateId: 'recipe',
+    templateVersion: 1,
+    rows: elementSeeds(RECIPE).map((row) => ({ pageLabel: row.pageLabel, elementJson: row.elementJson })),
+  }).manifest,
+);
+
+/** Read the composed override text for one slot on one page of a submission. */
+async function composedOverride(submissionId: string, pageLabel: PageLabel, slotId: string): Promise<string> {
+  const page = await db.submissionPage.findUniqueOrThrow({
+    where: { submissionId_pageLabel: { submissionId, pageLabel } },
+  });
+  const scene = JSON.parse(page.sceneJson) as { templateTextOverrides?: Record<string, string> };
+  return scene.templateTextOverrides?.[slotId] ?? '';
 }
 
 describe('autonomous AI book pipeline', () => {
@@ -182,6 +257,35 @@ describe('autonomous AI book pipeline', () => {
     });
     const scene = JSON.parse(cover.sceneJson) as { templateTextOverrides?: Record<string, string> };
     expect(scene.templateTextOverrides).toMatchObject({ 'story-cover-title': 'A Rainy Day' });
+    const pin = parsePinnedTemplate(submission.pinnedTemplate)!;
+    expect(printSafetyIssues(pin)).toEqual([]);
+    expect(output.pinnedTemplate).toEqual(submission.pinnedTemplate);
+    expect(output.contentPlan?.palette).toBe('mist');
+    expect(output.manuscriptPlan?.overrides.find((entry) => entry.templateElementId === BODY_SLOT_IDS[0])?.text).toBe(BODY_TEXT);
+  });
+
+  it('composes a print-safe guide from a navy template without changing its source', async () => {
+    ai.recipeIndex = 1;
+    ai.palette = 'sage';
+    const template = await createAiReadyTemplate(user.id, SEED_RECIPES[1]);
+    const sourceBefore = await db.submissionPage.findMany({ where: { submissionId: template.id }, orderBy: { order: 'asc' } });
+    const sourceElements = await db.templateElement.findMany({ where: { templateId: template.id }, orderBy: { order: 'asc' } });
+    const { jobId } = await enqueueAiBookJob(user.id, 'a guide to lanterns', template.id);
+    await processAiBookJob((await claimAiBookJob())!);
+    const stored = await db.aiBookJob.findUniqueOrThrow({ where: { id: jobId } });
+    expect(stored.status).toBe('COMPLETED');
+    const book = await db.submission.findUniqueOrThrow({ where: { id: stored.submissionId! } });
+    const pin = parsePinnedTemplate(book.pinnedTemplate)!;
+    expect(printSafetyIssues(pin)).toEqual([]);
+    expect(pin.pages.find((page) => page.pageLabel === 'FRONT_COVER')?.backgroundColor).toBe('#eef5ee');
+    const pages = await db.submissionPage.findMany({ where: { submissionId: book.id } });
+    for (const page of pages) {
+      const background = (JSON.parse(page.sceneJson) as { page: { backgroundColor: string } }).page.backgroundColor;
+      expect(isPrintSafeColor(background)).toBe(true);
+      expect(background).toBe(pin.pages.find((entry) => entry.pageLabel === page.pageLabel)?.backgroundColor);
+    }
+    expect(await db.submissionPage.findMany({ where: { submissionId: template.id }, orderBy: { order: 'asc' } })).toEqual(sourceBefore);
+    expect(await db.templateElement.findMany({ where: { templateId: template.id }, orderBy: { order: 'asc' } })).toEqual(sourceElements);
   });
 
   it('honors the QA sampling rate when flagging for admin spot-check', async () => {
@@ -197,9 +301,10 @@ describe('autonomous AI book pipeline', () => {
   });
 
   it('regenerates CONTENT on a retryable QA failure and reuses the same submission', async () => {
-    // Wide uppercase text that still fits the character budget but overflows the
-    // box when measured, so it survives plan validation and fails QA `text-fits`.
-    ai.texts['story-page2-body'] = 'MMMM '.repeat(104);
+    // Wide uppercase text in the back-cover closing slot (which pagination does
+    // not repack): it still fits the character budget but overflows the box when
+    // measured, so it survives plan validation and fails QA `text-fits`.
+    ai.texts['story-back-closing'] = 'MMMM '.repeat(104);
     const { jobId } = await enqueueAiBookJob(user.id, 'a very long book', templateId);
 
     await processAiBookJob((await claimAiBookJob())!);
@@ -217,8 +322,30 @@ describe('autonomous AI book pipeline', () => {
     expect(output.qaReport?.checks.some((c) => c.id === 'text-fits' && !c.passed)).toBe(true);
   });
 
+  it('repairs QA text from the original manuscript without repagination drift or palette changes', async () => {
+    ai.texts['story-back-closing'] = 'MMMM '.repeat(104);
+    const { jobId } = await enqueueAiBookJob(user.id, 'a story with a repaired closing', templateId);
+    await processAiBookJob((await claimAiBookJob())!);
+    const queued = await db.aiBookJob.findUniqueOrThrow({ where: { id: jobId } });
+    expect(queued.stage).toBe('CONTENT');
+    const before = await db.submission.findUniqueOrThrow({ where: { id: queued.submissionId! } });
+    const bodiesBefore = await Promise.all(FLOW_PAGES.map((page) => composedOverride(before.id, page.pageLabel, page.flow.id)));
+    ai.texts['story-back-closing'] = ROLE_TEXT['story-back-closing'];
+    ai.palette = 'peach'; // Repair responses cannot change the accepted palette.
+    await makeDue(jobId);
+    await processAiBookJob((await claimAiBookJob())!);
+    const stored = await db.aiBookJob.findUniqueOrThrow({ where: { id: jobId } });
+    expect(stored.status).toBe('COMPLETED');
+    expect(stored.submissionId).toBe(before.id);
+    const after = await db.submission.findUniqueOrThrow({ where: { id: before.id } });
+    expect(after.pinnedTemplate).toEqual(before.pinnedTemplate);
+    expect((stored.stageOutput as unknown as StageOutput).contentPlan?.palette).toBe('mist');
+    expect(await Promise.all(FLOW_PAGES.map((page) => composedOverride(before.id, page.pageLabel, page.flow.id)))).toEqual(bodiesBefore);
+    expect(ai.prompts.at(-1)).toContain(BODY_TEXT);
+  });
+
   it('exhausts retries on persistent QA failure and leaves the submission PENDING', async () => {
-    ai.texts['story-page2-body'] = 'MMMM '.repeat(104);
+    ai.texts['story-back-closing'] = 'MMMM '.repeat(104);
     const { jobId } = await enqueueAiBookJob(user.id, 'a very long book', templateId);
 
     let submissionId: string | null = null;
@@ -240,6 +367,69 @@ describe('autonomous AI book pipeline', () => {
     const submission = await db.submission.findUniqueOrThrow({ where: { id: submissionId! } });
     expect(submission.status).toBe('PENDING');
     expect(submission.aiGenerated).toBe(true);
+  });
+
+  it('expands an underfull manuscript through one flow repair and fills pages 2-6', async () => {
+    // The first plan is far too short to fill the interior, so the paginator
+    // reports flow-underfull and spends one repair cycle. The stub provider then
+    // returns full-length prose, which packs every interior page.
+    ai.shortFirst = true;
+    const { jobId } = await enqueueAiBookJob(user.id, 'a story that grows', templateId);
+
+    await processAiBookJob((await claimAiBookJob())!);
+    const queued = await db.aiBookJob.findUniqueOrThrow({ where: { id: jobId } });
+    expect(queued.status).toBe('QUEUED');
+    expect(queued.stage).toBe('CONTENT');
+    const queuedOutput = queued.stageOutput as unknown as StageOutput;
+    expect(queuedOutput.flowIssues?.some((issue) => issue.code === 'flow-underfull')).toBe(true);
+    expect(queuedOutput.contentPlan?.overrides.filter((entry) => BODY_SLOT_IDS.includes(entry.templateElementId)).map((entry) => entry.text)).toEqual(BODY_SLOT_IDS.map(() => SHORT_BODY));
+    expect(queuedOutput.manuscriptPlan).toEqual(queuedOutput.contentPlan);
+
+    // The repair expands the manuscript and the book then completes end-to-end.
+    await makeDue(jobId);
+    await processAiBookJob((await claimAiBookJob())!);
+    const stored = await db.aiBookJob.findUniqueOrThrow({ where: { id: jobId } });
+    expect(stored.status).toBe('COMPLETED');
+    expect(stored.errorMessage).toBeNull();
+
+    // Every interior page before the last fills to within one line of its box:
+    // text is packed to the last line that fits, never left half empty.
+    const submissionId = stored.submissionId!;
+    for (const page of FLOW_PAGES.slice(0, -1)) {
+      const text = await composedOverride(submissionId, page.pageLabel, page.flow.id);
+      const style: TextStyle = page.flow.style;
+      const height = measureTextBlock(text, page.flow.box.width, style).height;
+      const oneLine = style.fontSize * style.lineHeight;
+      expect(height).toBeLessThanOrEqual(page.flow.box.height + 0.01);
+      expect(page.flow.box.height - height).toBeLessThan(oneLine);
+    }
+  });
+
+  it('fails terminally when an overlong manuscript cannot condense to fit the pages', async () => {
+    // Every interior body slot is far longer than the book can hold. Pagination
+    // fills all six pages and still has text left over (flow-overflow). The stub
+    // provider cannot condense it, so the repair budget exhausts and the job
+    // fails rather than composing a silently truncated book.
+    const overlong = (
+      'The lantern glows beside the window while the rain taps softly on the glass and ' +
+      'the sea keeps its long patient breathing beyond the dunes all through the night. '
+    ).repeat(5).trim();
+    for (const id of BODY_SLOT_IDS) ai.texts[id] = overlong;
+    const { jobId } = await enqueueAiBookJob(user.id, 'an overlong book', templateId);
+
+    let stored;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      if (attempt > 1) await makeDue(jobId);
+      await processAiBookJob((await claimAiBookJob())!);
+      stored = await db.aiBookJob.findUniqueOrThrow({ where: { id: jobId } });
+    }
+
+    expect(stored!.status).toBe('FAILED');
+    expect(stored!.errorMessage).toContain('could not be fit');
+    // The overflow was reported, never truncated into a composed book.
+    const flowOutput = stored!.stageOutput as unknown as StageOutput;
+    expect(flowOutput.flowIssues?.some((issue) => issue.code === 'flow-overflow')).toBe(true);
+    expect(await db.submission.count({ where: { userId: user.id, aiGenerated: true } })).toBe(0);
   });
 
   it('fails terminally when no approved template with editable text exists', async () => {

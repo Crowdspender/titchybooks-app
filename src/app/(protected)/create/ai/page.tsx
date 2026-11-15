@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
+import OpenInEditorButton from "@/components/submissions/OpenInEditorButton";
 
 interface AiTemplate {
   id: string;
@@ -520,12 +521,7 @@ export default function AiCreatePage() {
 
           <div className="mt-6 flex flex-wrap items-center gap-2">
             {job?.submissionId && (
-              <Link
-                href={`/create?submissionId=${job.submissionId}`}
-                className="btn btn-outline"
-              >
-                Open in editor
-              </Link>
+              <OpenInEditorButton submissionId={job.submissionId} />
             )}
             <Link href="/dashboard" className="btn btn-outline">
               Go to dashboard
@@ -534,6 +530,15 @@ export default function AiCreatePage() {
               Create another
             </button>
           </div>
+          {job?.submissionId && (
+            <p
+              className="mt-3 text-xs"
+              style={{ color: "var(--color-text-subtle)" }}
+            >
+              Editing opens a copy, so this approved book and its PDFs stay
+              exactly as they are.
+            </p>
+          )}
         </div>
       )}
 

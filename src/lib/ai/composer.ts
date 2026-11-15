@@ -3,6 +3,9 @@ import { sanitizeAiText } from "./protocol";
 import type { ContentPlan } from "./content-plan";
 import { describePlaceholderText, findUnsupportedCharacters, type BookSlotRole } from "./book-contract";
 import { generatedSlots, type AiTemplateManifest } from "./template-contract";
+import { loadServerDesignFonts } from '@/lib/pdf/design-fonts-server';
+import { layoutDesignText } from '@/lib/editor/design-text-layout';
+import type { DesignText } from '@/lib/editor/design-fonts';
 
 /**
  * A text slot the AI may fill. Geometry lives in the template; the pipeline
@@ -17,6 +20,7 @@ export interface TemplateTextSlot {
   minChars?: number;
   /** Template default text, shown to the model as a hint. */
   text?: string;
+  guidedElement?: DesignText;
 }
 
 export type OverridesByPage = Record<string, Record<string, string>>;
@@ -38,6 +42,13 @@ export interface ValidatePlanOptions {
   requireAllRequired?: boolean;
   /** Restrict the plan to a subset of slots (targeted repair). */
   allowedSlotIds?: ReadonlySet<string>;
+  /**
+   * Interior body slots the paginator redistributes server-side. Per-slot
+   * length and fit checks are meaningless for them (the measured repack
+   * decides what each page holds), so they are skipped; content guards still
+   * apply to every slot.
+   */
+  flow?: { flowSlotIds: ReadonlySet<string> };
 }
 
 /** Slots the composer accepts, derived from the pinned template manifest. */
@@ -50,6 +61,7 @@ export function slotsFromManifest(manifest: AiTemplateManifest): TemplateTextSlo
     maxChars: slot.maxChars,
     minChars: slot.minChars,
     text: slot.text,
+    ...(slot.style.typographyVersion ? { guidedElement: { id: slot.id, type: 'text' as const, ...slot.box, ...slot.style, fontFamily: slot.fontFamily, text: slot.text, rotation: 0, opacity: 1, visible: true, locked: false, zIndex: 0, color: '#000000', align: 'left' as const, verticalAlign: 'top' as const } } : {}),
   }));
 }
 
@@ -114,7 +126,24 @@ export function validatePlanAgainstSlots(
       );
       continue;
     }
-    if (slot.maxChars !== undefined && text.trim().length > slot.maxChars) {
+    const isFlowSlot = options.flow?.flowSlotIds.has(slot.id) ?? false;
+    if (slot.guidedElement) {
+      try {
+        const element = { ...slot.guidedElement, text };
+        loadServerDesignFonts([element]);
+        const layout = layoutDesignText(element);
+        // Flow slots are repacked by the measured paginator, so only the
+        // unfixable font/glyph failures are reported for them here.
+        if (!isFlowSlot && (layout.height > element.height || layout.maxLineWidth > element.width || layout.bounds.y2 > element.height || layout.bounds.x2 > element.width)) {
+          issues.push(issue('guided-overflow', `Element "${slot.id}" overflows with the resolved typography`, slot));
+          continue;
+        }
+      } catch (error) {
+        issues.push(issue('guided-font', error instanceof Error ? error.message : 'Qualified font unavailable', slot));
+        continue;
+      }
+    }
+    if (!isFlowSlot && slot.maxChars !== undefined && text.trim().length > slot.maxChars) {
       issues.push(
         issue(
           "over-budget",

@@ -1,6 +1,7 @@
 "use client";
 
 import type { EditorElement } from "@/lib/editor/schema";
+import { isProtectedDesign } from "@/lib/editor/design";
 
 interface LayerPanelProps {
   elements: EditorElement[];
@@ -83,7 +84,8 @@ export default function LayerPanel({
                   Template Elements
                 </p>
                 {orderedTemplateElements.map((element, index) => {
-                  const isTextEditable = element.type === "text";
+                  const isTextEditable = element.type === "text" &&
+                    !element.locked && !isProtectedDesign(element);
                   const isSelected = selectedElementId === element.id;
                   return (
                     <TemplateLayerItem

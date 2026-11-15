@@ -6,6 +6,8 @@ import type { EditorElement, EditorScene } from "@/lib/editor/schema";
 import { calculateImageElementDpi } from "@/lib/editor/validation";
 import { measureTextBlock, type TextStyle } from "@/lib/pdf/text-layout";
 import { MIN_EFFECTIVE_DPI } from "@/lib/pdf/print-profile";
+import { loadServerDesignFonts } from '@/lib/pdf/design-fonts-server';
+import { preflightDesign } from '@/lib/editor/design-preflight';
 import {
   manifestCoversSubmission,
   parseArtifactManifest,
@@ -126,8 +128,11 @@ export function repairFeedback(report: QaReport): Array<{
  * Now backed by the shared layout engine: QA and rendering cannot disagree.
  */
 export function estimateTextFits(el: TextEl): boolean {
-  const metrics = measureTextBlock(el.text, Math.max(1, el.width), textStyleOf(el));
-  return metrics.height <= el.height;
+  try {
+    loadServerDesignFonts([el]);
+    const metrics = measureTextBlock(el.text, Math.max(1, el.width), textStyleOf(el));
+    return metrics.height <= el.height && metrics.maxLineWidth <= el.width;
+  } catch { return false; }
 }
 
 function textStyleOf(el: TextEl): TextStyle {
@@ -136,6 +141,7 @@ function textStyleOf(el: TextEl): TextStyle {
     fontWeight: el.fontWeight,
     letterSpacing: el.letterSpacing,
     lineHeight: el.lineHeight,
+    ...(el.typographyVersion ? { typographyVersion: el.typographyVersion, fontFamily: el.fontFamily, italic: el.italic, tracking: el.tracking, paragraphGap: el.paragraphGap, firstLineIndent: el.firstLineIndent } : {}),
   };
 }
 
@@ -340,8 +346,21 @@ export async function runQaChecklist(
     });
   }
 
-  const pinned = parsePinnedTemplate(submission.pinnedTemplate);
+  const pinned = submission.templateId ? parsePinnedTemplate(submission.pinnedTemplate) : null;
   const generatedIds = pinned ? new Set(generatedSlots(pinned.manifest).map((slot) => slot.id)) : null;
+  for (const page of pages) {
+    try {
+      loadServerDesignFonts(page.scene.elements);
+      for (const entry of preflightDesign(page.scene, page.pageLabel).filter(entry => entry.severity === 'error')) {
+        const element = page.scene.elements.find(element => element.id === entry.elementId);
+        const editableContent = generatedIds ? generatedIds.has(entry.elementId) : element && !element.locked && element.designRole !== 'brand' && element.designRole !== 'caption';
+        findings.push({ code: 'guided-design', severity: editableContent && (entry.code === 'overflow' || entry.code === 'glyphs') ? 'repair' : 'terminal', pageLabel: page.pageLabel, elementId: entry.elementId, detail: entry.message });
+      }
+    } catch (error) {
+      findings.push({ code: 'guided-fonts', severity: 'terminal', pageLabel: page.pageLabel, elementId: null, detail: error instanceof Error ? error.message : 'Font unavailable' });
+      return { passed: false, checks: [{ id: 'guided-fonts', passed: false, severity: 'terminal', detail: 'Qualified font unavailable' }], findings, artifact: null };
+    }
+  }
   const texts = collectTexts(pages);
   const generatedTexts = generatedIds
     ? texts.filter((entry) => generatedIds.has(entry.element.id))
@@ -412,6 +431,8 @@ export async function runQaChecklist(
       });
       continue;
     }
+    // Guided text was checked with full glyph bounds above, including missing glyphs.
+    if (element.typographyVersion) continue;
     const metrics = measureTextBlock(element.text, element.width, textStyleOf(element));
     if (metrics.height > element.height) {
       findings.push({

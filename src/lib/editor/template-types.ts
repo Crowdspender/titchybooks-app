@@ -1,5 +1,6 @@
 import type { EditorElement, EditorScene } from "@/lib/editor/schema";
 import type { PageLabel } from "@/lib/constants";
+export type { StyleOverride, StyleProperty, DesignRole, PageDesign, DesignPalette } from "./design-schema";
 
 // ---------------------------------------------------------------------------
 // Renderable element – an EditorElement tagged with layer metadata in-memory.

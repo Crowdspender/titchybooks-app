@@ -1,4 +1,5 @@
 ﻿import { NextResponse } from 'next/server';
+import { Prisma } from '@prisma/client';
 import { z } from 'zod';
 import { auth } from '@/auth';
 import { prisma } from '@/lib/prisma';
@@ -24,7 +25,12 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
         const scene = { version: page.scene.version, page: page.scene.page, elements: page.scene.elements };
         await tx.submissionPage.update({ where: { id: existing.id }, data: { sceneJson: JSON.stringify(scene), revision: { increment: 1 } } });
       }
-      return tx.submission.update({ where: { id }, data: { templateId: null, templateVersion: null, revision: { increment: 1 } }, include: { pages: true } });
+      // The pages now carry every element, so the pin is dead weight — and an
+      // active one: applying it on top of the materialized scenes would render
+      // each element twice.
+      return tx.submission.update({ where: { id }, data: {
+        templateId: null, templateVersion: null, pinnedTemplate: Prisma.JsonNull, revision: { increment: 1 },
+      }, include: { pages: true } });
     });
     return NextResponse.json({ success: true, submission });
   } catch (error) { return errorResponse(error); }

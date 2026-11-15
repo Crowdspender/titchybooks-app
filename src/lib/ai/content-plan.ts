@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { PAGE_LABELS } from "@/lib/constants";
+import { PRINT_PALETTE_IDS, type PrintPaletteId } from "./print-palette";
 
 /**
  * Structured output contract for the CONTENT stage of the autonomous pipeline.
@@ -14,7 +15,10 @@ import { PAGE_LABELS } from "@/lib/constants";
  */
 const overrideSchema = z.object({
   templateElementId: z.string().min(1),
-  text: z.string().min(1).max(5000),
+  // Empty text is structurally valid so a paginated repair base (where a
+  // trailing page may momentarily hold no text) can round-trip; validation
+  // still rejects empty overrides for required slots as `empty-text`.
+  text: z.string().max(5000),
 });
 
 const outlineEntrySchema = z.object({
@@ -40,6 +44,9 @@ export const contentPlanV2Schema = z.object({
   brief: briefSchema,
   outline: z.array(outlineEntrySchema).min(1).max(8),
   title: z.string().min(1).max(120),
+  // Older plans omit this field. Unknown choices are discarded so composition
+  // can select a qualified template-hue default; arbitrary colors never pass.
+  palette: z.preprocess((value) => PRINT_PALETTE_IDS.includes(value as PrintPaletteId) ? value : undefined, z.enum(PRINT_PALETTE_IDS).optional()),
   overrides: z.array(overrideSchema),
 });
 
@@ -56,6 +63,7 @@ export interface ContentPlan {
   overrides: ContentOverride[];
   brief?: BookBrief;
   outline?: OutlineEntry[];
+  palette?: PrintPaletteId;
 }
 
 /** Parse and validate a raw LLM JSON string as a content plan. */
@@ -79,6 +87,7 @@ export function normalizeContentPlan(value: unknown): ContentPlan | null {
       overrides: v2.data.overrides,
       brief: v2.data.brief,
       outline: v2.data.outline,
+      ...(v2.data.palette ? { palette: v2.data.palette } : {}),
     };
   }
   const v1 = contentPlanV1Schema.safeParse(value);

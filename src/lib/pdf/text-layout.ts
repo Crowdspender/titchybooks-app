@@ -11,7 +11,16 @@
  * glyphs.
  */
 
+import { layoutDesignText, designTextCapacity } from '@/lib/editor/design-text-layout';
+import type { DesignText } from '@/lib/editor/design-fonts';
+
 export interface TextStyle {
+  fontFamily?: string;
+  typographyVersion?: 1;
+  italic?: boolean;
+  tracking?: number;
+  paragraphGap?: number;
+  firstLineIndent?: number;
   fontSize: number;
   fontWeight: number;
   letterSpacing: number;
@@ -91,6 +100,10 @@ export interface TextBlockMetrics {
 
 /** Measure a wrapped text block as it would be rendered into a box. */
 export function measureTextBlock(text: string, maxWidth: number, style: TextStyle): TextBlockMetrics {
+  if (style.typographyVersion) {
+    const result = layoutDesignText(designMetricElement(text, maxWidth, 100000, style));
+    return { lines: result.lines.map(line => line.text), lineCount: result.lines.length, height: result.height, maxLineWidth: result.maxLineWidth };
+  }
   const lines = wrapTextLines(text, maxWidth, style);
   const lineStep = style.fontSize * style.lineHeight;
   return {
@@ -110,7 +123,12 @@ export function textFitsBox(text: string, width: number, height: number, style: 
  * Largest number of characters that can fit the box at the given style.
  * Used to publish a text budget to the model and to reject overlong content.
  */
+function designMetricElement(text: string, width: number, height: number, style: TextStyle): DesignText {
+  return { id: 'metrics', type: 'text', x: 0, y: 0, width, height, rotation: 0, opacity: 1, locked: false, visible: true, zIndex: 0, text, color: '#000000', align: 'left', verticalAlign: 'top', ...style, fontFamily: style.fontFamily ?? 'Lora' };
+}
+
 export function maxCharsForBox(width: number, height: number, style: TextStyle): number {
+  if (style.typographyVersion) return designTextCapacity(designMetricElement('', width, height, style));
   const lineStep = Math.max(1, style.fontSize * style.lineHeight);
   const maxLines = Math.max(1, Math.floor(height / lineStep));
   const averageAdvance = Math.max(1, style.fontSize * 0.5 + style.letterSpacing);

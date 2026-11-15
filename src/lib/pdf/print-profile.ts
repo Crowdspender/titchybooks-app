@@ -92,6 +92,9 @@ export const AI_SUPPORTED_FONT_FAMILIES = [
   "Georgia",
   "Times New Roman",
   "Courier New",
+  "Lora",
+  "Source Sans 3",
+  "Nunito",
 ] as const;
 
 export function isSupportedFontFamily(family: string): boolean {

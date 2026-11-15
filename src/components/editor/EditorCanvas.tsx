@@ -13,6 +13,7 @@ import {
   Transformer,
 } from "react-konva";
 import type Konva from "konva";
+import GuidedCanvasText from "./GuidedCanvasText";
 import { getImageCropRect, getNormalizedZoomValue } from "@/lib/editor/crop";
 import type { EditorElement, EditorScene } from "@/lib/editor/schema";
 import {
@@ -218,6 +219,19 @@ function CanvasTextElement({
     transformerRef.current.nodes([nodeRef.current]);
     transformerRef.current.getLayer()?.batchDraw();
   }, [isSelected]);
+
+  if (element.typographyVersion) {
+    return (
+      <GuidedCanvasText
+        element={element}
+        scale={scale}
+        isSelected={isSelected}
+        onSelect={onSelect}
+        onDragEnd={onDragEnd}
+        onTransformEnd={onTransformEnd}
+      />
+    );
+  }
 
   return (
     <>
@@ -736,6 +750,16 @@ function TemplateLayerElement({
 
   if (element.type === "text") {
     const editable = isTextEditable;
+    if (element.typographyVersion) {
+      return (
+        <GuidedCanvasText
+          element={element}
+          scale={scale}
+          isSelected={isSelected}
+          onSelect={editable ? onSelect : undefined}
+        />
+      );
+    }
     return (
       <>
         <Text

@@ -20,8 +20,11 @@ import {
   validatePlanAgainstSlots,
   type PlanIssue,
   type TemplateTextSlot,
+  type ValidatePlanOptions,
 } from "./composer";
 import { normalizeContentPlan, type ContentPlan } from "./content-plan";
+import { interiorFlowPages, interiorFlowSlotIds, interiorFlowWindow, paginatePlan } from "./flow";
+import { applyPrintPalette, printSafetyIssues, selectPrintPalette } from "./print-palette";
 import { getOpenAIClient, getOpenAIModel } from "./client";
 import { hasTerminalFinding, isRetryable, repairFeedback, repairableSlotIds, runQaChecklist, type QaReport } from "./qa";
 import {
@@ -108,6 +111,9 @@ interface PipelineState {
   pinned: PinnedTemplate | null;
   manifest: AiTemplateManifest | null;
   contentPlan: ContentPlan | null;
+  /** Original section manuscript, before running heads and inline headings. */
+  manuscriptPlan: ContentPlan | null;
+  flowIssues: PlanIssue[] | null;
   qaReport: QaReport | null;
   qaTransient: number;
   submissionId: string | null;
@@ -157,9 +163,10 @@ function continuation(
   outcome: ContinueOutcome,
   stage: AiBookStage,
   jobId: string,
+  exhaustedMessage = "Automated QA rejected this book after the allowed repair attempts.",
 ): StageResult {
   if (outcome === "repair-exhausted") {
-    throw new AiBookTerminalError("Automated QA rejected this book after the allowed repair attempts.");
+    throw new AiBookTerminalError(exhaustedMessage);
   }
   if (outcome !== "queued") {
     console.info(JSON.stringify({ event: `ai-book-${outcome}`, jobId, stage }));
@@ -311,13 +318,20 @@ interface SlotSet {
   manifestSlots: AiTemplateSlot[];
   slots: TemplateTextSlot[];
   prompts: PromptSlot[];
+  /** Book-level interior character window published to the model. */
+  window: { min: number; max: number } | null;
+  /** Validation rules for model plans: flow slots skip per-slot fit checks. */
+  validateOptions: ValidatePlanOptions;
 }
 
 function slotSetOf(manifest: AiTemplateManifest): SlotSet {
+  const flowSlotIds = new Set(interiorFlowSlotIds(manifest).flow);
   return {
     manifestSlots: generatedSlots(manifest),
     slots: slotsFromManifest(manifest),
     prompts: promptSlots(generatedSlots(manifest)),
+    window: interiorFlowWindow(manifest),
+    validateOptions: { requireAllRequired: true, flow: { flowSlotIds } },
   };
 }
 
@@ -341,7 +355,7 @@ function syncTitle(plan: ContentPlan, slots: TemplateTextSlot[]): ContentPlan {
 
 async function writeContent(concept: string, set: SlotSet): Promise<ContentPlan> {
   const system = bookPlanSystemPrompt();
-  const user = bookPlanUserPrompt(concept, set.prompts);
+  const user = bookPlanUserPrompt(concept, set.prompts, set.window);
   let lastError = "The AI returned an invalid content plan.";
   for (let attempt = 0; attempt <= PLAN_ATTEMPTS; attempt++) {
     const prompt =
@@ -354,7 +368,7 @@ async function writeContent(concept: string, set: SlotSet): Promise<ContentPlan>
       continue;
     }
     const synced = syncTitle(plan, set.slots);
-    const validation = validatePlanAgainstSlots(synced, set.slots, { requireAllRequired: true });
+    const validation = validatePlanAgainstSlots(synced, set.slots, set.validateOptions);
     if (!validation.ok) {
       lastError = summarizeIssues(validation.issues);
       continue;
@@ -375,6 +389,7 @@ function mergeRepair(base: ContentPlan, patch: ContentPlan, targets: ReadonlySet
     brief: patch.brief ?? base.brief,
     outline: patch.outline ?? base.outline,
     title: titleChanges ? patch.title : base.title,
+    ...(base.palette ? { palette: base.palette } : {}),
     overrides: [...kept, ...repaired],
   };
 }
@@ -383,7 +398,7 @@ async function repairContent(
   concept: string,
   set: SlotSet,
   base: ContentPlan,
-  report: QaReport,
+  feedback: Array<{ slotId: string | null; pageLabel: string | null; code: string; detail: string }>,
   targets: ReadonlySet<string>,
 ): Promise<ContentPlan> {
   const targetPrompts = set.prompts.filter((slot) => targets.has(slot.id));
@@ -394,7 +409,7 @@ async function repairContent(
     slots: targetPrompts,
     title: base.title,
     accepted: base.overrides,
-    feedback: repairFeedback(report),
+    feedback,
   });
   let lastError = "The AI returned an invalid repair.";
   for (let attempt = 0; attempt <= PLAN_ATTEMPTS; attempt++) {
@@ -408,7 +423,7 @@ async function repairContent(
       continue;
     }
     const merged = syncTitle(mergeRepair(base, patch, targets, set.slots), set.slots);
-    const validation = validatePlanAgainstSlots(merged, set.slots, { requireAllRequired: true });
+    const validation = validatePlanAgainstSlots(merged, set.slots, set.validateOptions);
     if (!validation.ok) {
       lastError = summarizeIssues(validation.issues);
       continue;
@@ -418,17 +433,78 @@ async function repairContent(
   throw new Error(`The AI could not repair the rejected pages: ${lastError}`);
 }
 
-async function runContentStage(job: ClaimedAiBookJob, state: PipelineState): Promise<void> {
+async function runContentStage(job: ClaimedAiBookJob, state: PipelineState): Promise<StageResult> {
   if (!state.manifest) throw new AiBookTerminalError("Missing the pinned template.");
   const set = slotSetOf(state.manifest);
-  const repairTargets = state.qaReport ? repairableSlotIds(state.qaReport) : new Set<string>();
-  const plan =
-    state.contentPlan && state.qaReport && repairTargets.size > 0
-      ? await repairContent(job.concept, set, state.contentPlan, state.qaReport, repairTargets)
-      : await writeContent(job.concept, set);
+  let plan: ContentPlan;
+  if (state.contentPlan && state.flowIssues && state.flowIssues.length > 0) {
+    // A previous claim paginated this plan and found the story did not fill
+    // (or exceeded) the book: repair the interior manuscript as a whole.
+    plan = await repairContent(
+      job.concept,
+      set,
+      state.contentPlan,
+      state.flowIssues.map((issue) => ({
+        slotId: issue.slotId,
+        pageLabel: issue.pageLabel,
+        code: issue.code,
+        detail: issue.message,
+      })),
+      new Set(interiorFlowSlotIds(state.manifest).interior),
+    );
+  } else {
+    const repairTargets = state.qaReport ? repairableSlotIds(state.qaReport) : new Set<string>();
+    // Paginated page boundaries no longer correspond to manuscript sections.
+    // Repair interior QA findings against the original manuscript as a whole,
+    // never feed generated continuation heads back into the paginator.
+    const interiorIds = interiorFlowSlotIds(state.manifest).interior;
+    if (interiorIds.some((id) => repairTargets.has(id))) interiorIds.forEach((id) => repairTargets.add(id));
+    plan =
+      state.contentPlan && state.qaReport && repairTargets.size > 0
+        ? await repairContent(job.concept, set, state.manuscriptPlan ?? state.contentPlan, repairFeedback(state.qaReport), repairTargets)
+        : await writeContent(job.concept, set);
+  }
 
-  state.contentPlan = plan;
-  await mustAdvance(job, AiBookStage.COMPOSE, { contentPlan: plan });
+  // Deterministic repack: every interior page fills to its last possible line
+  // before the story continues on the next page.
+  const paginated = paginatePlan({ manifest: state.manifest, overrides: plan.overrides });
+  const interior = new Set(paginated.interiorSlotIds);
+  const paginatedPlan: ContentPlan = {
+    ...plan,
+    overrides: [
+      ...plan.overrides.filter((entry) => !interior.has(entry.templateElementId)),
+      ...paginated.overrides,
+    ],
+  };
+  const headingIds = new Set(interiorFlowPages(state.manifest).flatMap((page) => page.heading ? [page.heading.id] : []));
+  const validation =
+    paginated.issues.length === 0
+      ? validatePlanAgainstSlots(
+          paginatedPlan,
+          // Running heads may be abbreviated to fit. They still must be
+          // nonempty and fit, but a manuscript character minimum is irrelevant.
+          set.slots.map((slot) => headingIds.has(slot.id) ? { ...slot, minChars: 1 } : slot),
+          set.validateOptions,
+        )
+      : { ok: false as const, issues: paginated.issues };
+  if (!validation.ok) {
+    const outcome = await continueAiBook(job, {
+      stage: AiBookStage.CONTENT,
+      patch: { contentPlan: plan, manuscriptPlan: plan, flowIssues: validation.issues },
+      repair: true,
+    });
+    return continuation(
+      outcome,
+      AiBookStage.CONTENT,
+      job.id,
+      "The story could not be fit to the book's pages after the allowed repair attempts.",
+    );
+  }
+
+  state.contentPlan = paginatedPlan;
+  state.manuscriptPlan = plan;
+  state.flowIssues = null;
+  await mustAdvance(job, AiBookStage.COMPOSE, { contentPlan: paginatedPlan, manuscriptPlan: plan, flowIssues: null });
 }
 
 // --- COMPOSE: one transaction writes the draft and advances the job ------
@@ -443,11 +519,22 @@ async function runComposeStage(job: ClaimedAiBookJob, state: PipelineState): Pro
     throw new AiBookTerminalError("The content plan produced no text to compose.");
   }
   const actor: Actor = { id: job.userId, role: "USER" };
-  const pinned = state.pinned ?? undefined;
   const existingId = state.submissionId;
+  let pinned = state.pinned ?? undefined;
+  // Recolor only when creating a new AI book. A QA rewrite retains its pin;
+  // templates and already-generated submissions are never recolored in place.
+  if (!existingId) {
+    if (!pinned) throw new AiBookTerminalError("Missing the pinned template for print-safe composition.");
+    const palette = selectPrintPalette(state.contentPlan.palette, pinned);
+    pinned = applyPrintPalette(pinned, palette);
+    const issues = printSafetyIssues(pinned);
+    if (issues.length) throw new AiBookTerminalError(`The book palette is not print-safe: ${issues.join("; ")}`);
+    state.contentPlan = { ...state.contentPlan, palette: palette.id };
+    if (state.manuscriptPlan) state.manuscriptPlan = { ...state.manuscriptPlan, palette: palette.id };
+  }
 
   let submissionId = existingId;
-  await mustAdvance(job, AiBookStage.RENDER, { contentPlan: state.contentPlan }, {}, async (tx) => {
+  await mustAdvance(job, AiBookStage.RENDER, { contentPlan: state.contentPlan, manuscriptPlan: state.manuscriptPlan, pinnedTemplate: pinned }, {}, async (tx) => {
     if (submissionId) {
       await rewriteInstanceOverrides(submissionId, overrides, { tx, title: state.contentPlan!.title });
       return { submissionId };
@@ -463,6 +550,8 @@ async function runComposeStage(job: ClaimedAiBookJob, state: PipelineState): Pro
   });
   if (!submissionId) throw new AiBookTerminalError("The book draft could not be created.");
   state.submissionId = submissionId;
+  state.pinned = pinned ?? null;
+  state.manifest = pinned?.manifest ?? state.manifest;
 }
 
 // --- RENDER: treat the render queue as a dependency, not a sub-step ------
@@ -675,6 +764,24 @@ function restoreQaReport(value: unknown): QaReport | null {
   };
 }
 
+/** Restore persisted pagination feedback so a resumed claim repairs the flow. */
+function restoreFlowIssues(value: unknown): PlanIssue[] | null {
+  if (!Array.isArray(value) || value.length === 0) return null;
+  const issues: PlanIssue[] = [];
+  for (const entry of value) {
+    if (!entry || typeof entry !== "object") continue;
+    const candidate = entry as Partial<PlanIssue>;
+    if (typeof candidate.code !== "string" || typeof candidate.message !== "string") continue;
+    issues.push({
+      code: candidate.code,
+      message: candidate.message,
+      slotId: typeof candidate.slotId === "string" ? candidate.slotId : null,
+      pageLabel: typeof candidate.pageLabel === "string" ? candidate.pageLabel : null,
+    });
+  }
+  return issues.length > 0 ? issues : null;
+}
+
 function initialState(job: ClaimedAiBookJob): PipelineState {
   const output = (job.stageOutput ?? {}) as Record<string, unknown>;
   const pinned = parsePinnedTemplate(output.pinnedTemplate);
@@ -683,6 +790,8 @@ function initialState(job: ClaimedAiBookJob): PipelineState {
     pinned,
     manifest: pinned?.manifest ?? null,
     contentPlan: normalizeContentPlan(output.contentPlan),
+    manuscriptPlan: normalizeContentPlan(output.manuscriptPlan),
+    flowIssues: restoreFlowIssues(output.flowIssues),
     qaReport: restoreQaReport(output.qaReport),
     qaTransient: Number(output.qaTransient ?? 0) || 0,
     submissionId: job.submissionId ?? (output.submissionId as string | undefined) ?? null,
@@ -746,7 +855,7 @@ export async function processAiBookJob(
       if (stage === AiBookStage.CONCEPT) {
         await runConceptStage(job, state);
       } else if (stage === AiBookStage.CONTENT) {
-        await runContentStage(job, state);
+        result = await runContentStage(job, state);
       } else if (stage === AiBookStage.COMPOSE) {
         await runComposeStage(job, state);
       } else if (stage === AiBookStage.RENDER) {

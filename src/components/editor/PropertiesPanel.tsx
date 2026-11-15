@@ -12,6 +12,14 @@ import {
   getElementDpi,
 } from "@/lib/editor/validation";
 import ColorPicker from "./ColorPicker";
+import {
+  DESIGN_ROLES,
+  type DesignRole,
+  SPACING_LIMITS,
+  type SpacingProperty,
+  STYLE_PROPERTIES,
+} from "@/lib/editor/design-schema";
+import { isProtectedDesign } from "@/lib/editor/design";
 
 interface PropertiesPanelProps {
   selectedElement: RenderableEditorElement | null;
@@ -26,6 +34,8 @@ interface PropertiesPanelProps {
   onBringForward: (elementId: string) => void;
   onSendBackward: (elementId: string) => void;
   isInstanceMode?: boolean;
+  isTemplateAuthor?: boolean;
+  guidedTypography?: boolean;
   /** Original (non-overridden) text of the selected template text element. */
   templateTextOriginal?: string;
   /** Clears the per-instance text override, restoring template default. */
@@ -67,6 +77,8 @@ export default function PropertiesPanel({
   onBringForward,
   onSendBackward,
   isInstanceMode = false,
+  isTemplateAuthor = false,
+  guidedTypography = false,
   templateTextOriginal,
   onResetTemplateText,
   assetDimensions,
@@ -78,7 +90,8 @@ export default function PropertiesPanel({
   if (
     selectedElement && isInstanceMode &&
     selectedElement.layer === "template" &&
-    selectedElement.type === "text"
+    selectedElement.type === "text" && !selectedElement.locked &&
+    !isProtectedDesign(selectedElement)
   ) {
     const isOverridden = templateTextOriginal !== undefined &&
       selectedElement.text !== templateTextOriginal;
@@ -107,8 +120,8 @@ export default function PropertiesPanel({
             className="text-xs leading-5"
             style={{ color: "var(--color-secondary)" }}
           >
-            You can edit the text content of this template element. Its
-            position, size, and styling are fixed by the template.
+            Edit this text here and its permitted typography in Book Design. The
+            template keeps its position and frame size fixed.
           </p>
         </div>
 
@@ -239,6 +252,195 @@ export default function PropertiesPanel({
           {selectedElement.type}
         </p>
       </div>
+
+      {isTemplateAuthor && (
+        <details className="rounded-lg border p-3">
+          <summary className="cursor-pointer text-sm font-semibold">
+            Template design permissions
+          </summary>
+          <label className="mt-3 block text-xs">
+            Visual role (not an AI content role)
+            <select
+              aria-label="Visual role"
+              className="input mt-1"
+              value={selectedElement.designRole ?? ""}
+              onChange={(event) =>
+                onChangeElement(
+                  selectedElement.id,
+                  (element) => ({
+                    ...element,
+                    designRole: (event.target.value || undefined) as
+                      | DesignRole
+                      | undefined,
+                  }),
+                )}
+            >
+              <option value="">Untagged</option>
+              {DESIGN_ROLES.map((role) => <option key={role}>{role}</option>)}
+            </select>
+          </label>
+          {selectedElement.type === "text" && (
+            <>
+              <p className="mt-3 text-xs">
+                Allowed formatting (locked text remains protected)
+              </p>
+              <div className="mt-2 grid grid-cols-2 gap-2">
+                {STYLE_PROPERTIES.map((property) => (
+                  <label
+                    key={property}
+                    className="flex items-center gap-1 text-[11px]"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={(selectedElement.stylePolicy?.allowed ??
+                        STYLE_PROPERTIES).includes(property)}
+                      onChange={(event) =>
+                        onChangeElement(selectedElement.id, (element) => ({
+                          ...element,
+                          stylePolicy: {
+                            ...element.stylePolicy,
+                            allowed: event.target.checked
+                              ? [
+                                ...new Set([
+                                  ...(element.stylePolicy?.allowed ??
+                                    STYLE_PROPERTIES),
+                                  property,
+                                ]),
+                              ]
+                              : (element.stylePolicy?.allowed ??
+                                STYLE_PROPERTIES).filter((key) =>
+                                  key !== property
+                                ),
+                          },
+                        }))}
+                    />
+                    {property}
+                  </label>
+                ))}
+              </div>
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                {(["minFontSize", "maxFontSize"] as const).map((key) => (
+                  <label key={key} className="text-xs">
+                    {key === "minFontSize" ? "Minimum px" : "Maximum px"}
+                    <input
+                      aria-label={key}
+                      className="input mt-1"
+                      type="number"
+                      min="12"
+                      max="120"
+                      value={selectedElement.stylePolicy?.[key] ??
+                        (key === "minFontSize" ? 12 : 120)}
+                      onChange={(event) => {
+                        const value = Number(event.target.value);
+                        if (
+                          value < 12 || value > 120 ||
+                          (key === "minFontSize" &&
+                            value >
+                              (selectedElement.stylePolicy?.maxFontSize ??
+                                120)) ||
+                          (key === "maxFontSize" &&
+                            value <
+                              (selectedElement.stylePolicy?.minFontSize ?? 12))
+                        ) return;
+                        onChangeElement(
+                          selectedElement.id,
+                          (element) => ({
+                            ...element,
+                            stylePolicy: {
+                              allowed: [...STYLE_PROPERTIES],
+                              ...element.stylePolicy,
+                              [key]: value,
+                            },
+                          }),
+                        );
+                      }}
+                    />
+                  </label>
+                ))}
+              </div>
+              {(Object.keys(SPACING_LIMITS) as SpacingProperty[]).map(
+                (property) => {
+                  const [floor, ceiling] = SPACING_LIMITS[property];
+                  const range =
+                    selectedElement.stylePolicy?.limits?.[property] ??
+                      { min: floor, max: ceiling };
+                  return (
+                    <fieldset key={property} className="mt-3">
+                      <legend className="text-xs">{property} bounds</legend>
+                      <div className="grid grid-cols-2 gap-2">
+                        {(["min", "max"] as const).map((bound) => (
+                          <label key={bound} className="text-xs">
+                            {bound}
+                            <input
+                              aria-label={`${property} ${bound}`}
+                              className="input mt-1"
+                              type="number"
+                              step="0.01"
+                              min={floor}
+                              max={ceiling}
+                              value={range[bound]}
+                              onChange={(event) => {
+                                const value = Number(event.target.value);
+                                if (
+                                  !Number.isFinite(value) || value < floor ||
+                                  value > ceiling || (bound === "min"
+                                    ? value > range.max
+                                    : value < range.min)
+                                ) return;
+                                onChangeElement(
+                                  selectedElement.id,
+                                  (element) => ({
+                                    ...element,
+                                    stylePolicy: {
+                                      allowed: [...STYLE_PROPERTIES],
+                                      ...element.stylePolicy,
+                                      limits: {
+                                        ...element.stylePolicy?.limits,
+                                        [property]: {
+                                          ...range,
+                                          [bound]: value,
+                                        },
+                                      },
+                                    },
+                                  }),
+                                );
+                              }}
+                            />
+                          </label>
+                        ))}
+                      </div>
+                    </fieldset>
+                  );
+                },
+              )}
+            </>
+          )}
+          {selectedElement.type === "shape" && (
+            <label className="mt-3 block text-xs">
+              Palette binding<select
+                aria-label="Palette binding"
+                className="input mt-1"
+                value={selectedElement.paletteBinding ?? ""}
+                onChange={(event) =>
+                  onChangeElement(
+                    selectedElement.id,
+                    (element) => ({
+                      ...element,
+                      paletteBinding: (event.target.value || undefined) as
+                        | "ink"
+                        | "accent"
+                        | undefined,
+                    }),
+                  )}
+              >
+                <option value="">Protected original color</option>
+                <option value="ink">Ink</option>
+                <option value="accent">Accent</option>
+              </select>
+            </label>
+          )}
+        </details>
+      )}
 
       <div className="grid grid-cols-2 gap-3">
         <div>
@@ -388,44 +590,46 @@ export default function PropertiesPanel({
               />
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <FieldLabel>Font Size</FieldLabel>
-                <input
-                  type="number"
-                  value={selectedElement.fontSize}
-                  onChange={(event) => {
-                    const nextValue = Number(event.target.value);
-                    onChangeElement(selectedElement.id, (element) =>
-                      element.type === "text" &&
-                        Number.isFinite(nextValue) &&
-                        nextValue > 0
-                        ? {
-                          ...element,
-                          fontSize: nextValue,
-                        }
-                        : element);
-                  }}
-                  className={inputClass}
-                />
+            {!guidedTypography && (
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <FieldLabel>Font Size</FieldLabel>
+                  <input
+                    type="number"
+                    value={selectedElement.fontSize}
+                    onChange={(event) => {
+                      const nextValue = Number(event.target.value);
+                      onChangeElement(selectedElement.id, (element) =>
+                        element.type === "text" &&
+                          Number.isFinite(nextValue) &&
+                          nextValue > 0
+                          ? {
+                            ...element,
+                            fontSize: nextValue,
+                          }
+                          : element);
+                    }}
+                    className={inputClass}
+                  />
+                </div>
+                <div>
+                  <FieldLabel>Color</FieldLabel>
+                  <ColorPicker
+                    value={selectedElement.color}
+                    onChange={(color) => {
+                      onChangeElement(selectedElement.id, (element) =>
+                        element.type === "text"
+                          ? {
+                            ...element,
+                            color: color,
+                          }
+                          : element);
+                    }}
+                    className="w-full"
+                  />
+                </div>
               </div>
-              <div>
-                <FieldLabel>Color</FieldLabel>
-                <ColorPicker
-                  value={selectedElement.color}
-                  onChange={(color) => {
-                    onChangeElement(selectedElement.id, (element) =>
-                      element.type === "text"
-                        ? {
-                          ...element,
-                          color: color,
-                        }
-                        : element);
-                  }}
-                  className="w-full"
-                />
-              </div>
-            </div>
+            )}
           </>
         )
         : null}
@@ -716,8 +920,7 @@ export default function PropertiesPanel({
         </button>
         <button
           type="button"
-          onClick={() =>
-            onBringForward(selectedElement.id)}
+          onClick={() => onBringForward(selectedElement.id)}
           className={selectBtnClass}
         >
           Bring Front
@@ -726,8 +929,7 @@ export default function PropertiesPanel({
 
       <button
         type="button"
-        onClick={() =>
-          onDeleteElement(selectedElement.id)}
+        onClick={() => onDeleteElement(selectedElement.id)}
         className="btn btn-danger w-full"
       >
         Delete Element

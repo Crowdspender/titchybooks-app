@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { PAGE_LABELS } from "@/lib/constants";
+import { DESIGN_ROLES, pageDesignSchema, styleOverrideSchema, stylePolicySchema } from "./design-schema";
 import {
   EDITOR_DEFAULT_BACKGROUND_COLOR,
   EDITOR_MAX_ELEMENTS_PER_PAGE,
@@ -29,6 +30,9 @@ const baseElementSchema = z.object({
   locked: z.boolean(),
   visible: z.boolean(),
   zIndex: z.number().int().min(0),
+  designRole: z.enum(DESIGN_ROLES).optional(),
+  stylePolicy: stylePolicySchema.optional(),
+  paletteBinding: z.enum(["ink", "accent"]).optional(),
 });
 
 const imageElementSchema = baseElementSchema.extend({
@@ -54,6 +58,11 @@ const textElementSchema = baseElementSchema.extend({
   color: colorSchema,
   align: z.enum(["left", "center", "right"]),
   verticalAlign: z.enum(["top", "middle", "bottom"]).optional(),
+  typographyVersion: z.literal(1).optional(),
+  italic: z.boolean().optional(),
+  tracking: z.number().min(-0.02).max(0.12).optional(),
+  paragraphGap: z.number().min(0).max(1.5).optional(),
+  firstLineIndent: z.number().min(0).max(2).optional(),
 });
 
 const shapeElementSchema = baseElementSchema.extend({
@@ -78,6 +87,10 @@ export const editorSceneSchema = z.object({
     backgroundColor: colorSchema,
   }),
   elements: z.array(editorElementSchema).max(EDITOR_MAX_ELEMENTS_PER_PAGE),
+  design: pageDesignSchema.optional(),
+  backgroundOverride: colorSchema.optional(),
+  templateStyleOverrides: z.record(z.string().min(1), styleOverrideSchema).optional(),
+  elementStyleOverrides: z.record(z.string().min(1), styleOverrideSchema).optional(),
   // Instance-only: per-element text overrides for template text elements.
   // Keys are TemplateElement IDs (must reference a template element of type
   // "text"); values are the user's edited text content. Position, size,

@@ -1,5 +1,8 @@
 import { PAGE_LABELS, type PageLabel } from "@/lib/constants";
-import { editorSceneSchema } from "@/lib/editor/schema";
+import { editorSceneSchema, editorElementSchema } from "@/lib/editor/schema";
+import { loadServerDesignFonts } from "@/lib/pdf/design-fonts-server";
+import { preflightDesign } from "@/lib/editor/design-preflight";
+import { EDITOR_PAGE_WIDTH_PX, EDITOR_PAGE_HEIGHT_PX } from "@/lib/editor/constants";
 import { MIN_BODY_POINT_SIZE, isSupportedFontFamily, ptToScenePx } from "@/lib/pdf/print-profile";
 import {
   BOOK_PAGE_COUNT,
@@ -10,7 +13,7 @@ import {
   isBoxInsidePage,
   rectsOverlap,
 } from "./book-contract";
-import { buildManifestFromRows, generatedSlots, type AiTemplateManifest } from "./template-contract";
+import { buildManifestFromRows, buildTemplateManifest, generatedSlots, type AiTemplateManifest } from "./template-contract";
 
 /**
  * One preflight routine shared by AI publication, the AI catalog filter, and
@@ -169,13 +172,28 @@ export function preflightTemplateRows(
   },
   options: PreflightOptions = {},
 ): { result: PreflightResult; manifest: AiTemplateManifest } {
-  const { manifest, invalidElements } = buildManifestFromRows(input);
+  const parsedElements = input.rows.flatMap(row => {
+    try { const parsed = editorElementSchema.safeParse(JSON.parse(row.elementJson)); return parsed.success ? [{ pageLabel: row.pageLabel, element: parsed.data }] : []; }
+    catch { return []; }
+  });
+  let built: ReturnType<typeof buildManifestFromRows>;
+  try {
+    loadServerDesignFonts(parsedElements.map(row => row.element));
+    built = buildManifestFromRows(input);
+  } catch (error) {
+    return { result: { ok: false, issues: [issue('guided-fonts', error instanceof Error ? error.message : 'Qualified typography unavailable')] }, manifest: buildTemplateManifest({ templateId: input.templateId, templateVersion: input.templateVersion, pages: [] }) };
+  }
+  const { manifest, invalidElements } = built;
   const result = preflightManifest(manifest, options);
   for (const invalid of invalidElements) {
     const pageLabel = (PAGE_LABELS as readonly string[]).includes(invalid.pageLabel)
       ? (invalid.pageLabel as PageLabel)
       : null;
     result.issues.push(issue("invalid-element", invalid.reason, pageLabel));
+  }
+  for (const pageLabel of PAGE_LABELS) {
+    const pageIssues = preflightDesign({ version: 1, page: { widthPx: EDITOR_PAGE_WIDTH_PX, heightPx: EDITOR_PAGE_HEIGHT_PX, backgroundColor: input.pageBackgrounds?.get(pageLabel) ?? '#ffffff' }, elements: parsedElements.filter(row => row.pageLabel === pageLabel).map(row => row.element) }, pageLabel);
+    result.issues.push(...pageIssues.filter(entry => entry.severity === 'error').map(entry => issue('guided-design', entry.message, pageLabel, entry.elementId)));
   }
   result.ok = result.issues.length === 0;
   return { result, manifest };

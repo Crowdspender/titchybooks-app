@@ -5,6 +5,7 @@ const env = testEnvironment();
 Object.assign(process.env, env);
 export default defineConfig({
   testDir: './tests/browser',
+  outputDir: 'test-results/browser',
   fullyParallel: false,
   workers: 1,
   timeout: 90000,

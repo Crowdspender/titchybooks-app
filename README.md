@@ -57,24 +57,26 @@ Read these before changing anything that touches queues, payments or deploys.
    `APPROVED`, `aiReady` template exists — which is exactly what a
    migrated-but-unseeded database looks like.
 
-4. Start the app:
+4. Start the app with both queue workers:
+
+   ```bash
+   npm run dev:all
+   ```
+
+   This runs `next dev`, `worker:ai` and `worker:render` in one terminal, each
+   prefixed (`[app]`, `[ai]`, `[render]`), and stops them together if one fails.
+   Open <http://localhost:3000>.
+
+   The long-lived workers are what drain the PDF render and AI book queues
+   locally (on Vercel they are drained by secret-guarded routes on a cron — see
+   the runbook). Jobs sit in the queue until one of them is running, so if you
+   prefer separate terminals, start them yourself:
 
    ```bash
    npm run dev
-   ```
-
-   Open <http://localhost:3000>.
-
-5. The PDF render and AI book queues are drained by separate long-lived
-   processes locally (on Vercel they are drained by secret-guarded routes on a
-   cron — see the runbook):
-
-   ```bash
    npm run worker:render
    npm run worker:ai
    ```
-
-   Jobs sit in the queue until one of these is running.
 
 ## Testing
 

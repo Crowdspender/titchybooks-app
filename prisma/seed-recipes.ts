@@ -1,4 +1,6 @@
 import { PAGE_LABELS, type PageLabel } from "../src/lib/constants";
+import { STYLE_PROPERTIES, type DesignFamily, type DesignRole } from '../src/lib/editor/design-schema';
+import type { EditorElement } from '../src/lib/editor/schema';
 import {
   BACK_COVER_BRAND_TEXT,
   EDITOR_DEFAULT_BACKGROUND_COLOR,
@@ -29,6 +31,14 @@ export interface SeedTextElement {
   width: number;
   height: number;
   text: string;
+  fontFamily?: DesignFamily;
+  typographyVersion?: 1;
+  designRole?: DesignRole;
+  stylePolicy?: EditorElement['stylePolicy'];
+  paragraphGap?: number;
+  tracking?: number;
+  italic?: boolean;
+  firstLineIndent?: number;
   fontSize: number;
   fontWeight: number;
   lineHeight: number;
@@ -51,6 +61,7 @@ export interface SeedShapeElement {
   fill: string;
   stroke?: string;
   strokeWidth?: number;
+  paletteBinding?: 'ink' | 'accent';
 }
 
 export type SeedElement = SeedTextElement | SeedShapeElement;
@@ -410,7 +421,28 @@ const promo: SeedRecipe = {
   ],
 };
 
-export const SEED_RECIPES: SeedRecipe[] = [story, guide, promo];
+const guidedStory: SeedRecipe = {
+  key: 'seed-story-guided-v1',
+  title: 'Story Book · Classic',
+  background: Object.fromEntries(PAGE_LABELS.map(label => [label, '#fdf7ee'])),
+  elements: story.elements.map((element): SeedElement => {
+    if (element.kind === 'shape') return { ...element, id: `guided-${element.id}`, y: 480, stroke: '#b45309', paletteBinding: 'accent' };
+    const brand = element.id === 'brand-strip';
+    const title = element.id === 'story-cover-title';
+    const decoration = element.locked;
+    return {
+      ...element, id: `guided-${element.id}`, fontFamily: 'Lora', typographyVersion: 1,
+      designRole: brand ? 'brand' : decoration ? 'caption' : title ? 'coverTitle' : 'body',
+      fontWeight: title ? 700 : 400, fontSize: decoration ? element.fontSize : title ? 64 : 33,
+      lineHeight: title ? 1.15 : 1.45, tracking: decoration ? 0.1 : 0,
+      paragraphGap: decoration || title ? 0 : 0.5, firstLineIndent: 0, italic: false,
+      ...(title ? { y: 220, height: 240, verticalAlign: 'middle' as const } : {}),
+      stylePolicy: { allowed: decoration ? [] : [...STYLE_PROPERTIES], minFontSize: decoration ? 12 : 30, maxFontSize: title ? 100 : 60 },
+    };
+  }),
+};
+
+export const SEED_RECIPES: SeedRecipe[] = [story, guide, promo, guidedStory];
 
 /** Scene background for a page in a recipe. */
 export function backgroundFor(recipe: SeedRecipe, pageLabel: PageLabel): string {
@@ -437,6 +469,7 @@ export function elementJson(element: SeedElement, zIndex: number): string {
       type: "shape",
       shape: element.shape,
       fill: element.fill,
+      ...(element.paletteBinding ? { paletteBinding: element.paletteBinding } : {}),
       ...(element.stroke ? { stroke: element.stroke } : {}),
       ...(element.strokeWidth !== undefined ? { strokeWidth: element.strokeWidth } : {}),
     });
@@ -445,7 +478,8 @@ export function elementJson(element: SeedElement, zIndex: number): string {
     ...base,
     type: "text",
     text: element.text,
-    fontFamily: "Arial",
+    fontFamily: element.fontFamily ?? "Arial",
+    ...(element.typographyVersion ? { typographyVersion: element.typographyVersion, designRole: element.designRole, stylePolicy: element.stylePolicy, paragraphGap: element.paragraphGap, tracking: element.tracking, italic: element.italic, firstLineIndent: element.firstLineIndent } : {}),
     fontSize: element.fontSize,
     fontWeight: element.fontWeight,
     lineHeight: element.lineHeight,

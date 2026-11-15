@@ -3,8 +3,13 @@
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
-import { DraftPersistence, browserStorage, draftPointerStorage, type DocumentSeed } from "@/lib/editor/persistence";
-import { undoHistory, redoHistory } from "@/lib/editor/history";
+import {
+  browserStorage,
+  type DocumentSeed,
+  DraftPersistence,
+  draftPointerStorage,
+} from "@/lib/editor/persistence";
+import { redoHistory, undoHistory } from "@/lib/editor/history";
 import { toast } from "sonner";
 import {
   PAGE_LABEL_DISPLAY,
@@ -15,12 +20,26 @@ import type { EditorElement, EditorScene } from "@/lib/editor/schema";
 import { EDITOR_SAFE_MARGIN_PX } from "@/lib/editor/constants";
 import { createEmptySubmissionPageSeeds } from "@/lib/editor/validation";
 import { isTemplateElement, mergeLayers } from "@/lib/editor/template-merge";
+import { parsePinnedTemplate } from "@/lib/ai/template-contract";
 import type {
   RenderableEditorElement,
   TemplateElementsByPage,
 } from "@/lib/editor/template-types";
 import LayerPanel from "./LayerPanel";
 import PropertiesPanel from "./PropertiesPanel";
+import BookDesignPanel from "./BookDesignPanel";
+import { isProtectedDesign, resolveSceneDesign } from "@/lib/editor/design";
+import {
+  applyCanvasGeometry,
+  applyDesignAction,
+  type DesignAction,
+} from "@/lib/editor/design-actions";
+import {
+  loadBrowserDesignFont,
+  requiredDesignFonts,
+} from "@/lib/editor/design-fonts";
+import { layoutDesignText } from "@/lib/editor/design-text-layout";
+import { preflightDesign } from "@/lib/editor/design-preflight";
 import OrderPanel from "@/components/orders/OrderPanel";
 import AiChatPanel from "./AiChatPanel";
 import ColorPicker from "./ColorPicker";
@@ -88,6 +107,8 @@ interface SubmissionRecord {
   isTemplate: boolean;
   templateId: string | null;
   templateVersion: number | null;
+  /** Frozen template scenes an AI book was composed against. */
+  pinnedTemplate?: unknown;
   pages: PageRecord[];
 }
 
@@ -352,11 +373,91 @@ export default function EditorWorkspace({
     () => templateElements[activePageLabel] ?? [],
     [templateElements, activePageLabel],
   );
-  const activeUserElements = activePage.scene.elements;
-  const activeTextOverrides = useMemo(
-    () => activePage.scene.templateTextOverrides ?? {},
-    [activePage.scene.templateTextOverrides],
-  );
+  const designGesture = useRef({ active: false, recorded: false });
+  const [fontRetry, setFontRetry] = useState(0);
+  const [fontLoad, setFontLoad] = useState({ key: "", error: "" });
+  const resolvedPages = useMemo(() => {
+    const pinned = isInstanceMode
+      ? parsePinnedTemplate(submission?.pinnedTemplate)
+      : null;
+    return Object.fromEntries(PAGE_LABELS.map((label) => {
+      try {
+        return [label, {
+          scene: resolveSceneDesign(
+            pagesByLabel[label].scene,
+            templateElements[label],
+            pinned?.pages.find((page) => page.pageLabel === label)
+              ?.backgroundColor,
+          ),
+          error: "",
+        }];
+      } catch (error) {
+        return [label, {
+          scene: { ...pagesByLabel[label].scene, elements: [] },
+          error: error instanceof Error ? error.message : "Invalid design",
+        }];
+      }
+    })) as Record<PageLabel, { scene: EditorScene; error: string }>;
+  }, [
+    pagesByLabel,
+    templateElements,
+    isInstanceMode,
+    submission?.pinnedTemplate,
+  ]);
+  const fontKey = useMemo(() => {
+    try {
+      return JSON.stringify(
+        requiredDesignFonts(PAGE_LABELS.flatMap((label) =>
+          resolvedPages[label].scene.elements
+        )),
+      );
+    } catch {
+      return "invalid";
+    }
+  }, [resolvedPages]);
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        if (fontKey === "invalid") throw new Error("Unqualified font in scene");
+        await Promise.all(
+          (JSON.parse(fontKey) as string[]).map(loadBrowserDesignFont),
+        );
+        if (!cancelled) setFontLoad({ key: fontKey, error: "" });
+      } catch (error) {
+        if (!cancelled) {
+          setFontLoad({
+            key: fontKey,
+            error: error instanceof Error ? error.message : "Font unavailable",
+          });
+        }
+      }
+    };
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [fontKey, fontRetry]);
+  const fontStatus = fontLoad.key !== fontKey
+    ? "Loading qualified fonts…"
+    : fontLoad.error || null;
+  const designIssues = useMemo(() =>
+    PAGE_LABELS.flatMap((label) => {
+      const entry = resolvedPages[label];
+      if (entry.error) {
+        return [{
+          elementId: "",
+          severity: "error" as const,
+          message: `${PAGE_LABEL_DISPLAY[label]}: ${entry.error}`,
+        }];
+      }
+      if (fontStatus) return [];
+      return preflightDesign(entry.scene, label).map((issue) => ({
+        ...issue,
+        message: `${PAGE_LABEL_DISPLAY[label]}: ${issue.message}`,
+      }));
+    }), [resolvedPages, fontStatus]);
+  const activeResolvedScene = resolvedPages[activePageLabel].scene;
 
   // Asset dimensions map for DPI calculations
   const assetDimensionsMap = useMemo(
@@ -381,18 +482,21 @@ export default function EditorWorkspace({
   // `text` field of text-type template elements is overridable; all other
   // visual properties (position, size, font, color, etc.) remain locked.
   const activeTemplateElementsWithOverrides = useMemo(
-    () =>
-      activeTemplateElements.map((element) =>
-        element.type === "text" && activeTextOverrides[element.id] !== undefined
-          ? { ...element, text: activeTextOverrides[element.id] }
-          : element
-      ),
-    [activeTemplateElements, activeTextOverrides],
+    () => activeResolvedScene.elements.slice(0, activeTemplateElements.length),
+    [activeResolvedScene, activeTemplateElements.length],
   );
 
   const mergedElements: RenderableEditorElement[] = useMemo(
-    () => mergeLayers(activeTemplateElementsWithOverrides, activeUserElements),
-    [activeTemplateElementsWithOverrides, activeUserElements],
+    () =>
+      mergeLayers(
+        activeTemplateElementsWithOverrides,
+        activeResolvedScene.elements.slice(activeTemplateElements.length),
+      ),
+    [
+      activeTemplateElementsWithOverrides,
+      activeResolvedScene,
+      activeTemplateElements.length,
+    ],
   );
 
   const selectedElement = useMemo(
@@ -528,6 +632,24 @@ export default function EditorWorkspace({
         ? nextSubmission.id
         : nextSubmission.templateId;
 
+      // An AI book carries its own frozen copy of the template scenes. The
+      // approved design is what the editor must show, so the pinned elements
+      // win over the live template: editing or versioning the template later
+      // cannot change a book that already exists. A detached book has no
+      // template link left — its pages already contain those elements, so
+      // adding the pinned layer on top would duplicate every element.
+      const pinned = nextSubmission.templateId
+        ? parsePinnedTemplate(nextSubmission.pinnedTemplate)
+        : null;
+      if (pinned && !nextSubmission.isTemplate) {
+        const pinnedByPage = new Map(
+          pinned.pages.map((page) => [page.pageLabel, page]),
+        );
+        for (const label of PAGE_LABELS) {
+          nextTemplateElements[label] = pinnedByPage.get(label)?.elements ?? [];
+        }
+      }
+
       if (effectiveTemplateId) {
         try {
           const templateResponse = await fetch(
@@ -608,8 +730,10 @@ export default function EditorWorkspace({
                 };
               }
               nextPages = updatedPages;
-            } else {
+            } else if (!pinned) {
               // Instance: template elements are the locked background layer.
+              // Pinned books already installed theirs above and must not be
+              // replaced by the live template.
               nextTemplateElements = elementsByPage as TemplateElementsByPage;
             }
           }
@@ -624,30 +748,79 @@ export default function EditorWorkspace({
 
       if (cancelled) return;
       let nextTitle = nextSubmission.title ?? "Untitled Titchybooks";
-      const seed = Object.fromEntries(PAGE_LABELS.map(label => [label, { value: nextPages[label].sceneJson, revision: nextPages[label].revision }])) as DocumentSeed;
+      const seed = Object.fromEntries(
+        PAGE_LABELS.map(
+          (label) => [label, {
+            value: nextPages[label].sceneJson,
+            revision: nextPages[label].revision,
+          }],
+        ),
+      ) as DocumentSeed;
       seed.title = { value: nextTitle, revision: nextSubmission.revision };
       const storage = browserStorage();
-      const persistence = new DraftPersistence(nextSubmission.id, nextSubmission.userId, seed,
+      const persistence = new DraftPersistence(
+        nextSubmission.id,
+        nextSubmission.userId,
+        seed,
         async (part, value, revision) => {
-          const response = await fetch(`/api/submissions/${nextSubmission.id}${part === 'title' ? '' : `/pages/${part}`}`, {
-            method: part === 'title' ? 'PATCH' : 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(part === 'title' ? { title: value, revision } : { scene: JSON.parse(value), revision }),
-          });
+          const response = await fetch(
+            `/api/submissions/${nextSubmission.id}${
+              part === "title" ? "" : `/pages/${part}`
+            }`,
+            {
+              method: part === "title" ? "PATCH" : "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(
+                part === "title"
+                  ? { title: value, revision }
+                  : { scene: JSON.parse(value), revision },
+              ),
+            },
+          );
           const result = await response.json();
-          if (!response.ok) throw new Error(result.error || 'Could not save your changes');
-          return part === 'title' ? result.submission.revision : result.page.revision;
-        }, state => { if (!cancelled) { setSaveState(state); if (state === 'saved') setSaveError(null); } }, storage,
-        () => toast.warning('Local recovery storage is unavailable. Keep this tab open until changes are saved.'));
+          if (!response.ok) {
+            throw new Error(result.error || "Could not save your changes");
+          }
+          return part === "title"
+            ? result.submission.revision
+            : result.page.revision;
+        },
+        (state) => {
+          if (!cancelled) {
+            setSaveState(state);
+            if (state === "saved") setSaveError(null);
+          }
+        },
+        storage,
+        () =>
+          toast.warning(
+            "Local recovery storage is unavailable. Keep this tab open until changes are saved.",
+          ),
+      );
       persistenceRef.current = persistence;
-      if (!storage) toast.warning('Local recovery storage is unavailable. Keep this tab open until changes are saved.');
+      if (!storage) {
+        toast.warning(
+          "Local recovery storage is unavailable. Keep this tab open until changes are saved.",
+        );
+      }
       const recovery = persistence.readRecovery();
-      if (recovery && confirm('Unsaved local changes were found. Restore them? Cancel discards the local recovery copy.')) {
+      if (
+        recovery &&
+        confirm(
+          "Unsaved local changes were found. Restore them? Cancel discards the local recovery copy.",
+        )
+      ) {
         persistence.restore(recovery);
         nextTitle = recovery.title?.value ?? nextTitle;
         for (const label of PAGE_LABELS) {
           const part = recovery[label];
-          if (part) nextPages[label] = { ...nextPages[label], scene: JSON.parse(part.value), sceneJson: part.value };
+          if (part) {
+            nextPages[label] = {
+              ...nextPages[label],
+              scene: JSON.parse(part.value),
+              sceneJson: part.value,
+            };
+          }
         }
       } else if (recovery) persistence.clearRecovery();
       setSubmission(nextSubmission);
@@ -674,8 +847,6 @@ export default function EditorWorkspace({
       });
       setCanUndo(false);
       setCanRedo(false);
-
-
     }
 
     async function boot() {
@@ -773,30 +944,39 @@ export default function EditorWorkspace({
   useEffect(() => {
     const persistence = persistenceRef.current;
     if (!submission || !persistence || persistence.id !== submission.id) return;
-    persistence.set('title', title);
-    const timeout = window.setTimeout(() => { void persistence.flush('title').catch(error => reportSaveError(error, persistence)); }, 700);
+    persistence.set("title", title);
+    const timeout = window.setTimeout(() => {
+      void persistence.flush("title").catch((error) =>
+        reportSaveError(error, persistence)
+      );
+    }, 700);
     return () => window.clearTimeout(timeout);
   }, [submission, title]);
 
   function reportSaveError(error: unknown, origin?: DraftPersistence) {
     if (origin && persistenceRef.current !== origin) return;
-    const message = error instanceof Error ? error.message : 'Save failed';
+    const message = error instanceof Error ? error.message : "Save failed";
     setSaveError(message);
     toast.error(message);
   }
 
   const onHistoryKey = useEffectEvent((event: KeyboardEvent) => {
-    if (frozenRef.current || (event.target instanceof HTMLElement && event.target.closest('input, textarea, [contenteditable="true"]'))) return;
-    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'z') {
+    if (
+      frozenRef.current ||
+      (event.target instanceof HTMLElement &&
+        event.target.closest('input, textarea, [contenteditable="true"]'))
+    ) return;
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z") {
       event.preventDefault();
-      if (event.shiftKey) redo(); else undo();
+      if (event.shiftKey) redo();
+      else undo();
     }
   });
   // Keyboard shortcuts for undo/redo
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => onHistoryKey(event);
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
 
   const refreshThumbnails = useEffectEvent(() => updateThumbnails());
@@ -804,40 +984,118 @@ export default function EditorWorkspace({
   useEffect(() => {
     const timeout = setTimeout(() => refreshThumbnails(), 500);
     return () => clearTimeout(timeout);
-  }, [pagesByLabel, assets]);
+  }, [pagesByLabel, assets, resolvedPages, fontLoad]);
 
   useEffect(() => {
     const persistence = persistenceRef.current;
     if (!submission || !persistence || persistence.id !== submission.id) return;
-    for (const label of PAGE_LABELS) persistence.set(label, pagesByLabel[label].sceneJson);
-    const timeout = window.setTimeout(() => { void persistence.flushAll().catch(error => reportSaveError(error, persistence)); }, 800);
+    for (const label of PAGE_LABELS) {
+      persistence.set(label, pagesByLabel[label].sceneJson);
+    }
+    const timeout = window.setTimeout(() => {
+      void persistence.flushAll().catch((error) =>
+        reportSaveError(error, persistence)
+      );
+    }, 800);
     return () => window.clearTimeout(timeout);
   }, [pagesByLabel, submission]);
 
   useEffect(() => {
     const beforeUnload = (event: BeforeUnloadEvent) => {
-      if (persistenceRef.current?.dirty) { event.preventDefault(); event.returnValue = ''; }
+      if (persistenceRef.current?.dirty) {
+        event.preventDefault();
+        event.returnValue = "";
+      }
     };
     const reconnect = () => {
       const persistence = persistenceRef.current;
-      void persistence?.flushAll().catch(error => reportSaveError(error, persistence));
+      void persistence?.flushAll().catch((error) =>
+        reportSaveError(error, persistence)
+      );
     };
-    window.addEventListener('beforeunload', beforeUnload);
-    window.addEventListener('online', reconnect);
-    return () => { window.removeEventListener('beforeunload', beforeUnload); window.removeEventListener('online', reconnect); };
+    window.addEventListener("beforeunload", beforeUnload);
+    window.addEventListener("online", reconnect);
+    return () => {
+      window.removeEventListener("beforeunload", beforeUnload);
+      window.removeEventListener("online", reconnect);
+    };
   }, []);
 
   function syncDocument() {
     const persistence = persistenceRef.current;
-    if (!persistence || persistence.id !== submission?.id) throw new Error('Draft is not ready');
-    persistence.set('title', title);
-    for (const label of PAGE_LABELS) persistence.set(label, pagesByLabel[label].sceneJson);
+    if (!persistence || persistence.id !== submission?.id) {
+      throw new Error("Draft is not ready");
+    }
+    persistence.set("title", title);
+    for (const label of PAGE_LABELS) {
+      persistence.set(label, pagesByLabel[label].sceneJson);
+    }
     return persistence;
+  }
+
+  function applyBookDesign(
+    action: DesignAction,
+    scope: "element" | "page" | "book",
+  ) {
+    if (frozenRef.current) return;
+    try {
+      const labels = scope === "book" ? PAGE_LABELS : [activePageLabel];
+      const next = { ...pagesByLabel };
+      let skipped = 0;
+      for (const label of labels) {
+        const result = applyDesignAction(
+          next[label].scene,
+          templateElements[label],
+          action,
+        );
+        skipped += result.skipped;
+        next[label] = {
+          ...next[label],
+          scene: result.scene,
+          sceneJson: JSON.stringify(result.scene),
+        };
+      }
+      if (
+        labels.every((label) =>
+          next[label].sceneJson === pagesByLabel[label].sceneJson
+        )
+      ) return;
+      if (!designGesture.current.active || !designGesture.current.recorded) {
+        pushHistory();
+        designGesture.current.recorded = true;
+      }
+      for (const label of labels) {
+        persistenceRef.current?.set(label, next[label].sceneJson);
+      }
+      setPagesByLabel(next);
+      if (skipped && !designGesture.current.active) {
+        toast.info(`${skipped} protected text element(s) skipped.`);
+      }
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Could not apply design",
+      );
+    }
   }
 
   function updateScene(scene: EditorScene) {
     if (frozenRef.current) return;
-    const normalizedScene = normalizeSceneZIndexes(scene);
+    const ids = new Set(scene.elements.map((element) => element.id));
+    const normalizedScene = normalizeSceneZIndexes({
+      ...scene,
+      ...(scene.elementStyleOverrides
+        ? {
+          elementStyleOverrides: Object.fromEntries(
+            Object.entries(scene.elementStyleOverrides).filter(([id]) =>
+              ids.has(id)
+            ),
+          ),
+        }
+        : {}),
+    });
+    if (!Object.keys(normalizedScene.elementStyleOverrides ?? {}).length) {
+      delete normalizedScene.elementStyleOverrides;
+    }
     const sceneJson = JSON.stringify(normalizedScene);
 
     // Push current state to history before updating
@@ -952,7 +1210,10 @@ export default function EditorWorkspace({
     if (!ctx) return null;
 
     // Fill background
-    ctx.fillStyle = page.scene.page.backgroundColor;
+    const resolved = resolvedPages[pageLabel];
+    if (resolved.error) return null;
+    const renderScene = resolved.scene;
+    ctx.fillStyle = renderScene.page.backgroundColor;
     ctx.fillRect(0, 0, thumbnailWidth, thumbnailHeight);
 
     // Draw safe margin
@@ -971,8 +1232,8 @@ export default function EditorWorkspace({
 
     // Draw elements (simplified for thumbnail)
     const scale = thumbnailWidth / page.scene.page.widthPx;
-    const sortedElements = [...page.scene.elements].sort((a, b) =>
-      a.zIndex - b.zIndex
+    const sortedElements = renderScene.elements.slice().sort((left, right) =>
+      left.zIndex - right.zIndex
     );
 
     for (const element of sortedElements) {
@@ -980,6 +1241,19 @@ export default function EditorWorkspace({
 
       ctx.save();
       ctx.globalAlpha = element.opacity;
+      if (element.type === "text" && element.typographyVersion) {
+        try {
+          ctx.translate(element.x * scale, element.y * scale);
+          ctx.rotate(element.rotation * Math.PI / 180);
+          ctx.scale(scale, scale);
+          ctx.fillStyle = element.color;
+          ctx.fill(new Path2D(layoutDesignText(element).path));
+        } catch {
+          return null;
+        }
+        ctx.restore();
+        continue;
+      }
       const centerX = (element.x + element.width / 2) * scale;
       const centerY = (element.y + element.height / 2) * scale;
       ctx.translate(centerX, centerY);
@@ -1125,10 +1399,29 @@ export default function EditorWorkspace({
     elementId: string,
     updater: (element: EditorElement) => EditorElement,
   ) {
+    const source = activePage.scene.elements.find((element) =>
+      element.id === elementId
+    );
+    if (!source) return;
+    const changed = updater(source);
+    const overrides = { ...activePage.scene.elementStyleOverrides };
+    const policyChanged = changed.locked !== source.locked ||
+      JSON.stringify(changed.stylePolicy) !==
+        JSON.stringify(source.stylePolicy) ||
+      changed.designRole !== source.designRole;
+    const next = policyChanged && overrides[elementId]
+      ? updater(
+        activeResolvedScene.elements.find((element) =>
+          element.id === elementId
+        ) ?? source,
+      )
+      : changed;
+    if (policyChanged) delete overrides[elementId];
     updateScene({
       ...activePage.scene,
+      elementStyleOverrides: overrides,
       elements: activePage.scene.elements.map((element) =>
-        element.id === elementId ? updater(element) : element
+        element.id === elementId ? next : element
       ),
     });
   }
@@ -1137,6 +1430,10 @@ export default function EditorWorkspace({
     // Persist a per-instance override for a template text element.
     // Only the text content is overridable; the underlying TemplateElement
     // row (position, size, font, color, etc.) is left untouched.
+    const source = activeTemplateElements.find((element) =>
+      element.id === elementId
+    );
+    if (!source || source.locked || isProtectedDesign(source)) return;
     const currentOverrides = activePage.scene.templateTextOverrides ?? {};
     const nextOverrides = { ...currentOverrides, [elementId]: text };
     updateScene({
@@ -1165,7 +1462,8 @@ export default function EditorWorkspace({
     const template = activeTemplateElements.find(
       (element) => element.id === elementId,
     );
-    return template?.type === "text";
+    return template?.type === "text" && !template.locked &&
+      !isProtectedDesign(template);
   }
 
   function deleteElement(elementId: string) {
@@ -1224,6 +1522,15 @@ export default function EditorWorkspace({
     updateScene({
       ...activePage.scene,
       elements: [...activePage.scene.elements, duplicatedElement],
+      ...(activePage.scene.elementStyleOverrides?.[elementId]
+        ? {
+          elementStyleOverrides: {
+            ...activePage.scene.elementStyleOverrides,
+            [duplicatedElement.id]:
+              activePage.scene.elementStyleOverrides[elementId],
+          },
+        }
+        : {}),
     });
     setSelectedElementId(duplicatedElement.id);
   }
@@ -1481,14 +1788,27 @@ export default function EditorWorkspace({
       setActivePageLabel(pageLabel);
       setSelectedElementId(null);
       return true;
-    } catch (error) { reportSaveError(error, persistence); return false; }
-    finally {
-      if (persistenceRef.current === persistence) { frozenRef.current = false; setNavigating(false); }
+    } catch (error) {
+      reportSaveError(error, persistence);
+      return false;
+    } finally {
+      if (persistenceRef.current === persistence) {
+        frozenRef.current = false;
+        setNavigating(false);
+      }
     }
   }
 
   async function handleSubmit(force = false) {
     if (!submission || frozenRef.current) {
+      return;
+    }
+    if (
+      fontStatus || designIssues.some((issue) => issue.severity === "error")
+    ) {
+      toast.error(
+        fontStatus || "Resolve Book Design print checks before submitting.",
+      );
       return;
     }
 
@@ -1570,7 +1890,10 @@ export default function EditorWorkspace({
         reportSaveError(error, persistence);
       }
     } finally {
-      if (persistenceRef.current === persistence) { frozenRef.current = false; setSubmitting(false); }
+      if (persistenceRef.current === persistence) {
+        frozenRef.current = false;
+        setSubmitting(false);
+      }
     }
   }
 
@@ -1595,8 +1918,13 @@ export default function EditorWorkspace({
         `/api/submissions/${submission.id}/detach-from-template`,
         {
           method: "POST",
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ revision: persistence.revision('title'), pageRevisions: Object.fromEntries(PAGE_LABELS.map(label => [label, persistence.revision(label)])) }),
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            revision: persistence.revision("title"),
+            pageRevisions: Object.fromEntries(
+              PAGE_LABELS.map((label) => [label, persistence.revision(label)]),
+            ),
+          }),
         },
       );
 
@@ -1614,7 +1942,10 @@ export default function EditorWorkspace({
     } catch (error) {
       reportSaveError(error, persistence);
     } finally {
-      if (persistenceRef.current === persistence) { frozenRef.current = false; setSubmitting(false); }
+      if (persistenceRef.current === persistence) {
+        frozenRef.current = false;
+        setSubmitting(false);
+      }
     }
   }
 
@@ -1645,9 +1976,23 @@ export default function EditorWorkspace({
     >
       <div className="mx-auto flex max-w-[1500px] flex-col gap-5">
         {saveError && (
-          <div role="alert" className="card p-4" style={{ color: 'var(--color-error)' }}>
+          <div
+            role="alert"
+            className="card p-4"
+            style={{ color: "var(--color-error)" }}
+          >
             <p>{saveError}</p>
-            <button className="btn btn-outline btn-sm mt-2" onClick={() => { const persistence = syncDocument(); void persistence.flushAll().catch(error => reportSaveError(error, persistence)); }}>Retry saving</button>
+            <button
+              className="btn btn-outline btn-sm mt-2"
+              onClick={() => {
+                const persistence = syncDocument();
+                void persistence.flushAll().catch((error) =>
+                  reportSaveError(error, persistence)
+                );
+              }}
+            >
+              Retry saving
+            </button>
           </div>
         )}
         {/* Template instance banner */}
@@ -1685,8 +2030,8 @@ export default function EditorWorkspace({
                   className="text-xs"
                   style={{ color: "var(--color-text-muted)" }}
                 >
-                  Template elements are locked. You can add and edit your own
-                  elements on top.
+                  Template layout is protected. Edit eligible text and apply
+                  permitted styling without detaching.
                 </p>
               </div>
             </div>
@@ -1714,8 +2059,12 @@ export default function EditorWorkspace({
               </p>
               <input
                 value={title === "Untitled Titchybooks" ? "" : title}
-                onFocus={() => { if (!frozenRef.current) pushHistory(); }}
-                onChange={(event) => { if (!frozenRef.current) { setTitle(event.target.value); } }}
+                onFocus={() => {
+                  if (!frozenRef.current) pushHistory();
+                }}
+                onChange={(event) => {
+                  if (!frozenRef.current) setTitle(event.target.value);
+                }}
                 maxLength={120}
                 aria-label="Book title"
                 placeholder="Enter your book title"
@@ -1860,7 +2209,8 @@ export default function EditorWorkspace({
               <button
                 type="button"
                 onClick={() => void handleSubmit()}
-                disabled={submitting}
+                disabled={submitting || Boolean(fontStatus) ||
+                  designIssues.some((issue) => issue.severity === "error")}
                 className="btn btn-secondary btn-sm"
               >
                 {submitting ? "Submitting..." : "Submit For PDF"}
@@ -1896,7 +2246,7 @@ export default function EditorWorkspace({
                       type="button"
                       onClick={() => void handlePageSelect(pageLabel)}
                       aria-label={`Edit ${PAGE_LABEL_DISPLAY[pageLabel]}`}
-                      aria-current={isActive ? 'page' : undefined}
+                      aria-current={isActive ? "page" : undefined}
                       className="w-full rounded-xl p-3 text-left transition"
                       style={{
                         border: isActive
@@ -2075,7 +2425,9 @@ export default function EditorWorkspace({
                     className="text-sm"
                     style={{ color: "var(--color-text-muted)" }}
                   >
-                    Drag elements freely, then resize or rotate from the page.
+                    {isInstanceMode
+                      ? "Select editable template text in Layers to change its words or style."
+                      : "Drag elements freely, then resize or rotate from the page."}
                   </p>
                 </div>
                 <label
@@ -2084,14 +2436,11 @@ export default function EditorWorkspace({
                 >
                   <span>Background</span>
                   <ColorPicker
-                    value={activePage.scene.page.backgroundColor}
+                    value={activeResolvedScene.page.backgroundColor}
                     onChange={(color) => {
                       updateScene({
                         ...activePage.scene,
-                        page: {
-                          ...activePage.scene.page,
-                          backgroundColor: color,
-                        },
+                        backgroundOverride: color,
                       });
                     }}
                   />
@@ -2100,7 +2449,8 @@ export default function EditorWorkspace({
             </div>
 
             <EditorCanvas
-              scene={{ ...activePage.scene, elements: mergedElements }}
+              key={`canvas-${fontRetry}`}
+              scene={{ ...activeResolvedScene, elements: mergedElements }}
               assets={assets}
               selectedElementId={selectedElementId}
               onSelectElement={(elementId) => {
@@ -2120,15 +2470,7 @@ export default function EditorWorkspace({
                 // instance sceneJson must remain user-layer only (aside
                 // from `templateTextOverrides`, which the canvas never
                 // modifies directly).
-                const templateIds = new Set(
-                  activeTemplateElements.map((el) => el.id),
-                );
-                updateScene({
-                  ...next,
-                  elements: next.elements.filter(
-                    (el) => !templateIds.has(el.id),
-                  ),
-                });
+                updateScene(applyCanvasGeometry(activePage.scene, next));
               }}
               pageLabel={activePageLabel}
               templateElementIds={new Set(
@@ -2136,7 +2478,9 @@ export default function EditorWorkspace({
               )}
               templateTextElementIds={new Set(
                 activeTemplateElements
-                  .filter((e) => e.type === "text")
+                  .filter((e) =>
+                    e.type === "text" && !e.locked && !isProtectedDesign(e)
+                  )
                   .map((e) => e.id),
               )}
               isInstanceMode={isInstanceMode}
@@ -2144,7 +2488,27 @@ export default function EditorWorkspace({
           </section>
 
           <div className="space-y-5">
+            <BookDesignPanel
+              scene={activePage.scene}
+              pageLabel={activePageLabel}
+              selectedElement={selectedElement}
+              onApply={applyBookDesign}
+              onGestureStart={() => {
+                if (!designGesture.current.active) {designGesture.current = {
+                    active: true,
+                    recorded: false,
+                  };}
+              }}
+              onGestureEnd={() => {
+                designGesture.current = { active: false, recorded: false };
+              }}
+              issues={designIssues}
+              fontStatus={fontStatus}
+              onRetryFonts={() => setFontRetry((value) => value + 1)}
+            />
             <PropertiesPanel
+              isTemplateAuthor={submission?.isTemplate}
+              guidedTypography
               selectedElement={selectedElement}
               onChangeElement={(elementId, updater) => {
                 // For template TEXT elements: apply the updater, extract
@@ -2199,7 +2563,9 @@ export default function EditorWorkspace({
               physicalHeightMm={physicalHeightMm}
             />
             <LayerPanel
-              elements={activePage.scene.elements}
+              elements={activeResolvedScene.elements.slice(
+                activeTemplateElements.length,
+              )}
               templateElements={activeTemplateElementsWithOverrides}
               selectedElementId={selectedElementId}
               onSelectElement={(elementId) => {
@@ -2241,7 +2607,7 @@ export default function EditorWorkspace({
       </div>
 
       <AiChatPanel
-        key={submission?.id ?? 'loading'}
+        key={submission?.id ?? "loading"}
         isOpen={aiPanelOpen}
         onToggle={() => setAiPanelOpen((prev) => !prev)}
         bookContext={aiBookContext}

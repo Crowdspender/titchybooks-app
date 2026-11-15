@@ -1,0 +1,122 @@
+{
+  "lora-400-normal": [
+    {
+      "file": "/fonts/design-v1/lora-400-normal-latin-5c813f4975bc7267.woff",
+      "sha256": "5c813f4975bc7267f6b5a2086370e8651144b26b107a1d71c3f4ba287ad143f1"
+    },
+    {
+      "file": "/fonts/design-v1/lora-400-normal-latin-ext-7abb485f6f7c64a7.woff",
+      "sha256": "7abb485f6f7c64a7e7514129b25a81e3a17bd5c4ae482de2c720fe18e0fdd1bd"
+    }
+  ],
+  "lora-400-italic": [
+    {
+      "file": "/fonts/design-v1/lora-400-italic-latin-76be671f89ee79e3.woff",
+      "sha256": "76be671f89ee79e378064c08e112fec82b4fc573958f9e876fd4a9a82a3bedc2"
+    },
+    {
+      "file": "/fonts/design-v1/lora-400-italic-latin-ext-c0886a8ef98e1781.woff",
+      "sha256": "c0886a8ef98e17817a83bbd8b521e4c9d0f562e3eaf648fa756ca820174fe8f0"
+    }
+  ],
+  "lora-700-normal": [
+    {
+      "file": "/fonts/design-v1/lora-700-normal-latin-543af1e069e40ba4.woff",
+      "sha256": "543af1e069e40ba4f031fba3d12e5a3a75f7a0962698fbdda00e04d98fd722de"
+    },
+    {
+      "file": "/fonts/design-v1/lora-700-normal-latin-ext-8a9b52760adecb7b.woff",
+      "sha256": "8a9b52760adecb7b2d2fffe6160d4b96ece3d9bddd2e205a4f89681d843fbc79"
+    }
+  ],
+  "lora-700-italic": [
+    {
+      "file": "/fonts/design-v1/lora-700-italic-latin-92596e7dd9d62e16.woff",
+      "sha256": "92596e7dd9d62e1672aebbf6f4b3ce626d55921593560db4f6b54a1771792e73"
+    },
+    {
+      "file": "/fonts/design-v1/lora-700-italic-latin-ext-5a99a43aa59f4f09.woff",
+      "sha256": "5a99a43aa59f4f09612a44937fcaf27dd817056444c000138e19b3c4e9b750e5"
+    }
+  ],
+  "source-sans-3-400-normal": [
+    {
+      "file": "/fonts/design-v1/source-sans-3-400-normal-latin-8969d8c55bd5d6ae.woff",
+      "sha256": "8969d8c55bd5d6aebf95b2603612503cd6424a4d3b8e9606a38a831bda1cd5c2"
+    },
+    {
+      "file": "/fonts/design-v1/source-sans-3-400-normal-latin-ext-4827f30a859c8e93.woff",
+      "sha256": "4827f30a859c8e939041ade2f044b3a4381e918939589dcefc07f3113c072184"
+    }
+  ],
+  "source-sans-3-400-italic": [
+    {
+      "file": "/fonts/design-v1/source-sans-3-400-italic-latin-dd217f6b58d7f587.woff",
+      "sha256": "dd217f6b58d7f587b837999cb7c58250810674fb6562bbc7cce87f4e6c71d607"
+    },
+    {
+      "file": "/fonts/design-v1/source-sans-3-400-italic-latin-ext-c8ed0a025f4c22e4.woff",
+      "sha256": "c8ed0a025f4c22e4d89dd5c0e7adacbe6d0bad4cda10e4996a13641fcae412c8"
+    }
+  ],
+  "source-sans-3-700-normal": [
+    {
+      "file": "/fonts/design-v1/source-sans-3-700-normal-latin-dfdfe9a92eb01466.woff",
+      "sha256": "dfdfe9a92eb014666e44bb90f5eb375888295839f2f17ebd1163a097c07b25f7"
+    },
+    {
+      "file": "/fonts/design-v1/source-sans-3-700-normal-latin-ext-6f0761453ab86868.woff",
+      "sha256": "6f0761453ab86868f53eba246d76905783e5332cd2753bdab7f995dd94849dcf"
+    }
+  ],
+  "source-sans-3-700-italic": [
+    {
+      "file": "/fonts/design-v1/source-sans-3-700-italic-latin-dbb0d17bf94b4daf.woff",
+      "sha256": "dbb0d17bf94b4daf39b96b35e3463f658f4a0857e52f6141abaf4e20094a7636"
+    },
+    {
+      "file": "/fonts/design-v1/source-sans-3-700-italic-latin-ext-d24b8ada4a434da6.woff",
+      "sha256": "d24b8ada4a434da6dfd407cd1111a4ac24b42e53b706d3e45fec2a5745d27a2c"
+    }
+  ],
+  "nunito-400-normal": [
+    {
+      "file": "/fonts/design-v1/nunito-400-normal-latin-b51e76356535ea73.woff",
+      "sha256": "b51e76356535ea73d5701b541f89a4f062a4d6c829c7d2d237ceb8a0a8f77123"
+    },
+    {
+      "file": "/fonts/design-v1/nunito-400-normal-latin-ext-d7e2415e278145c4.woff",
+      "sha256": "d7e2415e278145c408defb928138fb93ad5efe94969fe7c1f19864f882ba9253"
+    }
+  ],
+  "nunito-400-italic": [
+    {
+      "file": "/fonts/design-v1/nunito-400-italic-latin-fceccfa543f16fb3.woff",
+      "sha256": "fceccfa543f16fb37ebec32fafcb20680db04c918ecf44da42cd22e6c6e10d11"
+    },
+    {
+      "file": "/fonts/design-v1/nunito-400-italic-latin-ext-ab3eef984a0b2366.woff",
+      "sha256": "ab3eef984a0b2366f59990f79258ae99bdff7590de64ddaae74c7f659a99ae22"
+    }
+  ],
+  "nunito-700-normal": [
+    {
+      "file": "/fonts/design-v1/nunito-700-normal-latin-ce9107dc33f5d3bb.woff",
+      "sha256": "ce9107dc33f5d3bb8237776799400f28b96aed4b114773d4fd7fbacb3b218509"
+    },
+    {
+      "file": "/fonts/design-v1/nunito-700-normal-latin-ext-0c607961299b21de.woff",
+      "sha256": "0c607961299b21de332782c43e6ccfd591ca98c5df4b439d39d9c247f613bb1c"
+    }
+  ],
+  "nunito-700-italic": [
+    {
+      "file": "/fonts/design-v1/nunito-700-italic-latin-b951f7101fcbec49.woff",
+      "sha256": "b951f7101fcbec49148c330960ce1e90f208be112f2f837bfe84e26293cf31aa"
+    },
+    {
+      "file": "/fonts/design-v1/nunito-700-italic-latin-ext-732fa666eb7f17bf.woff",
+      "sha256": "732fa666eb7f17bf2bd8ed888dc6ba5f188d7d2d176a6d04450cbedf75a1a204"
+    }
+  ]
+}

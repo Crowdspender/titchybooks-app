@@ -32,6 +32,13 @@ describe('estimateTextFits', () => {
     expect(estimateTextFits(el)).toBe(false);
   });
 
+  it('measures guided paragraph spacing and rejects unavailable glyphs', () => {
+    const el = text({ text: 'First paragraph.\nSecond paragraph.', typographyVersion: 1, width: 580, height: 120, fontSize: 33, lineHeight: 1.1, fontFamily: 'Lora' });
+    expect(estimateTextFits(el)).toBe(true);
+    expect(estimateTextFits({ ...el, paragraphGap: 1.5 })).toBe(false);
+    expect(estimateTextFits({ ...el, text: 'A story with ĸ' })).toBe(false);
+  });
+
   it('treats an unknown font with the default width factor', () => {
     const el = text({ text: 'Hello', width: 400, height: 200, fontSize: 24, lineHeight: 1.2, fontFamily: 'Trebuchet MS', letterSpacing: 0 });
     expect(estimateTextFits(el)).toBe(true);

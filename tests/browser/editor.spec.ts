@@ -77,6 +77,28 @@ test('saves all eight pages, reopens exact scenes, and submits with the worker p
   expect(parseRenderSnapshot(job.inputSnapshot).pages.map(p => p.scene)).toEqual(before.map(p => JSON.parse(p.sceneJson)));
 });
 
+test('persists guided book styling through authenticated APIs and freezes qualified fonts', async ({ page }) => {
+  const id = await openDraft(page);
+  await addText(page, 'Émilie and the sea');
+  await page.getByLabel('Design scope', { exact: true }).selectOption('book');
+  await page.getByRole('button', { name: /^Modern Minimal/ }).click();
+  await expect(page.getByRole('status').filter({ hasText: /^Saved$/ })).toBeVisible();
+  const pages = await db.submissionPage.findMany({ where: { submissionId: id } });
+  expect(pages).toHaveLength(8);
+  expect(pages.every(p => JSON.parse(p.sceneJson).design?.presetId === 'modern')).toBe(true);
+  await page.reload();
+  await expect(page.getByRole('button', { name: /^Modern Minimal/ })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('button', { name: 'Submit For PDF', exact: true })).toBeEnabled();
+  await page.getByRole('button', { name: 'Submit For PDF', exact: true }).click();
+  await expect(page).toHaveURL(/\/dashboard$/);
+  const job = await db.renderJob.findFirstOrThrow({ where: { submissionId: id } });
+  const input = parseRenderSnapshot(job.inputSnapshot);
+  expect(input.version).toBe(2);
+  if (input.version !== 2) throw new Error('Expected a qualified snapshot');
+  expect(Object.keys(input.typography!.fonts)).toContain('source-sans-3-400-normal');
+  expect(input.pages.find(p => p.pageLabel === 'FRONT_COVER')!.scene.elements[0]).toMatchObject({ text: 'Émilie and the sea', fontFamily: 'Source Sans 3', typographyVersion: 1 });
+});
+
 test('failed saves block navigation and submission and recover after retry', async ({ page }) => {
   const id = await openDraft(page);
   let submitRequests = 0;

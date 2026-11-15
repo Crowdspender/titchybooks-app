@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import OpenInEditorButton from "@/components/submissions/OpenInEditorButton";
 
 interface AiJobItem {
     id: string;
@@ -159,12 +160,24 @@ export default function AiBookJobs() {
                                 </a>
                             )}
                             {job.phase.terminal && job.submissionId && (
-                                <Link
-                                    href={`/create?submissionId=${job.submissionId}`}
-                                    className="btn btn-outline btn-sm text-xs"
-                                >
-                                    Open draft
-                                </Link>
+                                job.artifacts.approved
+                                    ? (
+                                        // An approved book cannot be edited in place; this
+                                        // opens an editable copy instead.
+                                        <OpenInEditorButton
+                                            submissionId={job.submissionId}
+                                            label="Edit a copy"
+                                            className="btn btn-outline btn-sm text-xs"
+                                        />
+                                    )
+                                    : (
+                                        <Link
+                                            href={`/create?submissionId=${job.submissionId}`}
+                                            className="btn btn-outline btn-sm text-xs"
+                                        >
+                                            Open draft
+                                        </Link>
+                                    )
                             )}
                             {(job.phase.phase === "failed" ||
                                 job.phase.phase === "needs-review") && (

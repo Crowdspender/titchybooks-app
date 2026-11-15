@@ -74,6 +74,7 @@ function textStyleOf(element: Extract<EditorElement, { type: "text" }>): TextSty
     fontWeight: element.fontWeight,
     letterSpacing: element.letterSpacing,
     lineHeight: element.lineHeight,
+    ...(element.typographyVersion ? { typographyVersion: element.typographyVersion, fontFamily: element.fontFamily, italic: element.italic, tracking: element.tracking, paragraphGap: element.paragraphGap, firstLineIndent: element.firstLineIndent } : {}),
   };
 }
 
@@ -81,7 +82,7 @@ function toSlot(element: Extract<EditorElement, { type: "text" }>, pageLabel: Pa
   const role = PAGE_CONTENT_ROLE[pageLabel];
   const box = { x: element.x, y: element.y, width: element.width, height: element.height };
   const style = textStyleOf(element);
-  const generated = element.visible && !isFixedContent({ pageLabel, text: element.text, locked: element.locked });
+  const generated = element.visible && element.designRole !== 'caption' && element.designRole !== 'brand' && !isFixedContent({ pageLabel, text: element.text, locked: element.locked });
   const capacity = maxCharsForBox(box.width, box.height, style);
   const roleBudget = ROLE_TEXT_BUDGET[role];
   return {
@@ -194,7 +195,7 @@ export interface PinnedTemplate {
 }
 
 const rectSchema = z.object({ x: z.number(), y: z.number(), width: z.number().positive(), height: z.number().positive() });
-const styleSchema = z.object({ fontSize: z.number().positive(), fontWeight: z.number(), letterSpacing: z.number(), lineHeight: z.number().positive() });
+const styleSchema = z.object({ fontSize: z.number().positive(), fontWeight: z.number(), letterSpacing: z.number(), lineHeight: z.number().positive(), typographyVersion: z.literal(1).optional(), fontFamily: z.string().optional(), italic: z.boolean().optional(), tracking: z.number().optional(), paragraphGap: z.number().optional(), firstLineIndent: z.number().optional() });
 
 const slotSchema = z.object({
   id: z.string().min(1),

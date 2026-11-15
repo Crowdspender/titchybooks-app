@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import type { PageLabel } from "@/lib/constants";
-import { buildManifestFromRows, type AiTemplateManifest } from "./template-contract";
+import { type AiTemplateManifest } from "./template-contract";
 import { pageBackgroundsFromScenes, preflightTemplateRows, type PreflightResult } from "./template-preflight";
 
 /**
@@ -36,7 +36,7 @@ export async function evaluateTemplateReadiness(input: {
 
   // An image element is only usable if its asset row still exists; preflight
   // then reports the missing ones by page and element.
-  const { manifest: preview } = buildManifestFromRows(rows);
+  const { manifest: preview } = preflightTemplateRows(rows);
   const assetIds = [
     ...new Set(preview.pages.flatMap((page) => page.images.map((image) => image.assetId))),
   ];

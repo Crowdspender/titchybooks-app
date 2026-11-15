@@ -28,6 +28,7 @@ const productionCsp = [
 ].join("; ");
 
 const nextConfig: NextConfig = {
+  outputFileTracingIncludes: { "/*": ["./public/fonts/design-v1/**/*"] },
   env: {
     // Ensure NEXTAUTH_URL is available at build time
     NEXTAUTH_URL: process.env.NEXTAUTH_URL,

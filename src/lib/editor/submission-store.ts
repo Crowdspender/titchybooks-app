@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { prisma } from '@/lib/prisma';
 import { editorElementSchema, editorSceneSchema, type EditorScene } from './schema';
 import { PAGE_LABELS, type PageLabel } from '@/lib/constants';
+import { resolveSceneDesign, validateSceneDesign, isProtectedDesign } from './design';
 import { parsePinnedTemplate, type PinnedTemplate } from '@/lib/ai/template-contract';
 
 export type Actor = { id: string; role: string };
@@ -80,12 +81,22 @@ export async function validateSceneAssets(tx: Transaction, scenes: EditorScene[]
   return assets;
 }
 
+/**
+ * A pin supplies the *locked* template layer, so it only makes sense while the
+ * book is still an instance of its template. Detaching materializes those
+ * elements into the book's own scenes; applying the pin afterwards would render
+ * every element twice and fail the duplicate-id guard in mergedPages().
+ */
+function hasPinnedScenes(submission: Pick<Submission, 'templateId' | 'pinnedTemplate'>): boolean {
+  return submission.templateId !== null && submission.pinnedTemplate !== null;
+}
+
 export async function mergedPages(tx: Transaction, submission: Submission) {
   const pages = await tx.submissionPage.findMany({ where: { submissionId: submission.id }, orderBy: { order: 'asc' } });
   if (pages.length !== 8 || PAGE_LABELS.some(label => !pages.some(page => page.pageLabel === label))) {
     throw new SubmissionError(400, 'All eight unique pages are required');
   }
-  const pinned = parsePinnedTemplate(submission.pinnedTemplate);
+  const pinned = hasPinnedScenes(submission) ? parsePinnedTemplate(submission.pinnedTemplate) : null;
   const templateId = submission.isTemplate ? submission.id : submission.templateId;
   // A pinned AI book carries its own copy of the template scenes, so editing or
   // unpublishing the source template can no longer change it.
@@ -108,12 +119,9 @@ export async function mergedPages(tx: Transaction, submission: Submission) {
     for (const key of Object.keys(overrides)) {
       if (!elements.some(el => el.id === key && el.type === 'text')) throw new SubmissionError(400, 'Template text has changed; reopen this draft.');
     }
-    const merged = editorSceneSchema.parse({ ...scene,
-      page: pinnedPage ? { ...scene.page, backgroundColor: pinnedPage.backgroundColor } : scene.page,
-      elements: [
-      ...elements.map(el => el.type === 'text' && overrides[el.id] !== undefined ? { ...el, text: overrides[el.id] } : el),
-      ...scene.elements,
-    ] });
+    let merged: EditorScene;
+    try { merged = editorSceneSchema.parse(resolveSceneDesign(scene, elements, pinnedPage?.backgroundColor)); }
+    catch (error) { throw new SubmissionError(400, error instanceof Error ? error.message : 'Invalid formatting'); }
     if (new Set(merged.elements.map(el => el.id)).size !== merged.elements.length) {
       throw new SubmissionError(400, 'Duplicate element identifiers');
     }
@@ -140,27 +148,57 @@ export async function savePage(id: string, label: PageLabel, actor: Actor, input
     const page = await tx.submissionPage.findUnique({ where: { submissionId_pageLabel: { submissionId: id, pageLabel: label } } });
     if (!page) throw new SubmissionError(404, 'Page not found');
     requireRevision(page.revision, revision);
+    if (!submission.isTemplate) {
+      const previous = editorSceneSchema.parse(JSON.parse(page.sceneJson));
+      if (scene.page.widthPx !== previous.page.widthPx || scene.page.heightPx !== previous.page.heightPx) throw new SubmissionError(400, 'Page geometry is fixed');
+      const byId = new Map(previous.elements.map(element => [element.id, element]));
+      for (const element of scene.elements) {
+        const old = byId.get(element.id);
+        for (const key of (submission.templateId ? ['designRole', 'stylePolicy', 'paletteBinding'] as const : [])) {
+          if (JSON.stringify(element[key]) !== JSON.stringify(old?.[key])) throw new SubmissionError(400, 'Design roles and permissions are template-owned');
+        }
+      }
+    }
     await validateSceneAssets(tx, [scene], actor);
     let stored = scene;
     if (submission.isTemplate) {
+      try { stored = resolveSceneDesign(scene); }
+      catch (error) { throw new SubmissionError(400, error instanceof Error ? error.message : 'Invalid formatting'); }
       await tx.templateElement.deleteMany({ where: { templateId: id, pageLabel: label } });
-      await tx.templateElement.createMany({ data: scene.elements.map((el, order) => ({
+      await tx.templateElement.createMany({ data: stored.elements.map((el, order) => ({
         templateId: id, pageLabel: label, order, elementJson: JSON.stringify(el),
       })) });
-      stored = { version: scene.version, page: scene.page, elements: [] };
+      stored = { version: stored.version, page: stored.page, elements: [] };
       await tx.submission.update({ where: { id }, data: { version: { increment: 1 } } });
     } else if (submission.templateId) {
-      await lockSubmission(tx, submission.templateId);
-      const rows = await tx.templateElement.findMany({ where: { templateId: submission.templateId, pageLabel: label } });
-      const elements = rows.map(row => editorElementSchema.parse(JSON.parse(row.elementJson)));
+      // A pinned book validates against its own frozen scenes: the live
+      // template may have been edited or unpublished since it was composed.
+      const pinned = hasPinnedScenes(submission) ? parsePinnedTemplate(submission.pinnedTemplate) : null;
+      let elements: ReturnType<typeof editorElementSchema.parse>[];
+      if (pinned) {
+        elements = pinned.pages.find(page => page.pageLabel === label)?.elements ?? [];
+      } else {
+        await lockSubmission(tx, submission.templateId);
+        const rows = await tx.templateElement.findMany({ where: { templateId: submission.templateId, pageLabel: label } });
+        elements = rows.map(row => editorElementSchema.parse(JSON.parse(row.elementJson)));
+      }
       if (elements.length + scene.elements.length > 100 || scene.elements.some(el => elements.some(te => te.id === el.id))) {
         throw new SubmissionError(400, 'Template element collision or per-page limit exceeded');
       }
       for (const key of Object.keys(scene.templateTextOverrides ?? {})) {
-        if (!elements.some(el => el.id === key && el.type === 'text')) throw new SubmissionError(400, 'Invalid template text override');
+        const target = elements.find(el => el.id === key && el.type === 'text');
+        if (!target) throw new SubmissionError(400, 'Invalid template text override');
+        if ((target.locked || isProtectedDesign(target)) && target.type === 'text' && scene.templateTextOverrides![key] !== target.text) throw new SubmissionError(400, 'Template branding and locked text are protected');
       }
+      try { validateSceneDesign(scene, elements); resolveSceneDesign(scene, elements); }
+      catch (error) { throw new SubmissionError(400, error instanceof Error ? error.message : 'Invalid formatting'); }
     } else {
-      stored = { version: scene.version, page: scene.page, elements: scene.elements };
+      if (Object.keys(scene.templateStyleOverrides ?? {}).length) throw new SubmissionError(400, 'This draft has no template');
+      try { validateSceneDesign(scene); resolveSceneDesign(scene); }
+      catch (error) { throw new SubmissionError(400, error instanceof Error ? error.message : 'Invalid formatting'); }
+      const { templateTextOverrides: _text, templateStyleOverrides: _style, ...userScene } = scene;
+      void _text; void _style;
+      stored = userScene;
     }
     return tx.submissionPage.update({ where: { id: page.id }, data: {
       sceneJson: JSON.stringify(stored), revision: { increment: 1 },
@@ -304,4 +342,62 @@ export async function rewriteInstanceOverrides(
   };
   if (options.tx) return run(options.tx);
   await prisma.$transaction(run, { timeout: 20000 });
+}
+
+/** Title cap shared with the create/title endpoints. */
+const MAX_TITLE_CHARS = 120;
+const COPY_SUFFIX = ' (copy)';
+
+/**
+ * Copy an editor book into a fresh DRAFT owned by the actor.
+ *
+ * An approved book is immutable by contract: its PDFs are the artifacts QA
+ * signed off and the ones an order charges for, so editing it in place would
+ * invalidate both. "Open in editor" therefore opens a copy and leaves the
+ * finished book — and any order pointing at it — untouched. Template links and
+ * the pinned scenes travel with the copy, so the design stays locked and the
+ * copy renders identically to the book it came from.
+ */
+export async function duplicateAsDraft(id: string, actor: Actor): Promise<string> {
+  return prisma.$transaction(async (tx) => {
+    const source = await lockSubmission(tx, id, actor);
+    if (source.isTemplate) throw new SubmissionError(400, 'Templates cannot be opened as an editor draft');
+    if (source.mode !== 'EDITOR') {
+      throw new SubmissionError(400, 'Only editor books can be opened in the editor');
+    }
+    const pages = await tx.submissionPage.findMany({
+      where: { submissionId: id },
+      orderBy: { order: 'asc' },
+      select: { pageLabel: true, order: true, sceneJson: true },
+    });
+    const baseTitle = source.title?.trim();
+    const copy = await tx.submission.create({
+      data: {
+        userId: actor.id,
+        mode: source.mode,
+        // Keep the source recognisable in the library, inside the title cap.
+        title: baseTitle
+          ? `${baseTitle.slice(0, MAX_TITLE_CHARS - COPY_SUFFIX.length)}${COPY_SUFFIX}`
+          : null,
+        status: 'DRAFT',
+        templateId: source.templateId,
+        templateVersion: source.templateVersion,
+        aiGenerated: source.aiGenerated,
+        // Only an instance still linked to its template needs the frozen
+        // scenes; a detached book already carries them in its own pages.
+        ...(source.templateId && source.pinnedTemplate
+          ? { pinnedTemplate: source.pinnedTemplate as PrismaNamespace.InputJsonValue }
+          : {}),
+        // Artifacts (pdfS3Key, previews, revision, QA flags) are deliberately
+        // not copied: the copy has never been rendered or approved.
+        pages: { create: pages.map((page) => ({
+          pageLabel: page.pageLabel,
+          order: page.order,
+          sceneJson: page.sceneJson,
+        })) },
+      },
+      select: { id: true },
+    });
+    return copy.id;
+  }, { timeout: 20000 });
 }

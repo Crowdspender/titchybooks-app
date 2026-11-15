@@ -5,6 +5,9 @@ import { editorSceneSchema } from '@/lib/editor/schema';
 import { mergedPages, validateSceneAssets, SubmissionError, type Transaction, type Actor } from '@/lib/editor/submission-store';
 import { checkSubmissionResolution, type DpiWarning } from '@/lib/editor/validation';
 import { DEFAULT_PRINT_PROFILE, isCurrentPrintProfile } from './print-profile';
+import { FONT_MANIFEST, requiredDesignFonts } from '@/lib/editor/design-fonts';
+import { loadServerDesignFonts } from './design-fonts-server';
+import { preflightDesign } from '@/lib/editor/design-preflight';
 
 const assetSchema = z.object({
   id: z.string().min(1), s3Key: z.string().min(1), mimeType: z.string(),
@@ -31,6 +34,7 @@ export const renderSnapshotV1Schema = z.object({
   if (panels.length !== 8 || new Set(panels.map(p => p.pageLabel)).size !== 8) {
     ctx.addIssue({ code: 'custom', message: 'Eight unique render panels required' });
   }
+  if (value.pages.some(page => page.scene.elements.some(element => element.type === 'text' && element.typographyVersion))) ctx.addIssue({ code: 'custom', message: 'Guided typography requires a versioned font manifest' });
   if (value.mode === 'LEGACY_UPLOAD' && value.renderer !== 'raster') ctx.addIssue({ code: 'custom', message: 'Legacy must use raster' });
   const ids = new Set(value.assets.map(asset => asset.id));
   if (value.pages.some(page => page.scene.elements.some(el => el.type === 'image' && !ids.has(el.assetId)))) {
@@ -54,6 +58,7 @@ export const renderSnapshotV2Schema = z.object({
   /** Document title used for PDF metadata and download filenames. */
   title: z.string().nullable(),
   printProfile: z.string().min(1),
+  typography: z.object({ version: z.literal(1), fonts: z.record(z.string(), z.array(z.string().regex(/^[a-f0-9]{64}$/))) }).strict().optional(),
   /** The qualified AI path is raster only. */
   renderer: z.literal('raster'),
   mode: z.enum(['EDITOR', 'LEGACY_UPLOAD']),
@@ -69,6 +74,12 @@ export const renderSnapshotV2Schema = z.object({
   if (value.mode === 'EDITOR' && value.pages.length !== 8) {
     ctx.addIssue({ code: 'custom', message: 'Editor snapshots require eight page scenes' });
   }
+  try {
+    const ids = requiredDesignFonts(value.pages.flatMap(page => page.scene.elements));
+    const expected = Object.fromEntries(ids.map(id => [id, FONT_MANIFEST[id].map(asset => asset.sha256)]));
+    if (ids.length && (!value.typography || Object.keys(value.typography.fonts).length !== ids.length || ids.some(id => JSON.stringify(value.typography!.fonts[id]) !== JSON.stringify(expected[id])))) ctx.addIssue({ code: 'custom', message: 'Missing or changed typography assets' });
+    if (!ids.length && value.typography && Object.keys(value.typography.fonts).length) ctx.addIssue({ code: 'custom', message: 'Unexpected typography assets' });
+  } catch { ctx.addIssue({ code: 'custom', message: 'Unqualified typography' }); }
   if (!isCurrentPrintProfile(value.printProfile)) {
     ctx.addIssue({ code: 'custom', message: `Unsupported print profile "${value.printProfile}"` });
   }
@@ -126,7 +137,15 @@ export async function captureSnapshot(tx: Transaction, submission: Submission, a
     if (!force && warnings.some(w => w.severity === 'error')) {
       throw new SubmissionError(422, 'Some images have very low resolution and may print poorly.', { canForce: true, dpiWarnings: warnings });
     }
-    input = renderSnapshotSchema.parse({ ...base, mode: 'EDITOR', renderer: 'raster', pages, assets, images: [] });
+    for (const page of pages) {
+      try { loadServerDesignFonts(page.scene.elements); }
+      catch (error) { throw new SubmissionError(422, error instanceof Error ? error.message : 'Qualified font unavailable'); }
+      const issues = preflightDesign(page.scene, page.pageLabel).filter(issue => issue.severity === 'error');
+      if (issues.length) throw new SubmissionError(422, `${page.pageLabel}: ${issues[0].message}`, { designIssues: issues });
+    }
+    const fontIds = requiredDesignFonts(pages.flatMap(page => page.scene.elements));
+    const typography = fontIds.length ? { version: 1, fonts: Object.fromEntries(fontIds.map(id => [id, FONT_MANIFEST[id].map(asset => asset.sha256)])) } : undefined;
+    input = renderSnapshotSchema.parse({ ...base, mode: 'EDITOR', renderer: 'raster', pages, assets, images: [], ...(typography ? { typography } : {}) });
   }
   return { input, warnings };
 }
