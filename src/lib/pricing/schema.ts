@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { ORDER_STATUSES, ZONES } from "./constants";
+import { MAX_ORDER_QUANTITY, ORDER_STATUSES, ZONES } from "./constants";
 import { SUPPORTED_CURRENCIES } from "./currency";
 
 const zoneEnum = z.enum(ZONES);
@@ -14,6 +14,12 @@ export const priceTierSchema = z
   .refine((tier) => tier.max >= tier.min, {
     message: "Tier max must be >= min",
   });
+
+/** One carrier weight step: everything up to `maxWeightGrams` costs `priceHuf`. */
+export const shippingBandSchema = z.object({
+  maxWeightGrams: z.number().int().min(1),
+  priceHuf: z.number().int().min(0),
+});
 
 export const currencyRatesSchema = z
   .object({
@@ -31,19 +37,35 @@ export const pricingConfigInputSchema = z
     enabledZones: z
       .array(zoneEnum)
       .min(1, "At least one zone must be enabled"),
-    weightBands: z
-      .array(z.number().int().min(1))
-      .length(6, "Six weight bands required"),
-    shippingTable: z.record(zoneEnum, z.array(z.number().int().min(0)).length(6)),
+    // Each zone keeps its own ladder: the last band is the carrier's ceiling.
+    shippingTable: z.record(
+      zoneEnum,
+      z.array(shippingBandSchema).max(64)
+    ),
     priceTiers: z.array(priceTierSchema).min(1),
     currencyRates: currencyRatesSchema,
     vaultFeeHuf: z.number().int().min(0).default(2000),
   })
   .refine(
     (cfg) =>
-      // Every enabled zone must have a row in the shipping table.
-      cfg.enabledZones.every((zone) => Array.isArray(cfg.shippingTable[zone])),
-    { message: "Every enabled zone needs a shipping price row" }
+      // Every enabled zone must have rates, otherwise checkout would offer a
+      // destination that can never be priced.
+      cfg.enabledZones.every(
+        (zone) => (cfg.shippingTable[zone]?.length ?? 0) > 0
+      ),
+    { message: "Every enabled zone needs at least one shipping band" }
+  )
+  .refine(
+    (cfg) =>
+      // Bands are matched in order, so each one must be heavier than the last.
+      Object.values(cfg.shippingTable).every((ladder) =>
+        ladder.every(
+          (band, index) =>
+            index === 0 ||
+            band.maxWeightGrams > ladder[index - 1].maxWeightGrams
+        )
+      ),
+    { message: "Shipping bands must increase in weight" }
   )
   .refine(
     (cfg) => {
@@ -63,7 +85,7 @@ export type PricingConfigInput = z.infer<typeof pricingConfigInputSchema>;
 export const calculateOrderInputSchema = z.object({
   submissionId: z.string().min(1).optional(),
   zone: zoneEnum,
-  quantity: z.number().int().min(1).max(333),
+  quantity: z.number().int().min(1).max(MAX_ORDER_QUANTITY),
   currency: currencyEnum.optional(),
   vaultAddOn: z.boolean().optional(),
 });
@@ -83,7 +105,7 @@ export type ShippingAddressInput = z.infer<typeof shippingAddressSchema>;
 export const createOrderInputSchema = z.object({
   submissionId: z.string().min(1),
   zone: zoneEnum,
-  quantity: z.number().int().min(1).max(333),
+  quantity: z.number().int().min(1).max(MAX_ORDER_QUANTITY),
   currency: currencyEnum.optional(),
   shippingAddress: shippingAddressSchema,
   vaultAddOn: z.boolean().optional(),

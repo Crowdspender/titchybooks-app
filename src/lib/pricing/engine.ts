@@ -17,10 +17,11 @@
  */
 
 import {
-  MAX_SHIPMENT_WEIGHT_GRAMS,
   PRICE_BREAK_QUANTITIES,
+  ZONE_LABELS,
   type PriceTier,
   type ResolvedPricingConfig,
+  type ShippingBand,
   type Zone,
 } from "./constants";
 
@@ -64,16 +65,62 @@ export function calculateWeight(
 }
 
 /**
- * Returns the band index for a given weight, or -1 if the weight exceeds
- * the last band. Bands are upper-inclusive.
+ * Returns the zone's ladder. Each zone mirrors one carrier product, so the
+ * weight steps and the ceiling differ per destination.
  */
-export function getWeightBand(
+export function getShippingLadder(
+  zone: Zone,
+  cfg: ResolvedPricingConfig
+): ShippingBand[] {
+  const ladder = cfg.shippingTable[zone];
+  if (!ladder) {
+    throw new Error(`Zone "${zone}" is not configured`);
+  }
+  return ladder;
+}
+
+/** Heaviest weight the zone's carrier accepts; 0 when no rates are loaded. */
+export function maxShipmentWeight(
+  zone: Zone,
+  cfg: ResolvedPricingConfig
+): number {
+  const ladder = getShippingLadder(zone, cfg);
+  return ladder.length ? ladder[ladder.length - 1].maxWeightGrams : 0;
+}
+
+/**
+ * Returns the band index for a given weight, or -1 if the weight exceeds the
+ * zone's ceiling. Bands are upper-inclusive.
+ */
+export function getShippingBand(
+  zone: Zone,
   weight: number,
   cfg: ResolvedPricingConfig
 ): number {
   if (weight <= 0) return -1;
-  const idx = cfg.weightBands.findIndex((cap) => weight <= cap);
-  return idx;
+  return getShippingLadder(zone, cfg).findIndex(
+    (band) => weight <= band.maxWeightGrams
+  );
+}
+
+/** Renders grams as a short kilogram figure ("10 kg", "31.5 kg"). */
+export function formatKilograms(grams: number): string {
+  const kg = Math.round((grams / 1000) * 10) / 10;
+  return `${Number.isInteger(kg) ? kg : kg.toFixed(1)} kg`;
+}
+
+function shippingLimitError(
+  zone: Zone,
+  weight: number,
+  cfg: ResolvedPricingConfig
+): Error {
+  const max = maxShipmentWeight(zone, cfg);
+  if (max === 0) {
+    return new Error(`Shipping to ${ZONE_LABELS[zone]} is not available yet`);
+  }
+  return new Error(
+    `Shipment weight ${weight}g exceeds the ${formatKilograms(max)} limit for ${ZONE_LABELS[zone]}`
+  );
 }
 
 export function getShippingCost(
@@ -81,18 +128,12 @@ export function getShippingCost(
   quantity: number,
   cfg: ResolvedPricingConfig
 ): number {
-  const row = cfg.shippingTable[zone];
-  if (!row) {
-    throw new Error(`Zone "${zone}" is not configured`);
-  }
   const weight = calculateWeight(quantity, cfg);
-  const band = getWeightBand(weight, cfg);
+  const band = getShippingBand(zone, weight, cfg);
   if (band === -1) {
-    throw new Error(
-      `Shipment weight ${weight}g exceeds the ${MAX_SHIPMENT_WEIGHT_GRAMS}g limit`
-    );
+    throw shippingLimitError(zone, weight, cfg);
   }
-  return row[band];
+  return getShippingLadder(zone, cfg)[band].priceHuf;
 }
 
 export function findTier(
@@ -143,17 +184,15 @@ export function calculateOrder(
   options: CalculateOrderOptions = {}
 ): CalculatedOrder {
   const weightGrams = calculateWeight(quantity, cfg);
-  const shippingBand = getWeightBand(weightGrams, cfg);
+  const shippingBand = getShippingBand(zone, weightGrams, cfg);
   if (shippingBand === -1) {
-    throw new Error(
-      `Shipment weight ${weightGrams}g exceeds the ${MAX_SHIPMENT_WEIGHT_GRAMS}g limit`
-    );
+    throw shippingLimitError(zone, weightGrams, cfg);
   }
 
   const unitPriceHuf = getUnitPrice(quantity, cfg);
   const printCostHuf = unitPriceHuf * quantity;
   const handlingCostHuf = getHandlingCost(printCostHuf, cfg);
-  const shippingCostHuf = getShippingCost(zone, quantity, cfg);
+  const shippingCostHuf = getShippingLadder(zone, cfg)[shippingBand].priceHuf;
   const vaultFeeHuf = options.vaultAddOn ? cfg.vaultFeeHuf : 0;
   const discountHuf = applyDiscount(printCostHuf, options.discount);
   const totalHuf = Math.max(
@@ -180,16 +219,17 @@ export function calculateOrder(
 }
 
 /**
- * Maximum quantity that still fits every band. Used to snap upwards to the
- * next "cheap shipping" sweet spot.
+ * Maximum quantity that still fits a band. Used to snap upwards to the next
+ * "cheap shipping" sweet spot.
  */
 export function bandCeilingQuantity(
+  zone: Zone,
   bandIndex: number,
   cfg: ResolvedPricingConfig
 ): number {
-  const weightCap = cfg.weightBands[bandIndex];
-  if (!weightCap) return 0;
-  return Math.floor(weightCap / cfg.weightPerBookGrams);
+  const band = cfg.shippingTable[zone]?.[bandIndex];
+  if (!band) return 0;
+  return Math.floor(band.maxWeightGrams / cfg.weightPerBookGrams);
 }
 
 export interface OptimalSuggestion {
@@ -221,8 +261,9 @@ export function suggestOptimalQuantity(
   // smaller than the current quantity — suggesting a smaller order is
   // unhelpful because the user explicitly wants at least `quantity`.
   const candidates = new Set<number>();
-  for (let band = 0; band < cfg.weightBands.length; band += 1) {
-    const q = bandCeilingQuantity(band, cfg);
+  const ladder = cfg.shippingTable[zone] ?? [];
+  for (let band = 0; band < ladder.length; band += 1) {
+    const q = bandCeilingQuantity(zone, band, cfg);
     if (q > quantity) candidates.add(q);
   }
   for (const tier of cfg.priceTiers) {

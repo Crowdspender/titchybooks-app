@@ -5,7 +5,10 @@ import { toast } from "sonner";
 import {
     DEFAULT_CURRENCY_RATES,
     DEFAULT_PRICE_TIERS,
+    DEFAULT_SHIPPING_TABLE,
+    OPEN_ENDED_TIER_MAX,
     type PriceTier,
+    type ShippingBand,
     type Zone,
     ZONE_LABELS,
     ZONES,
@@ -24,8 +27,7 @@ interface PricingConfigState {
     handlingFixedHuf: number;
     handlingPercent: number;
     enabledZones: Zone[];
-    weightBands: number[];
-    shippingTable: Record<Zone, number[]>;
+    shippingTable: Record<Zone, ShippingBand[]>;
     priceTiers: PriceTier[];
     currencyRates: CurrencyRatesState;
     vaultFeeHuf: number;
@@ -58,7 +60,6 @@ export default function PricingConfigForm() {
                     handlingFixedHuf: cfg.handlingFixedHuf,
                     handlingPercent: cfg.handlingPercent,
                     enabledZones: cfg.enabledZones,
-                    weightBands: cfg.weightBands,
                     shippingTable: cfg.shippingTable,
                     priceTiers: cfg.priceTiers,
                     currencyRates: {
@@ -92,9 +93,30 @@ export default function PricingConfigForm() {
         return null;
     }, [config]);
 
+    const shippingError = useMemo(() => {
+        if (!config) return null;
+        for (const zone of config.enabledZones) {
+            if ((config.shippingTable[zone]?.length ?? 0) === 0) {
+                return `${ZONE_LABELS[zone]} is enabled but has no shipping bands`;
+            }
+        }
+        for (const zone of ZONES) {
+            const ladder = config.shippingTable[zone] ?? [];
+            for (let i = 1; i < ladder.length; i += 1) {
+                if (ladder[i].maxWeightGrams <= ladder[i - 1].maxWeightGrams) {
+                    return `${ZONE_LABELS[zone]}: band ${i + 1} must be heavier than band ${i}`;
+                }
+            }
+        }
+        return null;
+    }, [config]);
+
     // Canonical quantities for the live preview. Picked to sit inside each
     // default tier so admins can eyeball the effect of tier edits at a glance.
-    const PREVIEW_QUANTITIES = useMemo(() => [1, 8, 40, 80, 160, 333], []);
+    const PREVIEW_QUANTITIES = useMemo(
+        () => [1, 8, 40, 80, 160, 333, 833, 1666, 3333, 6666],
+        [],
+    );
 
     const tierPreview = useMemo(() => {
         if (!config || tierError) return null;
@@ -105,7 +127,6 @@ export default function PricingConfigForm() {
             handlingFixedHuf: config.handlingFixedHuf,
             handlingPercent: config.handlingPercent,
             enabledZones: config.enabledZones,
-            weightBands: config.weightBands,
             shippingTable: config.shippingTable,
             priceTiers: config.priceTiers,
             currencyRates: config.currencyRates,
@@ -159,23 +180,65 @@ export default function PricingConfigForm() {
         setConfig((c) => (c ? { ...c, ...patch } : c));
     }
 
-    function setShippingCell(zone: Zone, bandIdx: number, value: number) {
+    function setShippingBand(zone: Zone, idx: number, patch: Partial<ShippingBand>) {
         if (!config) return;
-        const next = { ...config.shippingTable };
-        next[zone] = config.shippingTable[zone].map((v, i) =>
-            i === bandIdx ? value : v
-        );
-        updateConfig({ shippingTable: next });
+        const ladder = config.shippingTable[zone] ?? [];
+        updateConfig({
+            shippingTable: {
+                ...config.shippingTable,
+                [zone]: ladder.map((band, i) =>
+                    i === idx ? { ...band, ...patch } : band
+                ),
+            },
+        });
     }
 
-    function setBand(idx: number, value: number) {
+    function addShippingBand(zone: Zone) {
+        if (!config) return;
+        const ladder = config.shippingTable[zone] ?? [];
+        const last = ladder[ladder.length - 1];
+        updateConfig({
+            shippingTable: {
+                ...config.shippingTable,
+                [zone]: [
+                    ...ladder,
+                    {
+                        maxWeightGrams: last ? last.maxWeightGrams + 1000 : 2000,
+                        priceHuf: last?.priceHuf ?? 0,
+                    },
+                ],
+            },
+        });
+    }
+
+    function removeShippingBand(zone: Zone, idx: number) {
         if (!config) return;
         updateConfig({
-            weightBands: config.weightBands.map((
-                v,
-                i,
-            ) => (i === idx ? value : v)),
+            shippingTable: {
+                ...config.shippingTable,
+                [zone]: (config.shippingTable[zone] ?? []).filter(
+                    (_, i) => i !== idx,
+                ),
+            },
         });
+    }
+
+    function resetShippingToDefaults() {
+        if (!config) return;
+        const confirmed = typeof window === "undefined" ? true : window.confirm(
+            "Replace every zone's shipping ladder with the built-in defaults? " +
+                "Unsaved changes to shipping will be lost — you'll still need to click Save to persist.",
+        );
+        if (!confirmed) return;
+        updateConfig({
+            shippingTable: Object.fromEntries(
+                ZONES.map((zone) => [
+                    zone,
+                    DEFAULT_SHIPPING_TABLE[zone].map((band) => ({ ...band })),
+                ]),
+            ) as Record<Zone, ShippingBand[]>,
+        });
+        toast.success("Shipping ladders reset to defaults (not saved yet)");
     }
 
     function setTierField(idx: number, patch: Partial<PriceTier>) {
@@ -190,6 +253,7 @@ export default function PricingConfigForm() {
     function addTier() {
         if (!config) return;
         const last = config.priceTiers[config.priceTiers.length - 1];
+        if (last?.max === OPEN_ENDED_TIER_MAX) return;
         const nextMin = last ? last.max + 1 : 1;
         updateConfig({
             priceTiers: [
@@ -251,8 +315,10 @@ export default function PricingConfigForm() {
 
     async function save() {
         if (!config) return;
-        if (tierError) {
-            toast.error(tierError);
+        if (tierError || shippingError) {
+            toast.error(
+                tierError ?? shippingError ?? "Fix the pricing errors first",
+            );
             return;
         }
         setSaving(true);
@@ -339,79 +405,165 @@ export default function PricingConfigForm() {
                 </div>
             </section>
 
-            {/* Weight bands + shipping table */}
+            {/* Per-zone shipping ladders */}
             <section className="card p-6">
-                <h2 className="section-label mb-4">Shipping table (HUF)</h2>
-                <div className="overflow-x-auto">
-                    <table className="min-w-full text-sm">
-                        <thead>
-                            <tr>
-                                <th className="px-3 py-2 text-left font-medium">
-                                    Zone
-                                </th>
-                                {config.weightBands.map((band, idx) => (
-                                    <th
-                                        key={idx}
-                                        className="px-3 py-2 text-left font-medium"
+                <div className="mb-4 flex items-center justify-between">
+                    <h2 className="section-label">Shipping ladders (HUF)</h2>
+                    <button
+                        type="button"
+                        onClick={resetShippingToDefaults}
+                        className="btn btn-outline btn-sm text-xs"
+                    >
+                        Reset to defaults
+                    </button>
+                </div>
+                <p
+                    className="mb-4 text-xs"
+                    style={{ color: "var(--color-text-muted)" }}
+                >
+                    Each destination mirrors one carrier product, so every zone
+                    keeps its own weight steps and ceiling. Prices are
+                    customer-facing: published postage plus a small handling
+                    allowance. An order heavier than the last step is refused so
+                    it can be quoted manually.
+                </p>
+                {shippingError && (
+                    <p
+                        className="mb-3 rounded-lg px-3 py-2 text-xs"
+                        style={{
+                            background: "var(--color-accent-light)",
+                            color: "#92400E",
+                        }}
+                    >
+                        {shippingError}
+                    </p>
+                )}
+                <div className="space-y-4">
+                    {ZONES.map((zone) => {
+                        const ladder = config.shippingTable[zone] ?? [];
+                        const heaviest = ladder[ladder.length - 1];
+                        const enabled = config.enabledZones.includes(zone);
+                        return (
+                            <div
+                                key={zone}
+                                className="rounded-lg p-3"
+                                style={{
+                                    border: "1px solid var(--color-border)",
+                                }}
+                            >
+                                <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                                    <h3
+                                        className="text-sm font-semibold"
+                                        style={{ color: "var(--color-text)" }}
                                     >
-                                        <span
-                                            className="text-xs"
-                                            style={{
-                                                color:
-                                                    "var(--color-text-subtle)",
-                                            }}
-                                        >
-                                            ≤
-                                        </span>
-                                        <input
-                                            type="number"
-                                            min={1}
-                                            value={band}
-                                            onChange={(event) =>
-                                                setBand(
-                                                    idx,
-                                                    Number(event.target.value),
-                                                )}
-                                            className="input w-20 py-0.5 px-1.5 text-xs inline-block"
-                                        />
-                                        g
-                                    </th>
-                                ))}
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {ZONES.map((zone) => (
-                                <tr
-                                    key={zone}
-                                    className="border-t border-stone-200"
-                                >
-                                    <td className="px-3 py-2 font-medium">
                                         {ZONE_LABELS[zone]}
-                                    </td>
-                                    {config.weightBands.map((_, idx) => (
-                                        <td key={idx} className="px-3 py-2">
-                                            <input
-                                                type="number"
-                                                min={0}
-                                                value={config
-                                                    .shippingTable[zone]
-                                                    ?.[idx] ?? 0}
-                                                onChange={(event) =>
-                                                    setShippingCell(
-                                                        zone,
-                                                        idx,
-                                                        Number(
-                                                            event.target.value,
-                                                        ),
-                                                    )}
-                                                className="input w-24 py-1 px-2 text-sm"
-                                            />
-                                        </td>
-                                    ))}
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
+                                        {!enabled && (
+                                            <span className="ml-2 text-[11px] font-normal text-stone-500">
+                                                (disabled)
+                                            </span>
+                                        )}
+                                    </h3>
+                                    <div className="flex items-center gap-2 text-[11px] text-stone-500">
+                                        <span>
+                                            {heaviest
+                                                ? `ceiling ${formatKg(heaviest.maxWeightGrams)}`
+                                                : "no bands"}
+                                        </span>
+                                        <button
+                                            type="button"
+                                            onClick={() => addShippingBand(zone)}
+                                            className="btn btn-outline btn-sm text-xs"
+                                        >
+                                            Add band
+                                        </button>
+                                    </div>
+                                </div>
+                                {ladder.length === 0 ? (
+                                    <p className="text-xs text-stone-500">
+                                        No rates yet — enable this zone only
+                                        after adding bands.
+                                    </p>
+                                ) : (
+                                    <table className="w-full text-sm">
+                                        <thead>
+                                            <tr className="text-left text-stone-500">
+                                                <th className="px-2 py-1 font-medium">
+                                                    Up to (g)
+                                                </th>
+                                                <th className="px-2 py-1 font-medium">
+                                                    Price (HUF)
+                                                </th>
+                                                <th className="px-2 py-1" />
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {ladder.map((band, idx) => (
+                                                <tr
+                                                    key={idx}
+                                                    className="border-t border-stone-200"
+                                                >
+                                                    <td className="px-2 py-1">
+                                                        <input
+                                                            type="number"
+                                                            min={1}
+                                                            value={band.maxWeightGrams}
+                                                            aria-label={`${ZONE_LABELS[zone]} band ${idx + 1} maximum grams`}
+                                                            onChange={(event) =>
+                                                                setShippingBand(
+                                                                    zone,
+                                                                    idx,
+                                                                    {
+                                                                        maxWeightGrams: Number(
+                                                                            event.target.value,
+                                                                        ),
+                                                                    },
+                                                                )}
+                                                            className="input w-24 py-1 px-2 text-sm"
+                                                        />
+                                                        <span className="ml-2 text-[11px] text-stone-500">
+                                                            {formatKg(band.maxWeightGrams)}
+                                                        </span>
+                                                    </td>
+                                                    <td className="px-2 py-1">
+                                                        <input
+                                                            type="number"
+                                                            min={0}
+                                                            value={band.priceHuf}
+                                                            aria-label={`${ZONE_LABELS[zone]} band ${idx + 1} price`}
+                                                            onChange={(event) =>
+                                                                setShippingBand(
+                                                                    zone,
+                                                                    idx,
+                                                                    {
+                                                                        priceHuf: Number(
+                                                                            event.target.value,
+                                                                        ),
+                                                                    },
+                                                                )}
+                                                            className="input w-24 py-1 px-2 text-sm"
+                                                        />
+                                                    </td>
+                                                    <td className="px-2 py-1 text-right">
+                                                        <button
+                                                            type="button"
+                                                            onClick={() =>
+                                                                removeShippingBand(
+                                                                    zone,
+                                                                    idx,
+                                                                )}
+                                                            className="text-xs text-red-600 hover:underline"
+                                                        >
+                                                            Remove
+                                                        </button>
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                )}
+                            </div>
+                        );
+                    })}
                 </div>
             </section>
 
@@ -430,6 +582,7 @@ export default function PricingConfigForm() {
                         <button
                             type="button"
                             onClick={addTier}
+                            disabled={config.priceTiers.at(-1)?.max === OPEN_ENDED_TIER_MAX}
                             className="btn btn-primary btn-sm text-xs"
                         >
                             Add tier
@@ -481,10 +634,14 @@ export default function PricingConfigForm() {
                                     <input
                                         type="number"
                                         min={1}
-                                        value={tier.max}
+                                        value={tier.max === OPEN_ENDED_TIER_MAX ? "" : tier.max}
+                                        placeholder="No limit"
+                                        aria-label={`Tier ${idx + 1} maximum quantity`}
                                         onChange={(event) =>
                                             setTierField(idx, {
-                                                max: Number(event.target.value),
+                                                max: event.target.value === ""
+                                                    ? OPEN_ENDED_TIER_MAX
+                                                    : Number(event.target.value),
                                             })}
                                         className="input w-20 py-1 px-2 text-sm"
                                     />
@@ -516,6 +673,12 @@ export default function PricingConfigForm() {
                         ))}
                     </tbody>
                 </table>
+
+                <p className="mt-2 text-xs text-stone-500">
+                    Leave the final maximum quantity blank for an open-ended tier.
+                    Set a maximum before adding another tier. Checkout still has
+                    a 333-copy shipping limit.
+                </p>
 
                 {/* Live preview — recalculated whenever tiers/config change */}
                 {tierPreview && (
@@ -724,7 +887,7 @@ export default function PricingConfigForm() {
                 <button
                     type="button"
                     onClick={save}
-                    disabled={saving || !!tierError}
+                    disabled={saving || !!tierError || !!shippingError}
                     className="btn btn-primary btn-lg"
                 >
                     {saving ? "Saving..." : "Save pricing"}
@@ -732,6 +895,12 @@ export default function PricingConfigForm() {
             </div>
         </div>
     );
+}
+
+function formatKg(grams: number): string {
+    if (!grams) return "—";
+    const kg = grams / 1000;
+    return `${Number.isInteger(kg) ? kg : kg.toFixed(1)} kg`;
 }
 
 function NumberField({

@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import {
     DEFAULT_RESOLVED_CONFIG,
+    MAX_ORDER_QUANTITY,
     PRICE_BREAK_QUANTITIES,
     type ResolvedPricingConfig,
     type Zone,
@@ -15,6 +16,9 @@ import {
     buildUxMessages,
     type CalculatedOrder,
     calculateOrder,
+    calculateWeight,
+    formatKilograms,
+    maxShipmentWeight,
     type OptimalSuggestion,
     suggestOptimalQuantity,
     type UxMessage,
@@ -27,11 +31,11 @@ import {
     isCurrency,
     SUPPORTED_CURRENCIES,
 } from "@/lib/pricing/currency";
+import { contactHref } from "@/lib/contact";
 
 const ZONE_STORAGE_KEY = "titchybook-last-zone";
 const CURRENCY_STORAGE_KEY = "titchybook-last-currency";
 const QUANTITY_MIN = 1;
-const QUANTITY_MAX = 333;
 const DEBOUNCE_MS = 250;
 
 interface OrderPanelSubmission {
@@ -55,7 +59,6 @@ interface ServerCalcResponse {
     meta: {
         enabledZones: Zone[];
         priceTiers: ResolvedPricingConfig["priceTiers"];
-        weightBands: number[];
         weightPerBookGrams: number;
         currencyRates?: ResolvedPricingConfig["currencyRates"];
         pricingConfigVersion: number;
@@ -89,7 +92,7 @@ export default function OrderPanel({
     standalone,
 }: OrderPanelProps) {
     const router = useRouter();
-    const [quantity, setQuantity] = useState(40);
+    const [requestedQuantity, setRequestedQuantity] = useState(40);
     const [zone, setZone] = useState<Zone>("hungary");
     const [currency, setCurrency] = useState<Currency>(DEFAULT_CURRENCY);
     const [config, setConfig] = useState<ResolvedPricingConfig>(
@@ -145,7 +148,6 @@ export default function OrderPanel({
                     handlingFixedHuf: data.handlingFixedHuf,
                     handlingPercent: data.handlingPercent,
                     enabledZones: data.enabledZones,
-                    weightBands: data.weightBands,
                     shippingTable: data.shippingTable,
                     priceTiers: data.priceTiers,
                     currencyRates: data.currencyRates ??
@@ -183,6 +185,47 @@ export default function OrderPanel({
             window.localStorage.setItem(CURRENCY_STORAGE_KEY, currency);
         }
     }, [currency]);
+
+    // The selected carrier's ceiling drives the controls: a 10 kg USA parcel
+    // caps at 1666 copies, while a domestic 40 kg parcel reaches 6666.
+    const quantityCap = useMemo(() => {
+        let byWeight = MAX_ORDER_QUANTITY;
+        try {
+            const maxGrams = maxShipmentWeight(zone, config);
+            if (maxGrams > 0) {
+                byWeight = Math.floor(maxGrams / config.weightPerBookGrams);
+            }
+        } catch {
+            byWeight = MAX_ORDER_QUANTITY;
+        }
+        return Math.max(
+            QUANTITY_MIN,
+            Math.min(MAX_ORDER_QUANTITY, byWeight),
+        );
+    }, [zone, config]);
+
+    // Derived rather than stored: switching to a zone with a lighter carrier
+    // can never leave an over-limit quantity in state or send it to the API.
+    const quantity = Math.min(requestedQuantity, quantityCap);
+
+    // Anything checkout cannot price — a heavier run or an unlisted country —
+    // is routed to support for a manual quote instead of silently capped.
+    const clampedForCarrier = requestedQuantity > quantityCap;
+    const requestedWeightGrams = calculateWeight(requestedQuantity, config);
+    const zoneCeilingGrams = useMemo(() => {
+        try {
+            return maxShipmentWeight(zone, config);
+        } catch {
+            return 0;
+        }
+    }, [zone, config]);
+    const quoteHref = contactHref({
+        topic: clampedForCarrier ? "oversize_order" : "unlisted_region",
+        zone,
+        quantity: requestedQuantity,
+        weightGrams: requestedWeightGrams,
+        reference: submission.id,
+    });
 
     // Instant client-side mirror so the UI never feels laggy.
     const clientCalc = useMemo(() => {
@@ -247,7 +290,6 @@ export default function OrderPanel({
                             ...prev,
                             version: payload.meta.pricingConfigVersion,
                             priceTiers: payload.meta.priceTiers,
-                            weightBands: payload.meta.weightBands,
                             weightPerBookGrams: payload.meta.weightPerBookGrams,
                             enabledZones: payload.meta.enabledZones,
                             currencyRates: payload.meta.currencyRates ??
@@ -400,18 +442,15 @@ export default function OrderPanel({
                             <input
                                 type="number"
                                 min={QUANTITY_MIN}
-                                max={QUANTITY_MAX}
+                                max={quantityCap}
                                 value={quantity}
                                 onChange={(event) => {
                                     const v = Number(event.target.value);
                                     if (Number.isFinite(v)) {
-                                        setQuantity(
+                                        setRequestedQuantity(
                                             Math.max(
                                                 QUANTITY_MIN,
-                                                Math.min(
-                                                    QUANTITY_MAX,
-                                                    Math.round(v),
-                                                ),
+                                                Math.round(v),
                                             ),
                                         );
                                     }
@@ -427,19 +466,21 @@ export default function OrderPanel({
                         <input
                             type="range"
                             min={QUANTITY_MIN}
-                            max={QUANTITY_MAX}
+                            max={quantityCap}
                             value={quantity}
                             onChange={(event) =>
-                                setQuantity(Number(event.target.value))}
+                                setRequestedQuantity(Number(event.target.value))}
                             className="mt-2 w-full"
                             style={{ accentColor: "var(--color-primary)" }}
                         />
                         <div className="mt-1 flex flex-wrap gap-1 text-xs">
-                            {PRICE_BREAK_QUANTITIES.map((qty) => (
+                            {PRICE_BREAK_QUANTITIES.filter(
+                                (qty) => qty <= quantityCap,
+                            ).map((qty) => (
                                 <button
                                     key={qty}
                                     type="button"
-                                    onClick={() => setQuantity(qty)}
+                                    onClick={() => setRequestedQuantity(qty)}
                                     className="rounded-full px-2 py-0.5 transition"
                                     style={{
                                         border: quantity === qty
@@ -462,7 +503,7 @@ export default function OrderPanel({
                                 <button
                                     type="button"
                                     onClick={() =>
-                                        setQuantity(
+                                        setRequestedQuantity(
                                             suggestion.suggestedQuantity,
                                         )}
                                     className="rounded-full px-2 py-0.5"
@@ -481,6 +522,31 @@ export default function OrderPanel({
                         </div>
                     </div>
 
+                    {clampedForCarrier && (
+                        <div
+                            className="rounded-lg px-3 py-2 text-xs"
+                            style={{
+                                background: "var(--color-accent-light)",
+                                color: "#92400E",
+                            }}
+                        >
+                            <p>
+                                {ZONE_LABELS[zone]} shipments are limited to{" "}
+                                {formatKilograms(zoneCeilingGrams)} (
+                                {quantityCap.toLocaleString("en-GB")} copies),
+                                so the quantity was reduced to fit one parcel.
+                            </p>
+                            <Link
+                                href={quoteHref}
+                                className="mt-1 inline-block font-medium underline"
+                            >
+                                Request a quote for{" "}
+                                {requestedQuantity.toLocaleString("en-GB")}{" "}
+                                copies
+                            </Link>
+                        </div>
+                    )}
+
                     <div>
                         <label className="label">
                             Shipping destination
@@ -497,6 +563,20 @@ export default function OrderPanel({
                                 </option>
                             ))}
                         </select>
+                        <p
+                            className="mt-1 text-[11px]"
+                            style={{ color: "var(--color-text-muted)" }}
+                        >
+                            Country not listed, or need a heavier shipment?{" "}
+                            <Link
+                                href={quoteHref}
+                                className="underline"
+                                style={{ color: "var(--color-primary)" }}
+                            >
+                                Ask for a manual quote
+                            </Link>
+                            .
+                        </p>
                     </div>
 
                     <div>
@@ -786,7 +866,7 @@ export default function OrderPanel({
                                     Shipment weight {breakdown.weightGrams}{" "}
                                     g · band {breakdown.shippingBand + 1} of
                                     {" "}
-                                    {config.weightBands.length}
+                                    {config.shippingTable[zone]?.length ?? 0}
                                 </p>
                             </dl>
                         )

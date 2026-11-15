@@ -19,7 +19,6 @@ export async function GET() {
   const cfg = await loadPricingConfig();
   return NextResponse.json({
     enabledZones: cfg.enabledZones,
-    weightBands: cfg.weightBands,
     weightPerBookGrams: cfg.weightPerBookGrams,
     priceTiers: cfg.priceTiers,
     shippingTable: Object.fromEntries(

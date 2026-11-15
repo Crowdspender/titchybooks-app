@@ -5,16 +5,18 @@ import {
   DEFAULT_CURRENCY_RATES,
   DEFAULT_PRICE_TIERS,
   DEFAULT_SHIPPING_TABLE,
-  DEFAULT_WEIGHT_BANDS,
   DEFAULT_WEIGHT_PER_BOOK_GRAMS,
   ZONES,
+  type ShippingBand,
+  type Zone,
 } from "../src/lib/pricing/constants";
+import { configuredWeightCaps } from "../src/lib/pricing/shipping";
 import { seedTemplates } from "./seed-templates";
 
 const prisma = new PrismaClient();
 
 async function seedAdmin() {
-  const email = process.env.ADMIN_EMAIL || "admin@titchybook.com";
+  const email = process.env.ADMIN_EMAIL || "admin@titchybooks.com";
   // No default password: an accidentally-seeded admin with a known password
   // is a full compromise. Set ADMIN_PASSWORD before seeding.
   const password = process.env.ADMIN_PASSWORD;
@@ -52,6 +54,13 @@ async function seedPricingConfig() {
     return;
   }
 
+  const shippingTable = Object.fromEntries(
+    ZONES.map((zone) => [
+      zone,
+      DEFAULT_SHIPPING_TABLE[zone].map((band) => ({ ...band })),
+    ])
+  ) as Record<Zone, ShippingBand[]>;
+
   await prisma.pricingConfig.create({
     data: {
       id: "default",
@@ -60,12 +69,8 @@ async function seedPricingConfig() {
       handlingFixedHuf: 0,
       handlingPercent: 0,
       enabledZones: JSON.stringify([...ZONES]),
-      weightBands: JSON.stringify([...DEFAULT_WEIGHT_BANDS]),
-      shippingTable: JSON.stringify(
-        Object.fromEntries(
-          ZONES.map((zone) => [zone, [...DEFAULT_SHIPPING_TABLE[zone]]])
-        )
-      ),
+      weightBands: JSON.stringify(configuredWeightCaps(shippingTable)),
+      shippingTable: JSON.stringify(shippingTable),
       priceTiers: JSON.stringify(DEFAULT_PRICE_TIERS.map((t) => ({ ...t }))),
       currencyRates: JSON.stringify({ ...DEFAULT_CURRENCY_RATES }),
     },

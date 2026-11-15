@@ -1,5 +1,7 @@
 import { Resend } from "resend";
 
+import { contactTopicLabel, SUPPORT_EMAIL, type ContactTopic } from "./contact";
+
 // Initialize Resend with API key from environment
 const resend = process.env.RESEND_API_KEY
   ? new Resend(process.env.RESEND_API_KEY)
@@ -142,7 +144,7 @@ export async function sendWelcomeEmail({
           </ul>
           <hr style="border: none; border-top: 1px solid #eee; margin: 30px 0;" />
           <p style="color: #999; font-size: 12px;">
-            Need help? Contact us at <a href="mailto:support@titchybook.com" style="color: #4F46E5;">support@titchybook.com</a>
+            Need help? Contact us at <a href="mailto:${SUPPORT_EMAIL}" style="color: #4F46E5;">${SUPPORT_EMAIL}</a>
           </p>
         </div>
       `,
@@ -153,6 +155,118 @@ export async function sendWelcomeEmail({
     return true;
   } catch (error) {
     console.error("❌ Failed to send welcome email:", error);
+    if (error instanceof Error) {
+      console.error("Error details:", error.message);
+    }
+    return false;
+  }
+}
+
+interface SendContactEmailParams {
+  name: string;
+  email: string;
+  topic: ContactTopic | string;
+  message: string;
+  reference?: string;
+  zone?: string;
+  quantity?: number;
+  weightGrams?: number;
+}
+
+/** Escapes interpolated values before they reach the HTML body. */
+function escapeHtml(value: string): string {
+  const entities: Record<string, string> = {
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;",
+  };
+  return value.replace(/[&<>"']/g, (char) => entities[char] ?? char);
+}
+
+/**
+ * Sends a quote/contact request to the support inbox. The customer's address
+ * goes into `replyTo` so support can answer straight from the mail client.
+ * Returns false when email is not configured or the provider rejects it — the
+ * caller then points the customer at SUPPORT_EMAIL directly.
+ */
+export async function sendContactEmail({
+  name,
+  email,
+  topic,
+  message,
+  reference,
+  zone,
+  quantity,
+  weightGrams,
+}: SendContactEmailParams): Promise<boolean> {
+  if (!resend) {
+    console.warn(
+      "⚠️ RESEND_API_KEY not configured. Contact request not emailed."
+    );
+    return false;
+  }
+
+  const inbox = process.env.CONTACT_INBOX_EMAIL || SUPPORT_EMAIL;
+  const topicLabel = contactTopicLabel(topic as ContactTopic);
+  const facts = [
+    zone ? `Destination: ${zone}` : null,
+    quantity ? `Copies: ${quantity}` : null,
+    weightGrams ? `Weight: ${weightGrams} g` : null,
+    reference ? `Reference: ${reference}` : null,
+  ].filter((line): line is string => Boolean(line));
+
+  const text = [
+    `Name: ${name}`,
+    `Email: ${email}`,
+    `Topic: ${topicLabel}`,
+    ...facts,
+    "",
+    message,
+  ].join("\n");
+
+  const html = `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+      <h2 style="color: #333;">Contact request: ${escapeHtml(topicLabel)}</h2>
+      <p style="color: #666; font-size: 14px; margin: 4px 0;">
+        <strong>${escapeHtml(name)}</strong> &lt;${escapeHtml(email)}&gt;
+      </p>
+      ${
+        facts.length
+          ? `<ul style="color: #666; font-size: 14px;">${facts
+              .map((line) => `<li>${escapeHtml(line)}</li>`)
+              .join("")}</ul>`
+          : ""
+      }
+      <div style="white-space: pre-wrap; color: #333; font-size: 15px; border-left: 3px solid #4F46E5; padding-left: 12px;">
+${escapeHtml(message)}
+      </div>
+      <hr style="border: none; border-top: 1px solid #eee; margin: 24px 0;" />
+      <p style="color: #999; font-size: 12px;">
+        Reply to this email to answer the customer directly.
+      </p>
+    </div>
+  `;
+
+  try {
+    const { data, error } = await resend.emails.send({
+      from: `Titchybooks <${EMAIL_FROM}>`,
+      to: inbox,
+      replyTo: email,
+      subject: `[Contact] ${topicLabel} — ${name}`,
+      text,
+      html,
+    });
+
+    if (error) {
+      console.error("❌ Contact email rejected:", error);
+      return false;
+    }
+    console.log(`✅ Contact email sent to ${inbox}`, data?.id);
+    return true;
+  } catch (error) {
+    console.error("❌ Failed to send contact email:", error);
     if (error instanceof Error) {
       console.error("Error details:", error.message);
     }

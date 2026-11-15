@@ -17,6 +17,7 @@ import assert from "node:assert/strict";
 import {
   DEFAULT_RESOLVED_CONFIG,
   MAX_SHIPMENT_WEIGHT_GRAMS,
+  OPEN_ENDED_TIER_MAX,
   type ResolvedPricingConfig,
 } from "../constants";
 import {
@@ -26,11 +27,19 @@ import {
   calculateWeight,
   findTier,
   getHandlingCost,
+  getShippingBand,
   getShippingCost,
+  getShippingLadder,
   getUnitPrice,
-  getWeightBand,
+  maxShipmentWeight,
   suggestOptimalQuantity,
 } from "../engine";
+import { normaliseShippingTable } from "../shipping";
+import {
+  calculateOrderInputSchema,
+  createOrderInputSchema,
+  pricingConfigInputSchema,
+} from "../schema";
 
 let passed = 0;
 let failed = 0;
@@ -70,6 +79,7 @@ group("calculateWeight", () => {
     assert.equal(calculateWeight(8, cfg), 48);
     assert.equal(calculateWeight(40, cfg), 240);
     assert.equal(calculateWeight(333, cfg), 1998);
+    assert.equal(calculateWeight(6666, cfg), 39996);
   });
 
   test("respects an admin override of weightPerBookGrams", () => {
@@ -80,40 +90,38 @@ group("calculateWeight", () => {
 });
 
 // ---------------------------------------------------------------------------
-// getWeightBand — boundary cases
+// getShippingBand — per-zone boundary cases
 // ---------------------------------------------------------------------------
 
-group("getWeightBand", () => {
+group("getShippingBand", () => {
   const cfg = defaultConfig();
 
   test("returns -1 for non-positive weight", () => {
-    assert.equal(getWeightBand(0, cfg), -1);
-    assert.equal(getWeightBand(-5, cfg), -1);
+    assert.equal(getShippingBand("hungary", 0, cfg), -1);
+    assert.equal(getShippingBand("hungary", -5, cfg), -1);
   });
 
-  test("snaps to band 0 at and below 50g", () => {
-    assert.equal(getWeightBand(1, cfg), 0);
-    assert.equal(getWeightBand(50, cfg), 0);
+  test("uses the domestic letter ladder up to 2 kg", () => {
+    assert.equal(getShippingBand("hungary", 1, cfg), 0);
+    assert.equal(getShippingBand("hungary", 50, cfg), 0);
+    assert.equal(getShippingBand("hungary", 51, cfg), 1);
+    assert.equal(getShippingBand("hungary", 2000, cfg), 5);
   });
 
-  test("crosses to band 1 at 51g", () => {
-    assert.equal(getWeightBand(51, cfg), 1);
-    assert.equal(getWeightBand(100, cfg), 1);
+  test("switches to domestic parcels above 2 kg", () => {
+    assert.equal(getShippingBand("hungary", 2001, cfg), 6); // 5 kg parcel
+    assert.equal(getShippingBand("hungary", 40000, cfg), 10); // 40 kg parcel
+    assert.equal(getShippingBand("hungary", 40001, cfg), -1);
   });
 
-  test("upper-inclusive on every middle band", () => {
-    assert.equal(getWeightBand(101, cfg), 2); // > 100 -> 250 band
-    assert.equal(getWeightBand(250, cfg), 2);
-    assert.equal(getWeightBand(251, cfg), 3);
-    assert.equal(getWeightBand(500, cfg), 3);
-    assert.equal(getWeightBand(501, cfg), 4);
-    assert.equal(getWeightBand(1000, cfg), 4);
-    assert.equal(getWeightBand(1001, cfg), 5);
-  });
-
-  test("treats exactly 2000g as last band, 2001g as overflow", () => {
-    assert.equal(getWeightBand(MAX_SHIPMENT_WEIGHT_GRAMS, cfg), 5);
-    assert.equal(getWeightBand(MAX_SHIPMENT_WEIGHT_GRAMS + 1, cfg), -1);
+  test("enforces each zone's carrier ceiling", () => {
+    assert.equal(maxShipmentWeight("hungary", cfg), MAX_SHIPMENT_WEIGHT_GRAMS);
+    assert.equal(maxShipmentWeight("eu", cfg), 31500);
+    assert.equal(maxShipmentWeight("uk", cfg), 30000);
+    assert.equal(maxShipmentWeight("usa", cfg), 10000);
+    assert.equal(maxShipmentWeight("canada", cfg), 2000);
+    assert.equal(getShippingBand("eu", 31500, cfg), 11);
+    assert.equal(getShippingBand("usa", 10001, cfg), -1);
   });
 });
 
@@ -126,25 +134,59 @@ group("findTier / getUnitPrice", () => {
 
   test("returns the right tier on each interior boundary", () => {
     assert.equal(getUnitPrice(1, cfg), 300);
-    assert.equal(getUnitPrice(8, cfg), 300);
-    assert.equal(getUnitPrice(9, cfg), 180);
-    assert.equal(getUnitPrice(40, cfg), 180);
-    assert.equal(getUnitPrice(41, cfg), 120);
-    assert.equal(getUnitPrice(80, cfg), 120);
-    assert.equal(getUnitPrice(81, cfg), 90);
-    assert.equal(getUnitPrice(160, cfg), 90);
-    assert.equal(getUnitPrice(161, cfg), 70);
-    assert.equal(getUnitPrice(333, cfg), 70);
+    assert.equal(getUnitPrice(7, cfg), 300);
+    assert.equal(getUnitPrice(8, cfg), 250);
+    assert.equal(getUnitPrice(9, cfg), 250);
+    assert.equal(getUnitPrice(40, cfg), 250);
+    assert.equal(getUnitPrice(41, cfg), 220);
+    assert.equal(getUnitPrice(80, cfg), 220);
+    assert.equal(getUnitPrice(81, cfg), 190);
+    assert.equal(getUnitPrice(160, cfg), 190);
+    assert.equal(getUnitPrice(161, cfg), 170);
+    assert.equal(getUnitPrice(333, cfg), 170);
+    assert.equal(getUnitPrice(334, cfg), 150);
+    assert.equal(getUnitPrice(1000, cfg), 150);
+    assert.equal(getUnitPrice(OPEN_ENDED_TIER_MAX, cfg), 150);
   });
 
   test("findTier returns null when no tier covers the quantity", () => {
     assert.equal(findTier(0, cfg.priceTiers), null);
-    assert.equal(findTier(334, cfg.priceTiers), null);
+    assert.equal(findTier(-1, cfg.priceTiers), null);
   });
 
   test("getUnitPrice throws when no tier matches", () => {
-    assert.throws(() => getUnitPrice(334, cfg), /No pricing tier/);
+    const capped = defaultConfig();
+    capped.priceTiers = [{ min: 1, max: 333, pricePerCopy: 170 }];
+    assert.throws(() => getUnitPrice(334, capped), /No pricing tier/);
     assert.throws(() => getUnitPrice(0, cfg), /No pricing tier/);
+  });
+
+  test("matches the recommended profit at a 110 HUF production cost", () => {
+    for (const [quantity, profit] of [
+      [1, 190], [8, 140], [41, 110], [81, 80], [161, 60], [334, 40],
+    ]) {
+      assert.equal(getUnitPrice(quantity, cfg) - 110, profit);
+    }
+  });
+
+  test("keeps all six tiers valid after a JSON round trip", () => {
+    const parsed = pricingConfigInputSchema.parse(
+      JSON.parse(JSON.stringify(cfg))
+    );
+    assert.equal(parsed.priceTiers.length, 6);
+    assert.deepEqual(parsed.priceTiers, cfg.priceTiers);
+    assert.equal(parsed.priceTiers[5].max, OPEN_ENDED_TIER_MAX);
+    assert.equal(getUnitPrice(334, { ...cfg, ...parsed }), 150);
+  });
+
+  test("preserves the checkout quantity limit independently of pricing", () => {
+    for (const quantitySchema of [
+      calculateOrderInputSchema.shape.quantity,
+      createOrderInputSchema.shape.quantity,
+    ]) {
+      assert.equal(quantitySchema.safeParse(6666).success, true);
+      assert.equal(quantitySchema.safeParse(6667).success, false);
+    }
   });
 });
 
@@ -155,20 +197,32 @@ group("findTier / getUnitPrice", () => {
 group("getShippingCost", () => {
   const cfg = defaultConfig();
 
-  test("matches the spec table for hungary", () => {
-    assert.equal(getShippingCost("hungary", 1, cfg), 270); // 6g  -> band 0
-    assert.equal(getShippingCost("hungary", 8, cfg), 270); // 48g -> band 0
-    assert.equal(getShippingCost("hungary", 9, cfg), 305); // 54g -> band 1
-    assert.equal(getShippingCost("hungary", 40, cfg), 365); // 240g -> band 2
-    assert.equal(getShippingCost("hungary", 80, cfg), 540); // 480g -> band 3
-    assert.equal(getShippingCost("hungary", 160, cfg), 845); // 960g -> band 4
-    assert.equal(getShippingCost("hungary", 333, cfg), 1630); // 1998g -> band 5
+  test("matches the domestic letter and parcel tariff", () => {
+    assert.equal(getShippingCost("hungary", 1, cfg), 270); // 6g
+    assert.equal(getShippingCost("hungary", 8, cfg), 270); // 48g
+    assert.equal(getShippingCost("hungary", 9, cfg), 305); // 54g
+    assert.equal(getShippingCost("hungary", 40, cfg), 365); // 240g
+    assert.equal(getShippingCost("hungary", 80, cfg), 540); // 480g
+    assert.equal(getShippingCost("hungary", 160, cfg), 845); // 960g
+    assert.equal(getShippingCost("hungary", 333, cfg), 1630); // 1998g
+    assert.equal(getShippingCost("hungary", 833, cfg), 3460); // 4998g -> 5kg
+    assert.equal(getShippingCost("hungary", 1666, cfg), 3770); // 10kg
+    assert.equal(getShippingCost("hungary", 3333, cfg), 4610); // 20kg
+    assert.equal(getShippingCost("hungary", 5000, cfg), 6930); // 30kg
+    assert.equal(getShippingCost("hungary", 6666, cfg), 9660); // 40kg
   });
 
-  test("matches the spec table for eu", () => {
+  test("matches the MPL Europe Standard tiers", () => {
     assert.equal(getShippingCost("eu", 8, cfg), 1250);
     assert.equal(getShippingCost("eu", 40, cfg), 2200);
     assert.equal(getShippingCost("eu", 80, cfg), 3600);
+    assert.equal(getShippingCost("eu", 833, cfg), 12500); // 5kg
+    assert.equal(getShippingCost("eu", 5250, cfg), 41000); // 31.5kg ceiling
+  });
+
+  test("matches the UK and USA parcel tiers", () => {
+    assert.equal(getShippingCost("uk", 5000, cfg), 94000); // 30kg
+    assert.equal(getShippingCost("usa", 1666, cfg), 49000); // 10kg
   });
 
   test("throws when zone is not configured", () => {
@@ -178,8 +232,68 @@ group("getShippingCost", () => {
     );
   });
 
-  test("throws when shipment exceeds the weight cap", () => {
-    assert.throws(() => getShippingCost("eu", 334, cfg), /exceeds the 2000g/);
+  test("throws once a zone's carrier ceiling is exceeded", () => {
+    assert.throws(
+      () => getShippingCost("usa", 1667, cfg),
+      /10 kg limit for United States/
+    );
+    assert.throws(
+      () => getShippingCost("hungary", 6667, cfg),
+      /40 kg limit for Hungary/
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// normaliseShippingTable — legacy matrix upgrade
+// ---------------------------------------------------------------------------
+
+group("normaliseShippingTable", () => {
+  test("upgrades a legacy price matrix using the shared weight bands", () => {
+    const table = normaliseShippingTable(
+      { hungary: [270, 305, null, 540] },
+      [50, 100, 250, 500]
+    );
+    assert.deepEqual(table.hungary, [
+      { maxWeightGrams: 50, priceHuf: 270 },
+      { maxWeightGrams: 100, priceHuf: 305 },
+      { maxWeightGrams: 500, priceHuf: 540 },
+    ]);
+    assert.deepEqual(table.eu, []);
+  });
+
+  test("keeps the new ladder shape and sorts it by weight", () => {
+    const table = normaliseShippingTable(
+      {
+        eu: [
+          { maxWeightGrams: 5000, priceHuf: 12500 },
+          { maxWeightGrams: 2000, priceHuf: 10000 },
+        ],
+      },
+      null
+    );
+    assert.deepEqual(table.eu, [
+      { maxWeightGrams: 2000, priceHuf: 10000 },
+      { maxWeightGrams: 5000, priceHuf: 12500 },
+    ]);
+    assert.deepEqual(table.usa, []);
+  });
+
+  test("feeds the engine after an upgrade", () => {
+    const cfg = defaultConfig();
+    cfg.shippingTable = normaliseShippingTable(
+      {
+        hungary: [
+          270, 305, 365, 540, 845, 1630, 3460, 3770, 4610, 6930, 9660,
+        ],
+      },
+      [
+        50, 100, 250, 500, 1000, 2000, 5000, 10000, 20000, 30000, 40000,
+      ]
+    );
+    assert.equal(getShippingLadder("hungary", cfg).length, 11);
+    assert.equal(maxShipmentWeight("hungary", cfg), MAX_SHIPMENT_WEIGHT_GRAMS);
+    assert.equal(getShippingCost("hungary", 833, cfg), 3460);
   });
 });
 
@@ -227,13 +341,13 @@ group("calculateOrder", () => {
     assert.equal(result.zone, "eu");
     assert.equal(result.weightGrams, 240);
     assert.equal(result.shippingBand, 2);
-    assert.equal(result.unitPriceHuf, 180);
-    assert.equal(result.printCostHuf, 7200);
+    assert.equal(result.unitPriceHuf, 250);
+    assert.equal(result.printCostHuf, 10000);
     assert.equal(result.handlingCostHuf, 0);
     assert.equal(result.shippingCostHuf, 2200);
     assert.equal(result.discountHuf, 0);
-    assert.equal(result.totalHuf, 9400);
-    assert.equal(result.costPerBookHuf, Math.round(9400 / 40));
+    assert.equal(result.totalHuf, 12200);
+    assert.equal(result.costPerBookHuf, Math.round(12200 / 40));
     assert.equal(result.currency, "HUF");
   });
 
@@ -243,13 +357,13 @@ group("calculateOrder", () => {
     cfg.handlingPercent = 2;
 
     const result = calculateOrder("hungary", 8, cfg);
-    // print = 300 * 8 = 2400; handling = 300 + ceil(2% of 2400)=48 -> 348
-    // shipping = 270; total = 2400 + 348 + 270 = 3018
-    assert.equal(result.printCostHuf, 2400);
-    assert.equal(result.handlingCostHuf, 348);
+    // print = 250 * 8 = 2000; handling = 300 + ceil(2% of 2000)=40 -> 340
+    // shipping = 270; total = 2000 + 340 + 270 = 2610
+    assert.equal(result.printCostHuf, 2000);
+    assert.equal(result.handlingCostHuf, 340);
     assert.equal(result.shippingCostHuf, 270);
-    assert.equal(result.totalHuf, 3018);
-    assert.equal(result.costPerBookHuf, Math.round(3018 / 8));
+    assert.equal(result.totalHuf, 2610);
+    assert.equal(result.costPerBookHuf, Math.round(2610 / 8));
   });
 
   test("subtracts a discount but never goes negative", () => {
@@ -257,15 +371,41 @@ group("calculateOrder", () => {
     const result = calculateOrder("hungary", 8, cfg, {
       discount: { fixedHuf: 5000, percent: 10 },
     });
-    // print = 2400, percent disc = floor(240) = 240, fixed = 5000
-    // total raw = 2400 + 0 + 270 - 5240 = -2570 -> clamped to 0
+    // print = 2000, percent disc = floor(200) = 200, fixed = 5000
+    // total raw = 2000 + 0 + 270 - 5200 = -2930 -> clamped to 0
     assert.equal(result.totalHuf, 0);
-    assert.equal(result.discountHuf, 5240);
+    assert.equal(result.discountHuf, 5200);
   });
 
-  test("throws when shipment exceeds weight cap", () => {
+  test("throws once the destination carrier ceiling is exceeded", () => {
     const cfg = defaultConfig();
-    assert.throws(() => calculateOrder("eu", 334, cfg), /exceeds the 2000g/);
+    assert.throws(
+      () => calculateOrder("usa", 1667, cfg),
+      /10 kg limit for United States/
+    );
+    assert.throws(
+      () => calculateOrder("hungary", 6667, cfg),
+      /40 kg limit for Hungary/
+    );
+  });
+
+  test("prices a domestic 40 kg order in the top parcel band", () => {
+    const cfg = defaultConfig();
+    const result = calculateOrder("hungary", 6666, cfg);
+    assert.equal(result.weightGrams, 39996);
+    assert.equal(result.shippingBand, 10);
+    assert.equal(result.unitPriceHuf, 150);
+    assert.equal(result.printCostHuf, 999900);
+    assert.equal(result.shippingCostHuf, 9660);
+    assert.equal(result.totalHuf, 1009560);
+  });
+
+  test("prices a USA order inside the 10 kg postal cap", () => {
+    const cfg = defaultConfig();
+    const result = calculateOrder("usa", 1666, cfg);
+    assert.equal(result.weightGrams, 9996);
+    assert.equal(result.shippingBand, 7);
+    assert.equal(result.shippingCostHuf, 49000);
   });
 });
 
@@ -276,17 +416,25 @@ group("calculateOrder", () => {
 group("bandCeilingQuantity", () => {
   const cfg = defaultConfig();
 
-  test("returns the maximum books that still fit each band", () => {
-    assert.equal(bandCeilingQuantity(0, cfg), 8); // 50/6 -> 8
-    assert.equal(bandCeilingQuantity(1, cfg), 16); // 100/6 -> 16
-    assert.equal(bandCeilingQuantity(2, cfg), 41); // 250/6 -> 41
-    assert.equal(bandCeilingQuantity(3, cfg), 83); // 500/6 -> 83
-    assert.equal(bandCeilingQuantity(4, cfg), 166); // 1000/6 -> 166
-    assert.equal(bandCeilingQuantity(5, cfg), 333); // 2000/6 -> 333
+  test("walks the domestic letter and parcel ladders", () => {
+    assert.equal(bandCeilingQuantity("hungary", 0, cfg), 8); // 50/6 -> 8
+    assert.equal(bandCeilingQuantity("hungary", 1, cfg), 16); // 100/6 -> 16
+    assert.equal(bandCeilingQuantity("hungary", 2, cfg), 41); // 250/6 -> 41
+    assert.equal(bandCeilingQuantity("hungary", 3, cfg), 83); // 500/6 -> 83
+    assert.equal(bandCeilingQuantity("hungary", 4, cfg), 166); // 1000/6 -> 166
+    assert.equal(bandCeilingQuantity("hungary", 5, cfg), 333); // 2000/6 -> 333
+    assert.equal(bandCeilingQuantity("hungary", 6, cfg), 833); // 5 kg parcel
+    assert.equal(bandCeilingQuantity("hungary", 10, cfg), 6666); // 40 kg parcel
+  });
+
+  test("stops at each zone's own ceiling", () => {
+    assert.equal(bandCeilingQuantity("eu", 11, cfg), 5250); // 31.5 kg
+    assert.equal(bandCeilingQuantity("usa", 7, cfg), 1666); // 10 kg
+    assert.equal(bandCeilingQuantity("canada", 5, cfg), 333); // letters only
   });
 
   test("returns 0 for an out-of-range band", () => {
-    assert.equal(bandCeilingQuantity(99, cfg), 0);
+    assert.equal(bandCeilingQuantity("hungary", 99, cfg), 0);
   });
 });
 
@@ -317,9 +465,9 @@ group("suggestOptimalQuantity", () => {
     assert.ok(suggestion!.savingsPct > 0);
   });
 
-  test("returns null at the cheapest band ceiling (333)", () => {
+  test("returns null once the order already fills the top band", () => {
     const cfg = defaultConfig();
-    const suggestion = suggestOptimalQuantity("eu", 333, cfg);
+    const suggestion = suggestOptimalQuantity("hungary", 6666, cfg);
     assert.equal(suggestion, null);
   });
 
@@ -328,8 +476,12 @@ group("suggestOptimalQuantity", () => {
     // produce a cheaper per-book figure.
     const cfg = defaultConfig();
     cfg.priceTiers = [{ min: 1, max: 333, pricePerCopy: 100 }];
+    const flatLadder = Array.from({ length: 12 }, (_, i) => ({
+      maxWeightGrams: (i + 1) * 4000,
+      priceHuf: 0,
+    }));
     for (const zone of cfg.enabledZones) {
-      cfg.shippingTable[zone] = [500, 500, 500, 500, 500, 500];
+      cfg.shippingTable[zone] = flatLadder.map((band) => ({ ...band }));
     }
     const suggestion = suggestOptimalQuantity("eu", 333, cfg);
     assert.equal(suggestion, null);
@@ -352,11 +504,12 @@ group("buildUxMessages", () => {
     }
   });
 
-  test("warns when the order exceeds the weight cap", () => {
+  test("warns when the order exceeds the zone's weight cap", () => {
     const cfg = defaultConfig();
-    const messages = buildUxMessages("eu", 334, cfg);
+    const messages = buildUxMessages("usa", 1667, cfg);
     assert.equal(messages.length, 1);
     assert.equal(messages[0].level, "warning");
+    assert.ok(messages[0].text.includes("10 kg limit for United States"));
   });
 
   test("hints at the next price break when within the window", () => {

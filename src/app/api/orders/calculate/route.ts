@@ -75,7 +75,6 @@ export async function POST(request: Request) {
       meta: {
         enabledZones: cfg.enabledZones,
         priceTiers: cfg.priceTiers,
-        weightBands: cfg.weightBands,
         weightPerBookGrams: cfg.weightPerBookGrams,
         currencyRates: cfg.currencyRates,
         pricingConfigVersion: cfg.version,

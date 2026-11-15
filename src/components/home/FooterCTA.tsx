@@ -69,7 +69,16 @@ export default function FooterCTA() {
                     <span>
                         Titchybooks — Pocket publishing for the physical world.
                     </span>
-                    <span>© {new Date().getFullYear()} Titchybooks</span>
+                    <div className="flex items-center gap-4">
+                        <Link
+                            href="/contact"
+                            className="underline"
+                            style={{ color: "var(--color-text-muted)" }}
+                        >
+                            Contact &amp; quotes
+                        </Link>
+                        <span>© {new Date().getFullYear()} Titchybooks</span>
+                    </div>
                 </div>
             </div>
         </section>

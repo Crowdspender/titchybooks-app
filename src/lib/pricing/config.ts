@@ -11,13 +11,18 @@ import {
   DEFAULT_RESOLVED_CONFIG,
   DEFAULT_SHIPPING_TABLE,
   DEFAULT_VAULT_FEE_HUF,
-  DEFAULT_WEIGHT_BANDS,
   DEFAULT_WEIGHT_PER_BOOK_GRAMS,
   ZONES,
   type PriceTier,
   type ResolvedPricingConfig,
+  type ShippingBand,
   type Zone,
 } from "./constants";
+import {
+  cloneShippingTable,
+  configuredWeightCaps,
+  normaliseShippingTable,
+} from "./shipping";
 import {
   pricingConfigInputSchema,
   type PricingConfigInput,
@@ -43,22 +48,20 @@ function resolveRow(row: {
   handlingFixedHuf: number;
   handlingPercent: number;
   enabledZones: string;
-  weightBands: string;
+  weightBands?: string | null;
   shippingTable: string;
   priceTiers: string;
   currencyRates?: string | null;
   vaultFeeHuf?: number | null;
 }): ResolvedPricingConfig {
   const enabledZones = parseJsonField<Zone[]>(row.enabledZones, [...ZONES]);
-  const weightBands = parseJsonField<number[]>(row.weightBands, [
-    ...DEFAULT_WEIGHT_BANDS,
-  ]);
-  const shippingTable = parseJsonField<Record<Zone, number[]>>(
-    row.shippingTable,
-    Object.fromEntries(
-      ZONES.map((zone) => [zone, [...DEFAULT_SHIPPING_TABLE[zone]]])
-    ) as Record<Zone, number[]>
-  );
+  const rawShippingTable = parseJsonField<unknown>(row.shippingTable, null);
+  const shippingTable = rawShippingTable
+    ? normaliseShippingTable(
+        rawShippingTable,
+        parseJsonField<unknown>(row.weightBands ?? "", null)
+      )
+    : cloneShippingTable(DEFAULT_RESOLVED_CONFIG.shippingTable);
   const priceTiers = parseJsonField<PriceTier[]>(
     row.priceTiers,
     DEFAULT_PRICE_TIERS.map((tier) => ({ ...tier }))
@@ -76,7 +79,6 @@ function resolveRow(row: {
     handlingFixedHuf: row.handlingFixedHuf,
     handlingPercent: row.handlingPercent,
     enabledZones,
-    weightBands,
     shippingTable,
     priceTiers,
     currencyRates,
@@ -90,7 +92,9 @@ function serialiseForDb(cfg: PricingConfigInput) {
     handlingFixedHuf: cfg.handlingFixedHuf,
     handlingPercent: cfg.handlingPercent,
     enabledZones: JSON.stringify(cfg.enabledZones),
-    weightBands: JSON.stringify(cfg.weightBands),
+    // The per-zone ladders are authoritative. The legacy shared-band column
+    // keeps the union of configured ceilings so older readers stay sane.
+    weightBands: JSON.stringify(configuredWeightCaps(cfg.shippingTable)),
     shippingTable: JSON.stringify(cfg.shippingTable),
     priceTiers: JSON.stringify(cfg.priceTiers),
     currencyRates: JSON.stringify({ ...cfg.currencyRates, HUF: 1 }),
@@ -111,7 +115,12 @@ export async function loadPricingConfig(): Promise<ResolvedPricingConfig> {
     where: { id: PRICING_CONFIG_ID },
   });
 
-  const value = row ? resolveRow(row) : { ...DEFAULT_RESOLVED_CONFIG };
+  const value = row
+    ? resolveRow(row)
+    : {
+        ...DEFAULT_RESOLVED_CONFIG,
+        shippingTable: cloneShippingTable(DEFAULT_RESOLVED_CONFIG.shippingTable),
+      };
   cache = { value, loadedAt: Date.now() };
   return value;
 }
@@ -153,10 +162,12 @@ export function defaultPricingConfigInput(): PricingConfigInput {
     handlingFixedHuf: 0,
     handlingPercent: 0,
     enabledZones: [...ZONES],
-    weightBands: [...DEFAULT_WEIGHT_BANDS],
     shippingTable: Object.fromEntries(
-      ZONES.map((zone) => [zone, [...DEFAULT_SHIPPING_TABLE[zone]]])
-    ) as Record<Zone, number[]>,
+      ZONES.map((zone) => [
+        zone,
+        DEFAULT_SHIPPING_TABLE[zone].map((band) => ({ ...band })),
+      ])
+    ) as Record<Zone, ShippingBand[]>,
     priceTiers: DEFAULT_PRICE_TIERS.map((tier) => ({ ...tier })),
     currencyRates: { ...DEFAULT_CURRENCY_RATES },
     vaultFeeHuf: DEFAULT_VAULT_FEE_HUF,
