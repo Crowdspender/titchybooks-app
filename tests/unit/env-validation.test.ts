@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { validateRuntimeEnv, assertProductionEnv } from '../../src/lib/env-validation';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { validateRuntimeEnv, assertProductionEnv, reportProductionEnv } from '../../src/lib/env-validation';
 
 /** A minimal environment that passes all checks. */
 function validEnv(overrides: Record<string, string | undefined> = {}) {
@@ -85,5 +85,26 @@ describe('assertProductionEnv', () => {
 
   it('passes with a valid production environment', () => {
     expect(() => assertProductionEnv(validEnv() as NodeJS.ProcessEnv)).not.toThrow();
+  });
+});
+
+describe('reportProductionEnv', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('never throws in production, so a config gap cannot take down every route', () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    expect(() => reportProductionEnv({ NODE_ENV: 'production' } as NodeJS.ProcessEnv)).not.toThrow();
+    expect(error).toHaveBeenCalledWith(expect.stringContaining('Production configuration problems'));
+  });
+
+  it('stays quiet when the environment is complete', () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const result = reportProductionEnv(validEnv() as NodeJS.ProcessEnv);
+
+    expect(result.errors).toEqual([]);
+    expect(error).not.toHaveBeenCalled();
   });
 });

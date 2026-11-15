@@ -1,11 +1,19 @@
-// Fail-fast startup validation of production runtime configuration.
+// Health checks of production runtime configuration.
 //
 // Rationale: several misconfigurations degrade silently and surface much
 // later as user-facing failures — a missing CRON_SECRET makes the drain
 // routes 401 so queues quietly stop, a missing AWS var breaks uploads only
 // on first use, and an inconsistent lease/budget/heartbeat relationship
-// causes jobs to be double-claimed or to stall until lease expiry. Validate
-// these at process start instead.
+// causes jobs to be double-claimed or to stall until lease expiry. Surface
+// them at process start instead of at first use.
+//
+// Two entry points, because the cost of stopping differs by process kind:
+//   - reportProductionEnv(): request-serving runtimes (Next instrumentation).
+//     Logs loudly but never throws — a serverless function that refuses to
+//     boot turns one missing variable into a total outage of every dynamic
+//     route, while the affected feature is usually only one of many.
+//   - assertProductionEnv(): long-lived workers, which should refuse to start
+//     rather than grind through jobs with unusable configuration.
 //
 // Non-production environments (dev, vitest, tsx scripts) only receive
 // console warnings so local work is never blocked.
@@ -102,8 +110,28 @@ export function validateRuntimeEnv(
 }
 
 /**
- * Boot-time assertion: in production, throw on any error so the deploy fails
- * loudly; elsewhere, log warnings for missing configuration and continue.
+ * Request-serving variant: reports problems but always lets the process boot.
+ * Returns the result so callers can surface it in health output or logs.
+ */
+export function reportProductionEnv(
+  env: NodeJS.ProcessEnv = process.env,
+): EnvValidationResult {
+  const result = validateRuntimeEnv(env);
+  for (const warning of result.warnings) {
+    console.warn(`[env] ${warning}`);
+  }
+  if (result.errors.length > 0) {
+    const summary = result.errors.map((e) => `  - ${e}`).join("\n");
+    console.error(
+      `[env] Production configuration problems (serving anyway; the affected features will fail):\n${summary}`,
+    );
+  }
+  return result;
+}
+
+/**
+ * Worker variant: throws on any error in production so a misconfigured
+ * long-lived process fails loudly instead of consuming jobs it cannot finish.
  */
 export function assertProductionEnv(env: NodeJS.ProcessEnv = process.env): void {
   const { errors, warnings } = validateRuntimeEnv(env);
