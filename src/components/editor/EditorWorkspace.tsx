@@ -14,10 +14,10 @@ import { toast } from "sonner";
 import {
   PAGE_LABEL_DISPLAY,
   PAGE_LABELS,
+  PAGE_READING_ORDER,
   type PageLabel,
 } from "@/lib/constants";
 import type { EditorElement, EditorScene } from "@/lib/editor/schema";
-import { EDITOR_SAFE_MARGIN_PX } from "@/lib/editor/constants";
 import { createEmptySubmissionPageSeeds } from "@/lib/editor/validation";
 import { isTemplateElement, mergeLayers } from "@/lib/editor/template-merge";
 import { parsePinnedTemplate } from "@/lib/ai/template-contract";
@@ -38,10 +38,12 @@ import {
   loadBrowserDesignFont,
   requiredDesignFonts,
 } from "@/lib/editor/design-fonts";
-import { layoutDesignText } from "@/lib/editor/design-text-layout";
 import { preflightDesign } from "@/lib/editor/design-preflight";
+import { renderPageThumbnail } from "@/lib/editor/page-thumbnail";
 import OrderPanel from "@/components/orders/OrderPanel";
 import AiChatPanel from "./AiChatPanel";
+import BookletPreview from "./BookletPreview";
+import PageFilmstrip from "./PageFilmstrip";
 import ColorPicker from "./ColorPicker";
 import type { BookContext } from "@/lib/ai/system-prompt";
 import type { AiSuggestion } from "@/lib/ai/protocol";
@@ -344,6 +346,13 @@ export default function EditorWorkspace({
         string | null
       >,
   );
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [navDirection, setNavDirection] = useState<"forward" | "backward">(
+    "forward",
+  );
+  const [viewportHeight, setViewportHeight] = useState(() =>
+    typeof window === "undefined" ? 0 : window.innerHeight
+  );
 
   // AI Chat panel state
   const [aiPanelOpen, setAiPanelOpen] = useState(false);
@@ -367,6 +376,20 @@ export default function EditorWorkspace({
   const submissionIdRef = useRef<string | null>(null);
 
   const activePage = pagesByLabel[activePageLabel];
+  const readingIndex = PAGE_READING_ORDER.indexOf(activePageLabel);
+  // Leave room for the top bar, page header, filmstrip and padding so the
+  // whole page stays visible on tall screens; never shrink below 560px.
+  const stageMaxHeight = Math.max(560, viewportHeight - 360);
+  const elementCounts = useMemo(
+    () =>
+      Object.fromEntries(
+        PAGE_LABELS.map((label) => [
+          label,
+          pagesByLabel[label].scene.elements.length,
+        ]),
+      ) as Record<PageLabel, number>,
+    [pagesByLabel],
+  );
 
   // Derive merged render scene for the active page
   const activeTemplateElements = useMemo(
@@ -1196,193 +1219,9 @@ export default function EditorWorkspace({
   }
 
   function generatePageThumbnail(pageLabel: PageLabel): string | null {
-    const canvas = document.createElement("canvas");
-    const page = pagesByLabel[pageLabel];
-    if (!page) return null;
-
-    const thumbnailWidth = 120;
-    const thumbnailHeight = (thumbnailWidth / page.scene.page.widthPx) *
-      page.scene.page.heightPx;
-    canvas.width = thumbnailWidth;
-    canvas.height = thumbnailHeight;
-
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return null;
-
-    // Fill background
     const resolved = resolvedPages[pageLabel];
     if (resolved.error) return null;
-    const renderScene = resolved.scene;
-    ctx.fillStyle = renderScene.page.backgroundColor;
-    ctx.fillRect(0, 0, thumbnailWidth, thumbnailHeight);
-
-    // Draw safe margin
-    const safeMargin = (EDITOR_SAFE_MARGIN_PX / page.scene.page.widthPx) *
-      thumbnailWidth;
-    ctx.strokeStyle = "#f97316";
-    ctx.lineWidth = 1;
-    ctx.setLineDash([4, 3]);
-    ctx.strokeRect(
-      safeMargin,
-      safeMargin,
-      thumbnailWidth - safeMargin * 2,
-      thumbnailHeight - safeMargin * 2,
-    );
-    ctx.setLineDash([]);
-
-    // Draw elements (simplified for thumbnail)
-    const scale = thumbnailWidth / page.scene.page.widthPx;
-    const sortedElements = renderScene.elements.slice().sort((left, right) =>
-      left.zIndex - right.zIndex
-    );
-
-    for (const element of sortedElements) {
-      if (!element.visible) continue;
-
-      ctx.save();
-      ctx.globalAlpha = element.opacity;
-      if (element.type === "text" && element.typographyVersion) {
-        try {
-          ctx.translate(element.x * scale, element.y * scale);
-          ctx.rotate(element.rotation * Math.PI / 180);
-          ctx.scale(scale, scale);
-          ctx.fillStyle = element.color;
-          ctx.fill(new Path2D(layoutDesignText(element).path));
-        } catch {
-          return null;
-        }
-        ctx.restore();
-        continue;
-      }
-      const centerX = (element.x + element.width / 2) * scale;
-      const centerY = (element.y + element.height / 2) * scale;
-      ctx.translate(centerX, centerY);
-      ctx.rotate((element.rotation * Math.PI) / 180);
-
-      if (element.type === "shape") {
-        ctx.fillStyle = element.fill;
-        if (element.shape === "rect") {
-          ctx.fillRect(
-            -element.width * scale / 2,
-            -element.height * scale / 2,
-            element.width * scale,
-            element.height * scale,
-          );
-        } else if (element.shape === "circle") {
-          ctx.beginPath();
-          ctx.arc(
-            0,
-            0,
-            Math.min(element.width, element.height) * scale / 2,
-            0,
-            Math.PI * 2,
-          );
-          ctx.fill();
-        } else if (element.shape === "line") {
-          ctx.strokeStyle = element.stroke || element.fill;
-          ctx.lineWidth = (element.strokeWidth || 2) * scale;
-          ctx.beginPath();
-          ctx.moveTo(-element.width * scale / 2, -element.height * scale / 2);
-          ctx.lineTo(element.width * scale / 2, element.height * scale / 2);
-          ctx.stroke();
-        }
-      } else if (element.type === "text") {
-        ctx.fillStyle = element.color;
-        ctx.font = `${element.fontWeight >= 600 ? "bold" : "normal"} ${
-          element.fontSize * scale
-        }px ${element.fontFamily}`;
-        ctx.textAlign = element.align === "center"
-          ? "center"
-          : element.align === "right"
-          ? "right"
-          : "left";
-        ctx.textBaseline = "top";
-
-        const boxWidth = element.width * scale;
-        const boxHeight = element.height * scale;
-        const lineHeight = element.fontSize * element.lineHeight * scale;
-        const textX = element.align === "center"
-          ? 0
-          : element.align === "right"
-          ? boxWidth / 2
-          : -boxWidth / 2;
-
-        // Word-wrap to match the canvas/PDF behavior using actual font metrics
-        const wrappedLines: string[] = [];
-        for (const paragraph of element.text.split(/\r?\n/)) {
-          const trimmed = paragraph.trimEnd();
-          if (trimmed === "") {
-            wrappedLines.push("");
-            continue;
-          }
-          const words = trimmed.split(" ");
-          let currentLine = "";
-          for (const word of words) {
-            const candidate = currentLine === ""
-              ? word
-              : `${currentLine} ${word}`;
-            if (
-              ctx.measureText(candidate).width > boxWidth && currentLine !== ""
-            ) {
-              wrappedLines.push(currentLine);
-              currentLine = word;
-            } else {
-              currentLine = candidate;
-            }
-          }
-          if (currentLine !== "") {
-            wrappedLines.push(currentLine);
-          }
-        }
-
-        // Clip to box bounds so overflowing text doesn't bleed past the frame
-        ctx.save();
-        ctx.beginPath();
-        ctx.rect(-boxWidth / 2, -boxHeight / 2, boxWidth, boxHeight);
-        ctx.clip();
-
-        wrappedLines.forEach((line, i) => {
-          ctx.fillText(line, textX, -boxHeight / 2 + i * lineHeight);
-        });
-
-        ctx.restore();
-      } else if (element.type === "image") {
-        const asset = assets.find((a) => a.id === element.assetId);
-        if (asset?.previewUrl || asset?.downloadUrl) {
-          const img = new window.Image();
-          img.crossOrigin = "anonymous";
-          img.src = asset.previewUrl || asset.downloadUrl || "";
-          // Draw synchronously if cached, otherwise skip for thumbnail
-          if (img.complete && img.naturalWidth > 0) {
-            ctx.drawImage(
-              img,
-              -element.width * scale / 2,
-              -element.height * scale / 2,
-              element.width * scale,
-              element.height * scale,
-            );
-          }
-        } else {
-          // Placeholder for missing image
-          ctx.fillStyle = "#e5e7eb";
-          ctx.fillRect(
-            -element.width * scale / 2,
-            -element.height * scale / 2,
-            element.width * scale,
-            element.height * scale,
-          );
-          ctx.fillStyle = "#9ca3af";
-          ctx.font = `${10 * scale}px sans-serif`;
-          ctx.textAlign = "center";
-          ctx.textBaseline = "middle";
-          ctx.fillText("Image", 0, 0);
-        }
-      }
-
-      ctx.restore();
-    }
-
-    return canvas.toDataURL("image/png", 0.7);
+    return renderPageThumbnail(resolved.scene, assets, 120);
   }
 
   function updateThumbnails() {
@@ -1784,6 +1623,9 @@ export default function EditorWorkspace({
     setNavigating(true);
     try {
       await persistence.flush(activePageLabel);
+      // The title autosaves on its own debounce; flush it too so no part
+      // of the document is left dirty across a page switch.
+      await persistence.flush("title");
       if (persistenceRef.current !== persistence) return false;
       setActivePageLabel(pageLabel);
       setSelectedElementId(null);
@@ -1798,6 +1640,63 @@ export default function EditorWorkspace({
       }
     }
   }
+
+  // Every navigation path (filmstrip, arrows, keyboard, swipe, preview,
+  // AI apply) goes through handlePageSelect so the outgoing page is always
+  // saved before the switch commits, and a failed save blocks the switch.
+  function goToPage(pageLabel: PageLabel) {
+    const targetIndex = PAGE_READING_ORDER.indexOf(pageLabel);
+    setNavDirection(targetIndex >= readingIndex ? "forward" : "backward");
+    void handlePageSelect(pageLabel);
+  }
+
+  function goToNextPage() {
+    if (readingIndex >= PAGE_READING_ORDER.length - 1) return;
+    goToPage(PAGE_READING_ORDER[readingIndex + 1]);
+  }
+
+  function goToPreviousPage() {
+    if (readingIndex <= 0) return;
+    goToPage(PAGE_READING_ORDER[readingIndex - 1]);
+  }
+
+  function handlePreviewJump(pageLabel: PageLabel) {
+    setPreviewOpen(false);
+    goToPage(pageLabel);
+  }
+
+  const onPageNavKey = useEffectEvent((event: KeyboardEvent) => {
+    if (
+      frozenRef.current ||
+      previewOpen ||
+      event.ctrlKey || event.metaKey || event.altKey ||
+      (event.target instanceof HTMLElement &&
+        event.target.closest(
+          'input, textarea, select, [contenteditable="true"], [role="slider"]',
+        ))
+    ) return;
+    if (event.key === "ArrowRight" || event.key === "PageDown") {
+      event.preventDefault();
+      goToNextPage();
+    } else if (event.key === "ArrowLeft" || event.key === "PageUp") {
+      event.preventDefault();
+      goToPreviousPage();
+    }
+  });
+  // Keyboard page navigation. Form controls keep their own arrow-key
+  // behavior (e.g. the typography tracking slider).
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => onPageNavKey(event);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
+
+  // Track viewport height so the stage can grow on tall screens.
+  useEffect(() => {
+    const update = () => setViewportHeight(window.innerHeight);
+    window.addEventListener("resize", update);
+    return () => window.removeEventListener("resize", update);
+  }, []);
 
   async function handleSubmit(force = false) {
     if (!submission || frozenRef.current) {
@@ -1974,7 +1873,7 @@ export default function EditorWorkspace({
           "linear-gradient(180deg, var(--color-primary-muted) 0%, var(--color-background) 40%)",
       }}
     >
-      <div className="mx-auto flex max-w-[1500px] flex-col gap-5">
+      <div className="mx-auto flex max-w-[1600px] flex-col gap-4">
         {saveError && (
           <div
             role="alert"
@@ -2208,6 +2107,13 @@ export default function EditorWorkspace({
               </button>
               <button
                 type="button"
+                onClick={() => setPreviewOpen(true)}
+                className="btn btn-outline btn-sm"
+              >
+                Preview booklet
+              </button>
+              <button
+                type="button"
                 onClick={() => void handleSubmit()}
                 disabled={submitting || Boolean(fontStatus) ||
                   designIssues.some((issue) => issue.severity === "error")}
@@ -2219,199 +2125,8 @@ export default function EditorWorkspace({
           </div>
         </section>
 
-        <div className="grid gap-5 xl:grid-cols-[240px_minmax(0,1fr)_320px]">
-          <aside className="space-y-5">
-            <section className="card p-5">
-              <div className="flex items-center justify-between">
-                <p
-                  className="text-sm font-semibold"
-                  style={{ color: "var(--color-text)" }}
-                >
-                  Pages
-                </p>
-                <span className="section-label">
-                  8 total
-                </span>
-              </div>
-              <div className="mt-4 space-y-3">
-                {PAGE_LABELS.map((pageLabel) => {
-                  const page = pagesByLabel[pageLabel];
-                  const elementCount = page.scene.elements.length;
-                  const isActive = pageLabel === activePageLabel;
-                  const thumbnail = pageThumbnails[pageLabel];
-
-                  return (
-                    <button
-                      key={pageLabel}
-                      type="button"
-                      onClick={() => void handlePageSelect(pageLabel)}
-                      aria-label={`Edit ${PAGE_LABEL_DISPLAY[pageLabel]}`}
-                      aria-current={isActive ? "page" : undefined}
-                      className="w-full rounded-xl p-3 text-left transition"
-                      style={{
-                        border: isActive
-                          ? "2px solid var(--color-primary)"
-                          : "1px solid var(--color-border)",
-                        background: isActive
-                          ? "var(--color-primary-muted)"
-                          : "var(--color-surface)",
-                        color: isActive
-                          ? "var(--color-primary)"
-                          : "var(--color-text)",
-                      }}
-                    >
-                      <div
-                        className="mb-2 overflow-hidden rounded-lg"
-                        style={{ border: "1px solid var(--color-border)" }}
-                      >
-                        {thumbnail
-                          ? (
-                            // eslint-disable-next-line @next/next/no-img-element
-                            <img
-                              src={thumbnail}
-                              alt={`${PAGE_LABEL_DISPLAY[pageLabel]} preview`}
-                              className="h-20 w-full object-contain"
-                            />
-                          )
-                          : (
-                            <div
-                              className="flex h-20 items-center justify-center text-xs"
-                              style={{
-                                background: "var(--color-surface)",
-                                color: "var(--color-text-subtle)",
-                              }}
-                            >
-                              No content
-                            </div>
-                          )}
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm font-semibold">
-                          {PAGE_LABEL_DISPLAY[pageLabel]}
-                        </span>
-                        <span
-                          className="text-xs"
-                          style={{ color: "var(--color-text-muted)" }}
-                        >
-                          {elementCount}
-                        </span>
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-            </section>
-
-            <section className="card p-5">
-              <div className="flex items-center justify-between">
-                <p
-                  className="text-sm font-semibold"
-                  style={{ color: "var(--color-text)" }}
-                >
-                  Asset Library
-                </p>
-                <label className="btn btn-secondary btn-sm cursor-pointer">
-                  {assetUploading ? "Uploading..." : "Upload"}
-                  <input
-                    type="file"
-                    accept="image/jpeg,image/png,image/webp"
-                    onChange={handleAssetUpload}
-                    disabled={assetUploading}
-                    className="hidden"
-                  />
-                </label>
-              </div>
-              <p
-                className="mt-3 text-xs leading-5"
-                style={{ color: "var(--color-text-muted)" }}
-              >
-                Click any thumbnail to place another copy on the current page.
-              </p>
-              <div className="mt-4 grid grid-cols-2 gap-3">
-                {assets.length === 0
-                  ? (
-                    <p
-                      className="col-span-2 text-sm leading-6"
-                      style={{ color: "var(--color-text-muted)" }}
-                    >
-                      Upload images to start placing artwork on the page.
-                    </p>
-                  )
-                  : (
-                    assets.map((asset) => (
-                      <div
-                        key={asset.id}
-                        className="group relative overflow-hidden rounded-xl transition"
-                        style={{
-                          border: "1px solid var(--color-border)",
-                          background: "var(--color-surface)",
-                        }}
-                      >
-                        <button
-                          type="button"
-                          onClick={() => addImageElement(asset)}
-                          className="block h-full w-full text-left"
-                        >
-                          {asset.previewUrl ?? asset.downloadUrl
-                            ? (
-                              // eslint-disable-next-line @next/next/no-img-element
-                              <img
-                                src={asset.previewUrl ?? asset.downloadUrl ??
-                                  ""}
-                                alt={asset.originalFilename}
-                                className="h-28 w-full object-cover"
-                              />
-                            )
-                            : (
-                              <div
-                                className="flex h-28 items-center justify-center text-xs"
-                                style={{
-                                  background: "var(--color-border)",
-                                  color: "var(--color-text-muted)",
-                                }}
-                              >
-                                No preview
-                              </div>
-                            )}
-                          <div className="px-3 py-2">
-                            <p
-                              className="truncate text-xs font-medium"
-                              style={{ color: "var(--color-text)" }}
-                            >
-                              {asset.originalFilename}
-                            </p>
-                          </div>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            handleAssetDelete(asset.id, asset.originalFilename)}
-                          className="absolute right-2 top-2 rounded-full p-1.5 text-white opacity-0 shadow-sm transition group-hover:opacity-100"
-                          style={{ background: "var(--color-error)" }}
-                          title="Delete asset"
-                        >
-                          <svg
-                            className="h-3.5 w-3.5"
-                            fill="none"
-                            viewBox="0 0 24 24"
-                            stroke="currentColor"
-                            strokeWidth={2}
-                          >
-                            <path
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
-                            />
-                          </svg>
-                        </button>
-                      </div>
-                    ))
-                  )}
-              </div>
-            </section>
-          </aside>
-
-          <section className="space-y-4">
+        <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
+          <section className="min-w-0 space-y-4">
             <div className="card p-4">
               <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                 <div>
@@ -2430,64 +2145,157 @@ export default function EditorWorkspace({
                       : "Drag elements freely, then resize or rotate from the page."}
                   </p>
                 </div>
-                <label
-                  className="flex items-center gap-2 text-sm"
-                  style={{ color: "var(--color-text-muted)" }}
-                >
-                  <span>Background</span>
-                  <ColorPicker
-                    value={activeResolvedScene.page.backgroundColor}
-                    onChange={(color) => {
-                      updateScene({
-                        ...activePage.scene,
-                        backgroundOverride: color,
-                      });
-                    }}
-                  />
-                </label>
+                <div className="flex items-center gap-4">
+                  <span
+                    className="text-xs font-medium tabular-nums"
+                    aria-live="polite"
+                    style={{ color: "var(--color-text-muted)" }}
+                  >
+                    Page {readingIndex + 1} of 8
+                  </span>
+                  <label
+                    className="flex items-center gap-2 text-sm"
+                    style={{ color: "var(--color-text-muted)" }}
+                  >
+                    <span>Background</span>
+                    <ColorPicker
+                      value={activeResolvedScene.page.backgroundColor}
+                      onChange={(color) => {
+                        updateScene({
+                          ...activePage.scene,
+                          backgroundOverride: color,
+                        });
+                      }}
+                    />
+                  </label>
+                </div>
               </div>
             </div>
 
-            <EditorCanvas
-              key={`canvas-${fontRetry}`}
-              scene={{ ...activeResolvedScene, elements: mergedElements }}
-              assets={assets}
-              selectedElementId={selectedElementId}
-              onSelectElement={(elementId) => {
-                // Allow selecting template TEXT elements so users can edit
-                // the text content. Other template types remain fully locked.
-                if (
-                  isInstanceMode && elementId &&
-                  isTemplateElement(elementId, activeTemplateElements) &&
-                  !isTemplateTextElement(elementId)
-                ) {
-                  return;
-                }
-                setSelectedElementId(elementId);
-              }}
-              onSceneChange={(next) => {
-                // Strip any template-layer elements before persisting;
-                // instance sceneJson must remain user-layer only (aside
-                // from `templateTextOverrides`, which the canvas never
-                // modifies directly).
-                updateScene(applyCanvasGeometry(activePage.scene, next));
-              }}
-              pageLabel={activePageLabel}
-              templateElementIds={new Set(
-                activeTemplateElements.map((e) => e.id),
-              )}
-              templateTextElementIds={new Set(
-                activeTemplateElements
-                  .filter((e) =>
-                    e.type === "text" && !e.locked && !isProtectedDesign(e)
-                  )
-                  .map((e) => e.id),
-              )}
-              isInstanceMode={isInstanceMode}
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={goToPreviousPage}
+                disabled={readingIndex <= 0 || navigating}
+                aria-label="Previous page"
+                title="Previous page (ArrowLeft)"
+                className="hidden shrink-0 self-center rounded-full p-2 transition disabled:opacity-40 sm:block sm:p-3"
+                style={{
+                  border: "1.5px solid var(--color-border-strong)",
+                  background: "var(--color-surface-raised)",
+                  color: "var(--color-text)",
+                }}
+              >
+                <svg
+                  className="h-5 w-5"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M15 19l-7-7 7-7"
+                  />
+                </svg>
+              </button>
+              <div className="min-w-0 flex-1">
+                <div
+                  key={activePageLabel}
+                  className={navDirection === "forward"
+                    ? "page-enter-forward"
+                    : "page-enter-backward"}
+                >
+                  <EditorCanvas
+                    key={`canvas-${fontRetry}`}
+                    scene={{ ...activeResolvedScene, elements: mergedElements }}
+                    assets={assets}
+                    selectedElementId={selectedElementId}
+                    onSelectElement={(elementId) => {
+                      // Allow selecting template TEXT elements so users can edit
+                      // the text content. Other template types remain fully locked.
+                      if (
+                        isInstanceMode && elementId &&
+                        isTemplateElement(elementId, activeTemplateElements) &&
+                        !isTemplateTextElement(elementId)
+                      ) {
+                        return;
+                      }
+                      setSelectedElementId(elementId);
+                    }}
+                    onSceneChange={(next) => {
+                      // Strip any template-layer elements before persisting;
+                      // instance sceneJson must remain user-layer only (aside
+                      // from `templateTextOverrides`, which the canvas never
+                      // modifies directly).
+                      updateScene(applyCanvasGeometry(activePage.scene, next));
+                    }}
+                    pageLabel={activePageLabel}
+                    templateElementIds={new Set(
+                      activeTemplateElements.map((e) => e.id),
+                    )}
+                    templateTextElementIds={new Set(
+                      activeTemplateElements
+                        .filter((e) =>
+                          e.type === "text" && !e.locked && !isProtectedDesign(e)
+                        )
+                        .map((e) => e.id),
+                    )}
+                    isInstanceMode={isInstanceMode}
+                    maxWidth={700}
+                    maxHeight={stageMaxHeight}
+                    onSwipeLeft={goToNextPage}
+                    onSwipeRight={goToPreviousPage}
+                  />
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={goToNextPage}
+                disabled={readingIndex >= PAGE_READING_ORDER.length - 1 ||
+                  navigating}
+                aria-label="Next page"
+                title="Next page (ArrowRight)"
+                className="hidden shrink-0 self-center rounded-full p-2 transition disabled:opacity-40 sm:block sm:p-3"
+                style={{
+                  border: "1.5px solid var(--color-border-strong)",
+                  background: "var(--color-surface-raised)",
+                  color: "var(--color-text)",
+                }}
+              >
+                <svg
+                  className="h-5 w-5"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M9 5l7 7-7 7"
+                  />
+                </svg>
+              </button>
+            </div>
+
+            <PageFilmstrip
+              activePageLabel={activePageLabel}
+              thumbnails={pageThumbnails}
+              elementCounts={elementCounts}
+              onSelect={goToPage}
             />
+            <p
+              className="text-xs"
+              style={{ color: "var(--color-text-muted)" }}
+            >
+              Swipe the page, press the arrow keys, or pick a thumbnail to
+              move between pages. Changes are saved before each switch.
+            </p>
           </section>
 
-          <div className="space-y-5">
+          <div className="space-y-4">
             <BookDesignPanel
               scene={activePage.scene}
               pageLabel={activePageLabel}
@@ -2591,6 +2399,117 @@ export default function EditorWorkspace({
               onDeleteElement={deleteElement}
               isInstanceMode={isInstanceMode}
             />
+
+            <section className="card p-5">
+              <div className="flex items-center justify-between">
+                <p
+                  className="text-sm font-semibold"
+                  style={{ color: "var(--color-text)" }}
+                >
+                  Asset Library
+                </p>
+                <label className="btn btn-secondary btn-sm cursor-pointer">
+                  {assetUploading ? "Uploading..." : "Upload"}
+                  <input
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp"
+                    onChange={handleAssetUpload}
+                    disabled={assetUploading}
+                    className="hidden"
+                  />
+                </label>
+              </div>
+              <p
+                className="mt-3 text-xs leading-5"
+                style={{ color: "var(--color-text-muted)" }}
+              >
+                Click any thumbnail to place another copy on the current page.
+              </p>
+              <div className="mt-4 grid grid-cols-2 gap-3">
+                {assets.length === 0
+                  ? (
+                    <p
+                      className="col-span-2 text-sm leading-6"
+                      style={{ color: "var(--color-text-muted)" }}
+                    >
+                      Upload images to start placing artwork on the page.
+                    </p>
+                  )
+                  : (
+                    assets.map((asset) => (
+                      <div
+                        key={asset.id}
+                        className="group relative overflow-hidden rounded-xl transition"
+                        style={{
+                          border: "1px solid var(--color-border)",
+                          background: "var(--color-surface)",
+                        }}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => addImageElement(asset)}
+                          className="block h-full w-full text-left"
+                        >
+                          {asset.previewUrl ?? asset.downloadUrl
+                            ? (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img
+                                src={asset.previewUrl ?? asset.downloadUrl ??
+                                  ""}
+                                alt={asset.originalFilename}
+                                className="h-28 w-full object-cover"
+                              />
+                            )
+                            : (
+                              <div
+                                className="flex h-28 items-center justify-center text-xs"
+                                style={{
+                                  background: "var(--color-border)",
+                                  color: "var(--color-text-muted)",
+                                }}
+                              >
+                                No preview
+                              </div>
+                            )}
+                          <div className="px-3 py-2">
+                            <p
+                              className="truncate text-xs font-medium"
+                              style={{ color: "var(--color-text)" }}
+                            >
+                              {asset.originalFilename}
+                            </p>
+                          </div>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            handleAssetDelete(
+                              asset.id,
+                              asset.originalFilename,
+                            )}
+                          className="absolute right-2 top-2 rounded-full p-1.5 text-white opacity-0 shadow-sm transition group-hover:opacity-100"
+                          style={{ background: "var(--color-error)" }}
+                          title="Delete asset"
+                        >
+                          <svg
+                            className="h-3.5 w-3.5"
+                            fill="none"
+                            viewBox="0 0 24 24"
+                            stroke="currentColor"
+                            strokeWidth={2}
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                            />
+                          </svg>
+                        </button>
+                      </div>
+                    ))
+                  )}
+              </div>
+            </section>
           </div>
         </div>
 
@@ -2605,6 +2524,15 @@ export default function EditorWorkspace({
           />
         )}
       </div>
+
+      <BookletPreview
+        open={previewOpen}
+        title={title}
+        pages={resolvedPages}
+        assets={assets}
+        onClose={() => setPreviewOpen(false)}
+        onJumpToPage={handlePreviewJump}
+      />
 
       <AiChatPanel
         key={submission?.id ?? "loading"}

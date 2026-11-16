@@ -43,6 +43,22 @@ export const PAGE_LABELS = [
 
 export type PageLabel = (typeof PAGE_LABELS)[number];
 
+/**
+ * Reading order for display surfaces (filmstrip, booklet preview): front
+ * cover, interior pages, then back cover. PAGE_LABELS keeps the storage /
+ * print-sheet order and must not be reordered.
+ */
+export const PAGE_READING_ORDER: readonly PageLabel[] = [
+  "FRONT_COVER",
+  "PAGE_2",
+  "PAGE_3",
+  "PAGE_4",
+  "PAGE_5",
+  "PAGE_6",
+  "PAGE_7",
+  "BACK_COVER",
+];
+
 export const PAGE_LABEL_DISPLAY: Record<PageLabel, string> = {
   FRONT_COVER: "Front Cover",
   BACK_COVER: "Back Cover",

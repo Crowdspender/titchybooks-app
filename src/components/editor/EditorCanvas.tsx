@@ -42,9 +42,19 @@ interface EditorCanvasProps {
   /** IDs of template elements whose text content is user-editable. */
   templateTextElementIds?: Set<string>;
   isInstanceMode?: boolean;
+  /** Upper bound for the stage width; the stage also fits its container. */
+  maxWidth?: number;
+  /** Upper bound for the stage height so the whole page stays in view. */
+  maxHeight?: number;
+  /** Horizontal background swipe gestures (element drags are unaffected). */
+  onSwipeLeft?: () => void;
+  onSwipeRight?: () => void;
 }
 
 const CANVAS_MAX_WIDTH_PX = 420;
+const SWIPE_MIN_DISTANCE_PX = 60;
+const SWIPE_MAX_DRIFT_PX = 40;
+const SWIPE_MAX_DURATION_MS = 600;
 
 function useCanvasImage(src: string | null) {
   const [image, setImage] = useState<HTMLImageElement | null>(null);
@@ -915,9 +925,35 @@ export default function EditorCanvas({
   templateElementIds = new Set(),
   templateTextElementIds = new Set(),
   isInstanceMode = false,
+  maxWidth,
+  maxHeight,
+  onSwipeLeft,
+  onSwipeRight,
 }: EditorCanvasProps) {
   const stageRef = useRef<Konva.Stage | null>(null);
-  const scale = Math.min(1, CANVAS_MAX_WIDTH_PX / scene.page.widthPx);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const [containerWidth, setContainerWidth] = useState<number | null>(null);
+  // Fit the stage to the workspace column when a maxWidth is supplied;
+  // without one, keep the legacy fixed 420px presentation.
+  useEffect(() => {
+    const node = containerRef.current;
+    if (!node || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver((entries) => {
+      const width = entries[0]?.contentRect.width;
+      if (width && width > 0) setContainerWidth(width);
+    });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
+  const widthCap = maxWidth ?? CANVAS_MAX_WIDTH_PX;
+  const availableWidth = maxWidth != null && containerWidth != null
+    ? Math.min(containerWidth, maxWidth)
+    : widthCap;
+  const scale = Math.min(
+    1,
+    availableWidth / scene.page.widthPx,
+    maxHeight ? maxHeight / scene.page.heightPx : Number.POSITIVE_INFINITY,
+  );
   const stageWidth = scene.page.widthPx * scale;
   const stageHeight = scene.page.heightPx * scale;
   const isBackCover = pageLabel === "BACK_COVER";
@@ -926,9 +962,59 @@ export default function EditorCanvas({
   const safeAreaHeight = scene.page.heightPx - EDITOR_SAFE_MARGIN_PX * 2;
   const brandBandY = safeAreaY + safeAreaHeight - brandBandPx;
   const [cropModeId, setCropModeId] = useState<string | null>(null);
+  const swipeRef = useRef<{
+    x: number;
+    y: number;
+    time: number;
+    active: boolean;
+  } | null>(null);
+  const swipeEnabled = Boolean(onSwipeLeft || onSwipeRight);
   const assetMap = new Map(
     assets.map((asset) => [asset.id, asset]),
   );
+
+  // A page swipe only counts when the gesture starts on the stage
+  // background, so dragging, resizing or cropping an element never
+  // navigates away from the page.
+  function handleTouchStart(event: Konva.KonvaEventObject<TouchEvent>) {
+    if (!swipeEnabled || event.target !== event.target.getStage()) return;
+    const touch = event.evt.touches[0];
+    if (!touch || event.evt.touches.length > 1) return;
+    swipeRef.current = {
+      x: touch.clientX,
+      y: touch.clientY,
+      time: Date.now(),
+      active: true,
+    };
+  }
+
+  function handleTouchMove(event: Konva.KonvaEventObject<TouchEvent>) {
+    const swipe = swipeRef.current;
+    if (!swipe?.active) return;
+    const touch = event.evt.touches[0];
+    if (!touch) return;
+    if (Math.abs(touch.clientY - swipe.y) > SWIPE_MAX_DRIFT_PX) {
+      swipe.active = false;
+    }
+  }
+
+  function handleTouchEnd(event: Konva.KonvaEventObject<TouchEvent>) {
+    const swipe = swipeRef.current;
+    swipeRef.current = null;
+    if (!swipe?.active) return;
+    const touch = event.evt.changedTouches[0];
+    if (!touch) return;
+    const dx = touch.clientX - swipe.x;
+    const dy = touch.clientY - swipe.y;
+    const elapsed = Date.now() - swipe.time;
+    if (
+      elapsed > SWIPE_MAX_DURATION_MS ||
+      Math.abs(dx) < SWIPE_MIN_DISTANCE_PX ||
+      Math.abs(dy) > SWIPE_MAX_DRIFT_PX
+    ) return;
+    if (dx < 0) onSwipeLeft?.();
+    else onSwipeRight?.();
+  }
 
   useEffect(() => {
     if (!cropModeId) {
@@ -974,18 +1060,38 @@ export default function EditorCanvas({
   }
 
   return (
-    <div className="card p-4" style={{ background: "var(--color-surface)" }}>
+    <div
+      ref={containerRef}
+      className="card p-4"
+      style={{
+        background: "var(--color-surface)",
+        ...(swipeEnabled ? { touchAction: "pan-y" } : {}),
+      }}
+    >
       <Stage
         ref={stageRef}
         width={stageWidth}
         height={stageHeight}
-        className="mx-auto rounded-xl bg-white"
-        style={{ boxShadow: "0 20px 50px rgba(0, 0, 0, 0.1)" }}
+        className="rounded-xl bg-white"
+        style={{
+          // Size the wrapper to the stage itself so the white page surface
+          // and its shadow never stretch across the whole workspace column.
+          width: stageWidth,
+          height: stageHeight,
+          margin: "0 auto",
+          boxShadow: "0 20px 50px rgba(0, 0, 0, 0.1)",
+        }}
         onMouseDown={(event) => {
           if (event.target === event.target.getStage()) {
             onSelectElement(null);
             setCropModeId(null);
           }
+        }}
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={handleTouchEnd}
+        onTouchCancel={() => {
+          swipeRef.current = null;
         }}
       >
         <Layer>
@@ -995,6 +1101,7 @@ export default function EditorCanvas({
             width={stageWidth}
             height={stageHeight}
             fill={scene.page.backgroundColor}
+            listening={false}
           />
           <Rect
             x={EDITOR_SAFE_MARGIN_PX * scale}

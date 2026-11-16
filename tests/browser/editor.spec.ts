@@ -179,3 +179,107 @@ test('restores local unsaved edits after reload without creating another draft',
   expect(JSON.parse(saved.sceneJson).elements[0].text).toBe('Recover after reload');
   expect(await db.submission.count({ where: { userId } })).toBe(1);
 });
+
+test('arrow buttons navigate in reading order and commit the outgoing save', async ({ page }) => {
+  const id = await openDraft(page);
+  await addText(page, 'Arrow navigation text');
+  await expect(page.getByText('Page 1 of 8', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Previous page', exact: true })).toBeDisabled();
+  await page.getByRole('button', { name: 'Next page', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Edit Page 2', exact: true })).toHaveAttribute('aria-current', 'page');
+  await expect(page.getByText('Page 2 of 8', { exact: true })).toBeVisible();
+  // The switch only commits after the outgoing page flushed successfully.
+  const saved = await db.submissionPage.findUniqueOrThrow({ where: { submissionId_pageLabel: { submissionId: id, pageLabel: 'FRONT_COVER' } } });
+  expect(JSON.parse(saved.sceneJson).elements[0].text).toBe('Arrow navigation text');
+  await page.getByRole('button', { name: 'Previous page', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Edit Front Cover', exact: true })).toHaveAttribute('aria-current', 'page');
+  // The filmstrip jumps anywhere; Next is disabled at the reading-order end.
+  await page.getByRole('button', { name: 'Edit Back Cover', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Edit Back Cover', exact: true })).toHaveAttribute('aria-current', 'page');
+  await expect(page.getByText('Page 8 of 8', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Next page', exact: true })).toBeDisabled();
+});
+
+test('keyboard arrows navigate pages but never while typing in a field', async ({ page }) => {
+  await openDraft(page);
+  const front = page.getByRole('button', { name: 'Edit Front Cover', exact: true });
+  const second = page.getByRole('button', { name: 'Edit Page 2', exact: true });
+  await page.getByRole('button', { name: 'Next page', exact: true }).focus();
+  await page.keyboard.press('ArrowRight');
+  await expect(second).toHaveAttribute('aria-current', 'page');
+  await page.keyboard.press('ArrowLeft');
+  await expect(front).toHaveAttribute('aria-current', 'page');
+  // Arrow keys belong to the caret while the title field has focus.
+  await page.getByRole('textbox', { name: 'Book title' }).fill('Keyboard guard');
+  await page.keyboard.press('ArrowRight');
+  await expect(front).toHaveAttribute('aria-current', 'page');
+  // Same inside the element text field.
+  await addText(page, 'Typing guard');
+  await page.keyboard.press('ArrowRight');
+  await expect(front).toHaveAttribute('aria-current', 'page');
+  // PageDown/PageUp mirror the arrows outside form controls.
+  await page.getByRole('button', { name: 'Next page', exact: true }).focus();
+  await page.keyboard.press('PageDown');
+  await expect(second).toHaveAttribute('aria-current', 'page');
+  await page.keyboard.press('PageUp');
+  await expect(front).toHaveAttribute('aria-current', 'page');
+});
+
+test.describe('touch swipe navigation', () => {
+  test.use({ hasTouch: true });
+
+  async function swipe(page: Page, fromX: number, fromY: number, dx: number) {
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: fromX, y: fromY }] });
+    for (let step = 1; step <= 6; step++) {
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: fromX + (dx * step) / 6, y: fromY }] });
+    }
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    await cdp.detach();
+  }
+
+  test('swiping the stage background navigates and a failed save blocks it', async ({ page }) => {
+    const id = await openDraft(page);
+    const stage = page.locator('.konvajs-content');
+    await expect(stage).toBeVisible();
+    const box = (await stage.boundingBox())!;
+    // Gesture stays on empty background well below any placed element.
+    const y = box.y + box.height * 0.85;
+    const distance = Math.min(200, box.width * 0.6);
+    await swipe(page, box.x + box.width * 0.8, y, -distance);
+    await expect(page.getByRole('button', { name: 'Edit Page 2', exact: true })).toHaveAttribute('aria-current', 'page');
+    await swipe(page, box.x + box.width * 0.2, y, distance);
+    await expect(page.getByRole('button', { name: 'Edit Front Cover', exact: true })).toHaveAttribute('aria-current', 'page');
+    // An injected save failure blocks the swipe exactly like a click.
+    await page.route(`**/api/submissions/${id}/pages/*`, route => route.request().method() === 'PUT'
+      ? route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'Injected save failure' }) }) : route.continue());
+    await addText(page, 'Swipe blocked text');
+    await swipe(page, box.x + box.width * 0.8, y, -distance);
+    await expect(page.getByRole('button', { name: 'Edit Front Cover', exact: true })).toHaveAttribute('aria-current', 'page');
+    await expect(page.getByRole('status').filter({ hasText: 'Save failed' })).toBeVisible();
+    await expect(page.getByRole('textbox', { name: 'Element text' })).toHaveValue('Swipe blocked text');
+  });
+});
+
+test('booklet preview shows all eight pages and jumps straight to a page', async ({ page }) => {
+  await openDraft(page);
+  await page.getByRole('textbox', { name: 'Book title' }).fill('Preview overview book');
+  await addText(page, 'Front cover words');
+  await page.getByRole('button', { name: 'Preview booklet', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole('heading', { name: 'Preview overview book' })).toBeVisible();
+  for (const label of PAGE_LABELS) {
+    await expect(dialog.getByRole('button', { name: `Go to ${PAGE_LABEL_DISPLAY[label]}`, exact: true })).toBeVisible();
+    await expect(dialog.getByAltText(`${PAGE_LABEL_DISPLAY[label]} booklet preview`)).toBeVisible();
+  }
+  await dialog.getByRole('button', { name: 'Go to Page 4', exact: true }).click();
+  await expect(dialog).toBeHidden();
+  await expect(page.getByRole('button', { name: 'Edit Page 4', exact: true })).toHaveAttribute('aria-current', 'page');
+  // Escape closes the dialog and focus returns to the trigger button.
+  await page.getByRole('button', { name: 'Preview booklet', exact: true }).click();
+  await expect(dialog).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(dialog).toBeHidden();
+  await expect(page.getByRole('button', { name: 'Preview booklet', exact: true })).toBeFocused();
+});

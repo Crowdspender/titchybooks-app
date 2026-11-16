@@ -364,6 +364,40 @@ body {
 .ai-markdown h2 { font-size: 1em; }
 .ai-markdown h3 { font-size: 0.95em; }
 
+/* ── Page navigation transitions (editor stage) ───────────────────────────── */
+@keyframes page-enter-forward {
+  from {
+    opacity: 0;
+    transform: translateX(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+@keyframes page-enter-backward {
+  from {
+    opacity: 0;
+    transform: translateX(-12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+.page-enter-forward {
+  animation: page-enter-forward 220ms ease-out;
+}
+.page-enter-backward {
+  animation: page-enter-backward 220ms ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .page-enter-forward,
+  .page-enter-backward {
+    animation: none;
+  }
+}
+
 /* ── Sonner Toast Overrides (warm editorial theme) ───────────────────────── */
 [data-sonner-toaster] {
   --normal-bg: var(--color-surface-raised);
