@@ -353,6 +353,9 @@ export default function EditorWorkspace({
   const [viewportHeight, setViewportHeight] = useState(() =>
     typeof window === "undefined" ? 0 : window.innerHeight
   );
+  const [viewportWidth, setViewportWidth] = useState(() =>
+    typeof window === "undefined" ? 0 : window.innerWidth
+  );
 
   // AI Chat panel state
   const [aiPanelOpen, setAiPanelOpen] = useState(false);
@@ -380,6 +383,9 @@ export default function EditorWorkspace({
   // Leave room for the top bar, page header, filmstrip and padding so the
   // whole page stays visible on tall screens; never shrink below 560px.
   const stageMaxHeight = Math.max(560, viewportHeight - 360);
+  // At xl the studio is a viewport-height frame and the canvas fits its
+  // measured column; the window-based cap only applies below xl.
+  const isXl = viewportWidth >= 1280;
   const elementCounts = useMemo(
     () =>
       Object.fromEntries(
@@ -1691,9 +1697,13 @@ export default function EditorWorkspace({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
 
-  // Track viewport height so the stage can grow on tall screens.
+  // Track viewport size so the stage can grow on tall screens and the xl
+  // app frame can hand height fitting to the measured canvas container.
   useEffect(() => {
-    const update = () => setViewportHeight(window.innerHeight);
+    const update = () => {
+      setViewportHeight(window.innerHeight);
+      setViewportWidth(window.innerWidth);
+    };
     window.addEventListener("resize", update);
     return () => window.removeEventListener("resize", update);
   }, []);
@@ -1877,7 +1887,7 @@ export default function EditorWorkspace({
         {saveError && (
           <div
             role="alert"
-            className="card p-4"
+            className="card p-4 xl:shrink-0"
             style={{ color: "var(--color-error)" }}
           >
             <p>{saveError}</p>
@@ -1897,7 +1907,7 @@ export default function EditorWorkspace({
         {/* Template instance banner */}
         {isInstanceMode && (
           <div
-            className="flex items-center justify-between rounded-xl px-5 py-3"
+            className="flex items-center justify-between rounded-xl px-5 py-3 xl:shrink-0"
             style={{
               background: "var(--color-secondary-light)",
               border: "1px solid var(--color-secondary)",
@@ -1947,8 +1957,13 @@ export default function EditorWorkspace({
             </button>
           </div>
         )}
+        {/* App frame at xl: 113px = sticky Header (65px) + the root's vertical
+            padding (48px). Only the top bar and workspace grid live inside it;
+            the order panel below keeps normal flow. The rail scrolls inside
+            itself so editing properties never moves the canvas. */}
+        <div className="flex flex-col gap-4 xl:h-[calc(100dvh-113px)] xl:min-h-0">
         <section
-          className="card p-5 backdrop-blur"
+          className="card p-5 backdrop-blur xl:shrink-0 xl:py-3"
           style={{ background: "rgba(255,255,255,0.92)" }}
         >
           <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
@@ -1971,7 +1986,7 @@ export default function EditorWorkspace({
                 style={{ color: "var(--color-text)" }}
               />
               <p
-                className="text-sm"
+                className="text-sm xl:hidden"
                 style={{ color: "var(--color-text-muted)" }}
               >
                 Compose each booklet page individually. Safe area guides are
@@ -2125,9 +2140,9 @@ export default function EditorWorkspace({
           </div>
         </section>
 
-        <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
-          <section className="min-w-0 space-y-4">
-            <div className="card p-4">
+        <div className="grid items-start gap-4 xl:min-h-0 xl:flex-1 xl:grid-cols-[minmax(0,1fr)_340px] xl:items-stretch">
+          <section className="min-w-0 space-y-4 xl:flex xl:min-h-0 xl:flex-col xl:overflow-y-auto">
+            <div className="card p-4 xl:shrink-0">
               <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                 <div>
                   <p
@@ -2172,7 +2187,7 @@ export default function EditorWorkspace({
               </div>
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex items-stretch gap-2 xl:min-h-[420px] xl:flex-1">
               <button
                 type="button"
                 onClick={goToPreviousPage}
@@ -2203,9 +2218,9 @@ export default function EditorWorkspace({
               <div className="min-w-0 flex-1">
                 <div
                   key={activePageLabel}
-                  className={navDirection === "forward"
+                  className={`xl:h-full ${navDirection === "forward"
                     ? "page-enter-forward"
-                    : "page-enter-backward"}
+                    : "page-enter-backward"}`}
                 >
                   <EditorCanvas
                     key={`canvas-${fontRetry}`}
@@ -2231,6 +2246,25 @@ export default function EditorWorkspace({
                       // modifies directly).
                       updateScene(applyCanvasGeometry(activePage.scene, next));
                     }}
+                    onTextCommit={(elementId, text) => {
+                      // Inline canvas edits route exactly like the properties
+                      // panel: template text becomes a per-instance override,
+                      // other template elements stay fixed, user elements
+                      // update in place (one history step per edit session).
+                      if (isTemplateTextElement(elementId)) {
+                        updateTemplateTextOverride(elementId, text);
+                        return;
+                      }
+                      if (
+                        isTemplateElement(elementId, activeTemplateElements)
+                      ) {
+                        return;
+                      }
+                      updateElement(elementId, (element) =>
+                        element.type === "text"
+                          ? { ...element, text }
+                          : element);
+                    }}
                     pageLabel={activePageLabel}
                     templateElementIds={new Set(
                       activeTemplateElements.map((e) => e.id),
@@ -2244,7 +2278,7 @@ export default function EditorWorkspace({
                     )}
                     isInstanceMode={isInstanceMode}
                     maxWidth={700}
-                    maxHeight={stageMaxHeight}
+                    maxHeight={isXl ? undefined : stageMaxHeight}
                     onSwipeLeft={goToNextPage}
                     onSwipeRight={goToPreviousPage}
                   />
@@ -2280,14 +2314,16 @@ export default function EditorWorkspace({
               </button>
             </div>
 
-            <PageFilmstrip
-              activePageLabel={activePageLabel}
-              thumbnails={pageThumbnails}
-              elementCounts={elementCounts}
-              onSelect={goToPage}
-            />
+            <div className="xl:shrink-0">
+              <PageFilmstrip
+                activePageLabel={activePageLabel}
+                thumbnails={pageThumbnails}
+                elementCounts={elementCounts}
+                onSelect={goToPage}
+              />
+            </div>
             <p
-              className="text-xs"
+              className="text-xs xl:hidden xl:shrink-0"
               style={{ color: "var(--color-text-muted)" }}
             >
               Swipe the page, press the arrow keys, or pick a thumbnail to
@@ -2295,7 +2331,10 @@ export default function EditorWorkspace({
             </p>
           </section>
 
-          <div className="space-y-4">
+          <div
+            data-testid="editor-tools-rail"
+            className="space-y-4 xl:min-h-0 xl:overflow-y-auto xl:overscroll-contain xl:pr-1 xl:pb-2"
+          >
             <BookDesignPanel
               scene={activePage.scene}
               pageLabel={activePageLabel}
@@ -2511,6 +2550,7 @@ export default function EditorWorkspace({
               </div>
             </section>
           </div>
+        </div>
         </div>
 
         {submission && (

@@ -283,3 +283,65 @@ test('booklet preview shows all eight pages and jumps straight to a page', async
   await expect(dialog).toBeHidden();
   await expect(page.getByRole('button', { name: 'Preview booklet', exact: true })).toBeFocused();
 });
+
+test('canvas stays visible while the tools rail scrolls independently', async ({ page }) => {
+  await openDraft(page);
+  await addText(page, 'Rail scroll visibility');
+  const rail = page.getByTestId('editor-tools-rail');
+  const stage = page.locator('.konvajs-content');
+  const viewport = page.viewportSize()!;
+  // At xl the rail owns its overflow; the document itself must not scroll.
+  expect(await rail.evaluate(el => el.scrollHeight > el.clientHeight)).toBe(true);
+  await rail.evaluate(el => { el.scrollTop = el.scrollHeight; });
+  expect(await page.evaluate(() => window.scrollY)).toBe(0);
+  // The deepest rail content is reachable inside the viewport...
+  const deepHint = rail.getByText('Click any thumbnail to place another copy on the current page.');
+  const hintBox = (await deepHint.boundingBox())!;
+  expect(hintBox.y + hintBox.height).toBeLessThanOrEqual(viewport.height);
+  // ...while the canvas remains fully in view at the same time.
+  const box = (await stage.boundingBox())!;
+  expect(box.y).toBeGreaterThanOrEqual(0);
+  expect(box.y + box.height).toBeLessThanOrEqual(viewport.height);
+  // Editing a property auto-scrolls the rail, never the page or the canvas.
+  await page.getByRole('textbox', { name: 'Element text', exact: true }).fill('Edited from the rail');
+  expect(await page.evaluate(() => window.scrollY)).toBe(0);
+  expect(await stage.boundingBox()).toEqual(box);
+});
+
+test('double-click edits text directly inside the canvas text box', async ({ page }) => {
+  await openDraft(page);
+  await page.getByRole('button', { name: 'Add Text Box', exact: true }).click();
+  const stage = page.locator('.konvajs-content');
+  const box = (await stage.boundingBox())!;
+  // The default text box starts at scene (72, 88) on a 700x1000 page; aim
+  // at the first line's glyphs because Konva hit-testing is pixel-based.
+  const textPoint = { x: box.x + box.width * 0.15, y: box.y + box.height * 0.105 };
+  const inline = page.getByRole('textbox', { name: 'Edit text on page' });
+  const railText = page.getByRole('textbox', { name: 'Element text', exact: true });
+  await page.mouse.dblclick(textPoint.x, textPoint.y);
+  await expect(inline).toBeVisible();
+  await expect(inline).toHaveValue('Add your story here');
+  await inline.fill('Typed directly on the page');
+  await inline.press('Control+Enter');
+  await expect(inline).toHaveCount(0);
+  await expect(railText).toHaveValue('Typed directly on the page');
+  // A whole editing session is a single undo step.
+  await page.getByRole('button', { name: 'Undo', exact: true }).click();
+  await expect(railText).toHaveValue('Add your story here');
+  // Escape cancels without touching the stored text.
+  await page.mouse.dblclick(textPoint.x, textPoint.y);
+  await expect(inline).toBeVisible();
+  await inline.fill('Discarded edit');
+  await inline.press('Escape');
+  await expect(inline).toHaveCount(0);
+  await expect(railText).toHaveValue('Add your story here');
+  // Clicking away (blur) commits the edit.
+  await page.mouse.dblclick(textPoint.x, textPoint.y);
+  await expect(inline).toBeVisible();
+  await inline.fill('Committed by blur');
+  await page.mouse.click(box.x + box.width * 0.5, box.y + box.height * 0.9);
+  await expect(inline).toHaveCount(0);
+  // The background click also deselects; reselect to inspect the commit.
+  await page.mouse.click(textPoint.x, textPoint.y);
+  await expect(railText).toHaveValue('Committed by blur');
+});

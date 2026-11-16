@@ -49,6 +49,9 @@ interface EditorCanvasProps {
   /** Horizontal background swipe gestures (element drags are unaffected). */
   onSwipeLeft?: () => void;
   onSwipeRight?: () => void;
+  /** Commit an inline (double-click) text edit; the caller routes template
+   * text to overrides and user text to the scene. */
+  onTextCommit?: (elementId: string, text: string) => void;
 }
 
 const CANVAS_MAX_WIDTH_PX = 420;
@@ -201,14 +204,18 @@ function CanvasTextElement({
   element,
   scale,
   isSelected,
+  isEditing = false,
   onSelect,
+  onEnterEdit,
   onDragEnd,
   onTransformEnd,
 }: {
   element: Extract<EditorElement, { type: "text" }>;
   scale: number;
   isSelected: boolean;
+  isEditing?: boolean;
   onSelect: () => void;
+  onEnterEdit?: () => void;
   onDragEnd: (position: { x: number; y: number }) => void;
   onTransformEnd: (next: {
     x: number;
@@ -263,10 +270,12 @@ function CanvasTextElement({
         align={element.align}
         verticalAlign={element.verticalAlign}
         wrap="word"
-        draggable={!element.locked}
-        visible={element.visible}
+        draggable={!element.locked && !isEditing}
+        visible={element.visible && !isEditing}
         onClick={onSelect}
         onTap={onSelect}
+        onDblClick={onEnterEdit}
+        onDblTap={onEnterEdit}
         onDragEnd={(event) => {
           onDragEnd({
             x: event.target.x() / scale,
@@ -290,7 +299,7 @@ function CanvasTextElement({
           });
         }}
       />
-      {isSelected
+      {isSelected && !isEditing
         ? (
           <Transformer
             ref={transformerRef}
@@ -736,14 +745,18 @@ function TemplateLayerElement({
   assetMap,
   isTextEditable = false,
   isSelected = false,
+  isEditing = false,
   onSelect,
+  onEnterEdit,
 }: {
   element: EditorElement;
   scale: number;
   assetMap: Map<string, CanvasAsset>;
   isTextEditable?: boolean;
   isSelected?: boolean;
+  isEditing?: boolean;
   onSelect?: () => void;
+  onEnterEdit?: () => void;
 }) {
   if (element.type === "image") {
     const imageSrc = assetMap.get(element.assetId)?.previewUrl ??
@@ -789,17 +802,17 @@ function TemplateLayerElement({
           align={element.align}
           verticalAlign={element.verticalAlign}
           wrap="word"
-          visible={element.visible}
+          visible={element.visible && !isEditing}
           listening={true}
           onMouseEnter={(e) =>
             setCursorStyle(e, editable ? "text" : "not-allowed")}
           onMouseLeave={(e) => setCursorStyle(e, "default")}
           onClick={editable ? onSelect : () => {/* blocked */}}
           onTap={editable ? onSelect : undefined}
-          onDblClick={editable ? onSelect : undefined}
-          onDblTap={editable ? onSelect : undefined}
+          onDblClick={editable ? (onEnterEdit ?? onSelect) : undefined}
+          onDblTap={editable ? (onEnterEdit ?? onSelect) : undefined}
         />
-        {editable && isSelected
+        {editable && isSelected && !isEditing
           ? (
             <Rect
               x={element.x * scale}
@@ -915,6 +928,97 @@ function TemplateImageElement({
   );
 }
 
+/**
+ * Inline text editor: a textarea overlaid on the hidden Konva Text node,
+ * matched to its position, font and scale so typing happens "inside" the
+ * text box. Enter inserts a newline; Ctrl/Cmd+Enter or blur commits the
+ * edit as a single history step; Escape cancels. Guided-typography text
+ * (path-rendered) is not editable inline and keeps the properties panel.
+ */
+function CanvasTextEditor({
+  element,
+  scale,
+  onCommit,
+  onCancel,
+}: {
+  element: Extract<EditorElement, { type: "text" }>;
+  scale: number;
+  onCommit: (text: string) => void;
+  onCancel: () => void;
+}) {
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  // Guard against a blur commit firing after an explicit commit/cancel.
+  const doneRef = useRef(false);
+
+  useEffect(() => {
+    const node = textareaRef.current;
+    if (!node) return;
+    node.focus();
+    node.select();
+    node.style.height = "auto";
+    node.style.height = `${node.scrollHeight}px`;
+  }, []);
+
+  function commit(node: HTMLTextAreaElement) {
+    if (doneRef.current) return;
+    doneRef.current = true;
+    onCommit(node.value);
+  }
+
+  return (
+    <textarea
+      ref={textareaRef}
+      aria-label="Edit text on page"
+      defaultValue={element.text}
+      maxLength={5000}
+      onBlur={(event) => commit(event.currentTarget)}
+      onInput={(event) => {
+        const node = event.currentTarget;
+        node.style.height = "auto";
+        node.style.height = `${node.scrollHeight}px`;
+      }}
+      onKeyDown={(event) => {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          if (!doneRef.current) {
+            doneRef.current = true;
+            onCancel();
+          }
+        } else if (
+          event.key === "Enter" && (event.ctrlKey || event.metaKey)
+        ) {
+          event.preventDefault();
+          commit(event.currentTarget);
+        }
+      }}
+      style={{
+        position: "absolute",
+        left: element.x * scale,
+        top: element.y * scale,
+        width: element.width * scale,
+        minHeight: element.height * scale,
+        transform: `rotate(${element.rotation}deg)`,
+        transformOrigin: "top left",
+        margin: 0,
+        padding: 0,
+        border: "none",
+        outline: "1px dashed #3b82f6",
+        background: "transparent",
+        resize: "none",
+        overflow: "hidden",
+        fontFamily: element.fontFamily,
+        fontSize: element.fontSize * scale,
+        fontWeight: element.fontWeight,
+        lineHeight: element.lineHeight,
+        letterSpacing: element.letterSpacing * scale,
+        color: element.color,
+        textAlign: element.align,
+        zIndex: 10,
+      }}
+    />
+  );
+}
+
 export default function EditorCanvas({
   scene,
   assets,
@@ -929,10 +1033,12 @@ export default function EditorCanvas({
   maxHeight,
   onSwipeLeft,
   onSwipeRight,
+  onTextCommit,
 }: EditorCanvasProps) {
   const stageRef = useRef<Konva.Stage | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [containerWidth, setContainerWidth] = useState<number | null>(null);
+  const [containerHeight, setContainerHeight] = useState<number | null>(null);
   // Fit the stage to the workspace column when a maxWidth is supplied;
   // without one, keep the legacy fixed 420px presentation.
   useEffect(() => {
@@ -941,6 +1047,8 @@ export default function EditorCanvas({
     const observer = new ResizeObserver((entries) => {
       const width = entries[0]?.contentRect.width;
       if (width && width > 0) setContainerWidth(width);
+      const height = entries[0]?.contentRect.height;
+      if (height && height > 0) setContainerHeight(height);
     });
     observer.observe(node);
     return () => observer.disconnect();
@@ -949,10 +1057,16 @@ export default function EditorCanvas({
   const availableWidth = maxWidth != null && containerWidth != null
     ? Math.min(containerWidth, maxWidth)
     : widthCap;
+  // With maxWidth but no maxHeight (the xl app frame) the container height
+  // is flex-determined, so fitting it keeps the page inside the viewport.
+  const heightCap = maxHeight ??
+    (maxWidth != null
+      ? containerHeight ?? Number.POSITIVE_INFINITY
+      : Number.POSITIVE_INFINITY);
   const scale = Math.min(
     1,
     availableWidth / scene.page.widthPx,
-    maxHeight ? maxHeight / scene.page.heightPx : Number.POSITIVE_INFINITY,
+    heightCap / scene.page.heightPx,
   );
   const stageWidth = scene.page.widthPx * scale;
   const stageHeight = scene.page.heightPx * scale;
@@ -962,6 +1076,7 @@ export default function EditorCanvas({
   const safeAreaHeight = scene.page.heightPx - EDITOR_SAFE_MARGIN_PX * 2;
   const brandBandY = safeAreaY + safeAreaHeight - brandBandPx;
   const [cropModeId, setCropModeId] = useState<string | null>(null);
+  const [editingTextId, setEditingTextId] = useState<string | null>(null);
   const swipeRef = useRef<{
     x: number;
     y: number;
@@ -1047,6 +1162,32 @@ export default function EditorCanvas({
     }
   }
 
+  // Leave inline editing if the target text element no longer exists (page
+  // switch, deletion). Blur commits normally fire first; this is the guard
+  // for changes that arrive without a blur.
+  if (
+    editingTextId &&
+    !scene.elements.some((element) =>
+      element.id === editingTextId && element.type === "text"
+    )
+  ) {
+    setEditingTextId(null);
+  }
+
+  const editingElement = editingTextId
+    ? scene.elements.find((element): element is Extract<
+      EditorElement,
+      { type: "text" }
+    > => element.id === editingTextId && element.type === "text")
+    : undefined;
+
+  function finishTextEdit(text: string | null) {
+    const element = editingElement;
+    setEditingTextId(null);
+    if (!element || text === null || text === element.text) return;
+    onTextCommit?.(element.id, text);
+  }
+
   function updateElement(
     elementId: string,
     updater: (element: EditorElement) => EditorElement,
@@ -1062,24 +1203,35 @@ export default function EditorCanvas({
   return (
     <div
       ref={containerRef}
-      className="card p-4"
+      // h-full + flex centering only bite when an ancestor gives this box a
+      // definite height (the xl app frame); the ResizeObserver then measures
+      // the column, not the stage, so the page fits without feedback loops.
+      className="card flex h-full flex-col justify-center p-4"
       style={{
         background: "var(--color-surface)",
         ...(swipeEnabled ? { touchAction: "pan-y" } : {}),
       }}
     >
+      {/* Relative wrapper sized to the stage so the inline text editor can
+          be positioned in stage coordinates; the white page surface and its
+          shadow never stretch across the whole workspace column. */}
+      <div
+        style={{
+          position: "relative",
+          width: stageWidth,
+          height: stageHeight,
+          margin: "0 auto",
+          boxShadow: "0 20px 50px rgba(0, 0, 0, 0.1)",
+        }}
+      >
       <Stage
         ref={stageRef}
         width={stageWidth}
         height={stageHeight}
         className="rounded-xl bg-white"
         style={{
-          // Size the wrapper to the stage itself so the white page surface
-          // and its shadow never stretch across the whole workspace column.
           width: stageWidth,
           height: stageHeight,
-          margin: "0 auto",
-          boxShadow: "0 20px 50px rgba(0, 0, 0, 0.1)",
         }}
         onMouseDown={(event) => {
           if (event.target === event.target.getStage()) {
@@ -1133,7 +1285,17 @@ export default function EditorCanvas({
                     assetMap={assetMap}
                     isTextEditable={isTextEditable}
                     isSelected={selectedElementId === element.id}
+                    isEditing={editingTextId === element.id}
                     onSelect={() => onSelectElement(element.id)}
+                    onEnterEdit={isTextEditable &&
+                        element.type === "text" &&
+                        !element.typographyVersion &&
+                        !element.locked && onTextCommit
+                      ? () => {
+                        onSelectElement(element.id);
+                        setEditingTextId(element.id);
+                      }
+                      : undefined}
                   />
                 );
               }
@@ -1201,7 +1363,11 @@ export default function EditorCanvas({
                     element={element}
                     scale={scale}
                     isSelected={selectedElementId === element.id}
+                    isEditing={editingTextId === element.id}
                     onSelect={() => onSelectElement(element.id)}
+                    onEnterEdit={!element.locked && onTextCommit
+                      ? () => setEditingTextId(element.id)
+                      : undefined}
                     onDragEnd={(position) => {
                       updateElement(element.id, (current) => ({
                         ...current,
@@ -1286,6 +1452,18 @@ export default function EditorCanvas({
             : null}
         </Layer>
       </Stage>
+      {editingElement && onTextCommit
+        ? (
+          <CanvasTextEditor
+            key={editingElement.id}
+            element={editingElement}
+            scale={scale}
+            onCommit={(text) => finishTextEdit(text)}
+            onCancel={() => finishTextEdit(null)}
+          />
+        )
+        : null}
+      </div>
     </div>
   );
 }
