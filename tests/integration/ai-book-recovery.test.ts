@@ -94,6 +94,17 @@ describe('AI book recovery surface', () => {
     expect((await jobStatus(request(), params(job.id))).status).toBe(401);
   });
 
+  it('reports exhausted content revisions separately from execution failures', async () => {
+    const job = await createJob(session.user!.id, {
+      status: 'FAILED', stage: 'CONTENT', repairCount: 2, maxRepairs: 2, failureCount: 1, maxAttempts: 3,
+      errorMessage: "The story could not be fit to the book's pages after the allowed repair attempts.",
+    });
+    const body = await (await jobStatus(request(), params(job.id))).json();
+    expect(body.phase).toMatchObject({ phase: 'failed', terminal: true });
+    expect(body.repairs).toEqual({ used: 2, allowed: 2 });
+    expect(body.attempts).toEqual({ used: 1, allowed: 3 });
+  });
+
   it('reports a QA rejection as needs-review and keeps the QA report admin-only', async () => {
     const owner = session.user!;
     const job = await createJob(owner.id, {

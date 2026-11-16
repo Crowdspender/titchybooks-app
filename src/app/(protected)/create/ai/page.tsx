@@ -429,9 +429,9 @@ export default function AiCreatePage() {
               className="mt-4 text-xs"
               style={{ color: "var(--color-text-muted)" }}
             >
-              Revision {job.repairs.used} of{" "}
-              {job.repairs.allowed}: quality checks asked for changes, so only
-              the affected pages were rewritten.
+              Revision cycle {job.repairs.used} of{" "}
+              {job.repairs.allowed}: text or page-fit checks requested changes.
+              The book must pass validation before it is ready.
             </p>
           )}
 
@@ -591,12 +591,13 @@ export default function AiCreatePage() {
             {job?.phase.message ?? job?.errorMessage ??
               "Something went wrong. Please try again."}
           </p>
-          {job && job.attempts.used > 0 && (
+          {job && (job.repairs.used > 0 || job.attempts.used > 0) && (
             <p
               className="mt-2 text-xs"
               style={{ color: "var(--color-text-subtle)" }}
             >
-              {job.attempts.used} of {job.attempts.allowed} attempts were used.
+              Content revisions used: {job.repairs.used} of {job.repairs.allowed}.
+              {" "}Execution failures recorded: {job.attempts.used} (limit: {job.attempts.allowed}).
             </p>
           )}
           <div className="mt-6 flex items-center gap-2">

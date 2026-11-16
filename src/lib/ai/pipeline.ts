@@ -7,6 +7,7 @@ import { createInstanceWithOverrides, rewriteInstanceOverrides, type Actor } fro
 import { enqueueRenderJob } from "@/lib/pdf/render-job";
 import { MAX_TITLE_CHARS } from "./book-contract";
 import {
+  AUTONOMOUS_PROMPT_VERSION,
   bookPlanSystemPrompt,
   bookPlanUserPrompt,
   bookRepairSystemPrompt,
@@ -22,8 +23,8 @@ import {
   type TemplateTextSlot,
   type ValidatePlanOptions,
 } from "./composer";
-import { normalizeContentPlan, type ContentPlan } from "./content-plan";
-import { interiorFlowPages, interiorFlowSlotIds, interiorFlowWindow, paginatePlan } from "./flow";
+import { normalizeContentPlan, parseContentPlan, parseContentRepair, type ContentPlan, type ContentRepair } from "./content-plan";
+import { interiorFlowPages, interiorFlowRepairTargets, interiorFlowSlotIds, interiorFlowWindow, paginatePlan, prepareAiBookLayout, type FlowWindow } from "./flow";
 import { applyPrintPalette, printSafetyIssues, selectPrintPalette } from "./print-palette";
 import { getOpenAIClient, getOpenAIModel } from "./client";
 import { hasTerminalFinding, isRetryable, repairFeedback, repairableSlotIds, runQaChecklist, type QaReport } from "./qa";
@@ -302,24 +303,28 @@ async function runConceptStage(job: ClaimedAiBookJob, state: PipelineState): Pro
     bundle = await chooseTemplate(job.concept, candidates);
   }
 
+  // New generation only: freeze the expanded private layout BEFORE budgeting
+  // manuscript text. Resumed jobs and existing submissions retain their pins.
+  const pinned = state.submissionId ? bundle.pinned : prepareAiBookLayout(bundle.pinned);
   state.templateId = bundle.templateId;
-  state.pinned = bundle.pinned;
-  state.manifest = bundle.manifest;
+  state.pinned = pinned;
+  state.manifest = pinned.manifest;
   await mustAdvance(job, AiBookStage.CONTENT, {
     templateId: bundle.templateId,
-    pinnedTemplate: bundle.pinned,
-    manifest: bundle.manifest,
+    pinnedTemplate: pinned,
+    manifest: pinned.manifest,
   });
 }
 
 // --- CONTENT: plan, then repair only what QA rejected --------------------
 
 interface SlotSet {
+  manifest: AiTemplateManifest;
   manifestSlots: AiTemplateSlot[];
   slots: TemplateTextSlot[];
   prompts: PromptSlot[];
   /** Book-level interior character window published to the model. */
-  window: { min: number; max: number } | null;
+  window: FlowWindow | null;
   /** Validation rules for model plans: flow slots skip per-slot fit checks. */
   validateOptions: ValidatePlanOptions;
 }
@@ -327,9 +332,10 @@ interface SlotSet {
 function slotSetOf(manifest: AiTemplateManifest): SlotSet {
   const flowSlotIds = new Set(interiorFlowSlotIds(manifest).flow);
   return {
+    manifest,
     manifestSlots: generatedSlots(manifest),
     slots: slotsFromManifest(manifest),
-    prompts: promptSlots(generatedSlots(manifest)),
+    prompts: promptSlots(generatedSlots(manifest)).map((slot) => ({ ...slot, flow: flowSlotIds.has(slot.id) })),
     window: interiorFlowWindow(manifest),
     validateOptions: { requireAllRequired: true, flow: { flowSlotIds } },
   };
@@ -362,7 +368,7 @@ async function writeContent(concept: string, set: SlotSet): Promise<ContentPlan>
       attempt === 0
         ? user
         : `${user}\n\nYour previous answer was rejected: ${lastError}\nReturn corrected JSON only.`;
-    const plan = normalizeContentPlan(JSON.parse(await chatJson(system, prompt)) as unknown);
+    const plan = parseContentPlan(await chatJson(system, prompt));
     if (!plan) {
       lastError = "The response was not valid JSON matching the required schema.";
       continue;
@@ -379,19 +385,10 @@ async function writeContent(concept: string, set: SlotSet): Promise<ContentPlan>
 }
 
 /** Merge repaired overrides onto the accepted plan without rewriting accepted pages. */
-function mergeRepair(base: ContentPlan, patch: ContentPlan, targets: ReadonlySet<string>, slots: TemplateTextSlot[]): ContentPlan {
+function mergeRepair(base: ContentPlan, patch: ContentRepair, targets: ReadonlySet<string>): ContentPlan {
   const kept = base.overrides.filter((entry) => !targets.has(entry.templateElementId));
   const repaired = patch.overrides.filter((entry) => targets.has(entry.templateElementId));
-  const titleSlot = coverTitleSlot(slots);
-  const titleChanges = titleSlot ? targets.has(titleSlot.id) : false;
-  return {
-    version: 2,
-    brief: patch.brief ?? base.brief,
-    outline: patch.outline ?? base.outline,
-    title: titleChanges ? patch.title : base.title,
-    ...(base.palette ? { palette: base.palette } : {}),
-    overrides: [...kept, ...repaired],
-  };
+  return { ...base, overrides: [...kept, ...repaired] };
 }
 
 async function repairContent(
@@ -399,8 +396,17 @@ async function repairContent(
   set: SlotSet,
   base: ContentPlan,
   feedback: Array<{ slotId: string | null; pageLabel: string | null; code: string; detail: string }>,
-  targets: ReadonlySet<string>,
+  requestedTargets: ReadonlySet<string>,
 ): Promise<ContentPlan> {
+  const measuredTargets = feedback.some((issue) => issue.code === "flow-overflow" || issue.code === "flow-underfull")
+    ? interiorFlowRepairTargets({ manifest: set.manifest, overrides: base.overrides })
+    : [];
+  // Protect full original sections and valid headings in code, not just in the
+  // prompt. Rewriting them can create a new gap while fixing another section.
+  const targets = measuredTargets.length > 0
+    ? new Set(measuredTargets.filter((target) => target.action !== "keep" && requestedTargets.has(target.slotId)).map((target) => target.slotId))
+    : requestedTargets;
+  if (measuredTargets.length > 0 && targets.size === 0) return base;
   const targetPrompts = set.prompts.filter((slot) => targets.has(slot.id));
   if (targetPrompts.length === 0) return writeContent(concept, set);
   const system = bookRepairSystemPrompt();
@@ -410,6 +416,9 @@ async function repairContent(
     title: base.title,
     accepted: base.overrides,
     feedback,
+    total: targetPrompts.some((slot) => slot.flow) ? set.window : null,
+    sectionTargets: measuredTargets,
+    unchangedBodyChars: measuredTargets.filter((target) => !targets.has(target.slotId)).reduce((sum, target) => sum + target.currentChars, 0),
   });
   let lastError = "The AI returned an invalid repair.";
   for (let attempt = 0; attempt <= PLAN_ATTEMPTS; attempt++) {
@@ -417,12 +426,12 @@ async function repairContent(
       attempt === 0
         ? user
         : `${user}\n\nYour previous answer was rejected: ${lastError}\nReturn corrected JSON only.`;
-    const patch = normalizeContentPlan(JSON.parse(await chatJson(system, prompt)) as unknown);
-    if (!patch) {
-      lastError = "The response was not valid JSON matching the required schema.";
+    const patch = parseContentRepair(await chatJson(system, prompt), targets);
+    if (!patch.success) {
+      lastError = patch.error;
       continue;
     }
-    const merged = syncTitle(mergeRepair(base, patch, targets, set.slots), set.slots);
+    const merged = syncTitle(mergeRepair(base, patch.data, targets), set.slots);
     const validation = validatePlanAgainstSlots(merged, set.slots, set.validateOptions);
     if (!validation.ok) {
       lastError = summarizeIssues(validation.issues);
@@ -443,7 +452,7 @@ async function runContentStage(job: ClaimedAiBookJob, state: PipelineState): Pro
     plan = await repairContent(
       job.concept,
       set,
-      state.contentPlan,
+      state.manuscriptPlan ?? state.contentPlan,
       state.flowIssues.map((issue) => ({
         slotId: issue.slotId,
         pageLabel: issue.pageLabel,
@@ -476,7 +485,20 @@ async function runContentStage(job: ClaimedAiBookJob, state: PipelineState): Pro
       ...paginated.overrides,
     ],
   };
-  const headingIds = new Set(interiorFlowPages(state.manifest).flatMap((page) => page.heading ? [page.heading.id] : []));
+  const flowPages = interiorFlowPages(state.manifest);
+  const headingIds = new Set(flowPages.flatMap((page) => page.heading ? [page.heading.id] : []));
+  // Persist what the executing worker actually measured, including rejected
+  // attempts, so an old worker/output can be distinguished from current flow.
+  const paginationOutput = {
+    promptVersion: AUTONOMOUS_PROMPT_VERSION,
+    flowMetrics: paginated.pages.map((page, index) => ({
+      pageLabel: page.pageLabel,
+      usedHeight: page.usedHeight,
+      capacityHeight: flowPages[index].flow.box.height,
+      bodyChars: page.flowText.trim().length,
+      filled: page.filled,
+    })),
+  };
   const validation =
     paginated.issues.length === 0
       ? validatePlanAgainstSlots(
@@ -490,7 +512,10 @@ async function runContentStage(job: ClaimedAiBookJob, state: PipelineState): Pro
   if (!validation.ok) {
     const outcome = await continueAiBook(job, {
       stage: AiBookStage.CONTENT,
-      patch: { contentPlan: plan, manuscriptPlan: plan, flowIssues: validation.issues },
+      patch: {
+        ...paginationOutput, contentPlan: plan, manuscriptPlan: plan, flowIssues: validation.issues,
+        flowRepairTargets: interiorFlowRepairTargets({ manifest: state.manifest, overrides: plan.overrides }),
+      },
       repair: true,
     });
     return continuation(
@@ -504,7 +529,7 @@ async function runContentStage(job: ClaimedAiBookJob, state: PipelineState): Pro
   state.contentPlan = paginatedPlan;
   state.manuscriptPlan = plan;
   state.flowIssues = null;
-  await mustAdvance(job, AiBookStage.COMPOSE, { contentPlan: paginatedPlan, manuscriptPlan: plan, flowIssues: null });
+  await mustAdvance(job, AiBookStage.COMPOSE, { ...paginationOutput, contentPlan: paginatedPlan, manuscriptPlan: plan, flowIssues: null, flowRepairTargets: null });
 }
 
 // --- COMPOSE: one transaction writes the draft and advances the job ------
@@ -865,7 +890,7 @@ export async function processAiBookJob(
       }
 
       if (result === "continue") return "yielded";
-      console.info(JSON.stringify({ event: "ai-book-stage-finished", jobId: job.id, stage }));
+      console.info(JSON.stringify({ event: "ai-book-stage-finished", jobId: job.id, stage, promptVersion: AUTONOMOUS_PROMPT_VERSION }));
     }
   } catch (error) {
     if (error instanceof LeaseLost) {

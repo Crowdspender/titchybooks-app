@@ -59,6 +59,8 @@ export interface AiTemplateManifest {
   templateId: string;
   templateVersion: number;
   capturedAt: string;
+  /** Opt-in on newly generated AI pins; historical pins keep their fill policy. */
+  fillAllInteriorPages?: true;
   pages: AiTemplatePage[];
 }
 
@@ -216,6 +218,7 @@ export const aiTemplateManifestSchema = z.object({
   templateId: z.string().min(1),
   templateVersion: z.number().int().nonnegative(),
   capturedAt: z.string().min(1),
+  fillAllInteriorPages: z.literal(true).optional(),
   pages: z.array(
     z.object({
       pageLabel: z.enum(PAGE_LABELS),

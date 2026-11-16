@@ -50,6 +50,51 @@ export const contentPlanV2Schema = z.object({
   overrides: z.array(overrideSchema),
 });
 
+/** Repairs carry text patches, never replacement book metadata. */
+export const contentRepairSchema = z.object({
+  overrides: z.array(overrideSchema).min(1),
+});
+
+export type ContentRepair = z.infer<typeof contentRepairSchema>;
+export type ContentRepairResult =
+  | { success: true; data: ContentRepair }
+  | { success: false; error: string };
+
+/** Validate the exact requested patch and return bounded, actionable feedback. */
+export function parseContentRepair(raw: string, targets: ReadonlySet<string>): ContentRepairResult {
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    return { success: false, error: 'Invalid JSON. Return one complete JSON object with an "overrides" array, double-quoted keys and strings, and no markdown or trailing commas.' };
+  }
+  const parsed = contentRepairSchema.superRefine((patch, ctx) => {
+    const seen = new Set<string>();
+    patch.overrides.forEach((entry, index) => {
+      const id = entry.templateElementId;
+      if (!targets.has(id)) {
+        ctx.addIssue({ code: "custom", path: ["overrides", index, "templateElementId"], message: `Element "${id}" was not requested in this repair; return only listed slot ids.` });
+      }
+      if (seen.has(id)) {
+        ctx.addIssue({ code: "custom", path: ["overrides", index, "templateElementId"], message: `Duplicate override for "${id}"; return exactly one replacement per listed slot.` });
+      }
+      seen.add(id);
+    });
+    for (const id of targets) {
+      if (!seen.has(id)) {
+        ctx.addIssue({ code: "custom", path: ["overrides"], message: `Missing replacement for "${id}"; return every listed slot.` });
+      }
+    }
+  }).safeParse(value);
+  if (!parsed.success) {
+    const details = parsed.error.issues.slice(0, 6)
+      .map((issue) => `${issue.path.join(".") || "response"}: ${issue.message}`)
+      .join("; ").slice(0, 1000);
+    return { success: false, error: `Invalid repair response: ${details}` };
+  }
+  return { success: true, data: parsed.data };
+}
+
 export type BookBrief = z.infer<typeof briefSchema>;
 export type OutlineEntry = z.infer<typeof outlineEntrySchema>;
 export type ContentOverride = z.infer<typeof overrideSchema>;

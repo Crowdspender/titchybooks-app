@@ -6,7 +6,11 @@ import { renderSceneToPdfPage } from '@/lib/pdf/vector-render';
 import { parseRenderSnapshot, type RenderSnapshot } from '@/lib/pdf/snapshot';
 import { PAGE_LABELS } from '@/lib/constants';
 import { createEmptyEditorScene } from '@/lib/editor/schema';
-import { imageElement, sceneWithText } from '../fixtures/scenes';
+import { FULL_INTERIOR_TEXT, imageElement, sceneWithText } from '../fixtures/scenes';
+import { buildPinnedTemplate, buildTemplateManifest } from '@/lib/ai/template-contract';
+import { interiorFlowPages, paginatePlan, prepareAiBookLayout } from '@/lib/ai/flow';
+import { applyPrintPalette, selectPrintPalette } from '@/lib/ai/print-palette';
+import { measureTextBlock } from '@/lib/pdf/text-layout';
 import { A4_LANDSCAPE_HEIGHT_MM, mmToPoints, PANELS } from '@/lib/pdf/layout';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -116,6 +120,59 @@ it('renders guided reading and folded fixtures with identical outlines and uncha
   }
   await writeFile(join(folder, 'geometry.json'), JSON.stringify(pages.map(page => ({ label: page.pageLabel, elements: page.scene.elements.filter(element => element.type === 'text').map(element => element.type === 'text' ? { id: element.id, layout: layoutDesignText(element) } : null) }))));
 }, 60000);
+
+it('renders text near the bottom of all six expanded private interior pages', async () => {
+  const recipe = SEED_RECIPES[0];
+  const rows = elementSeeds(recipe);
+  const sourcePages = PAGE_LABELS.map((pageLabel) => ({
+    pageLabel, backgroundColor: backgroundFor(recipe, pageLabel),
+    elements: rows.filter((row) => row.pageLabel === pageLabel).map((row) => editorElementSchema.parse(JSON.parse(row.elementJson))),
+  }));
+  const manifest = buildTemplateManifest({ templateId: 'full-interiors', templateVersion: 1, pages: sourcePages });
+  const source = buildPinnedTemplate({ templateId: manifest.templateId, templateVersion: 1, manifest, pages: sourcePages });
+  const before = JSON.stringify(source);
+  const expanded = prepareAiBookLayout(source);
+  const pin = applyPrintPalette(expanded, selectPrintPalette('mist', expanded));
+  const flowPages = interiorFlowPages(pin.manifest);
+  const pagination = paginatePlan({ manifest: pin.manifest, overrides: flowPages.map((page) => ({ templateElementId: page.flow.id, text: FULL_INTERIOR_TEXT })) });
+  expect(pagination.issues).toEqual([]);
+  expect(pagination.pages).toHaveLength(6);
+  expect(pagination.pages.every((page) => page.filled && page.usedHeight === 798)).toBe(true);
+  const overrides = new Map(pagination.overrides.map((entry) => [entry.templateElementId, entry.text]));
+  const pages = pin.pages.map((page) => ({ pageLabel: page.pageLabel, scene: {
+    ...createEmptyEditorScene(),
+    page: { widthPx: 700, heightPx: 1000, backgroundColor: page.backgroundColor },
+    elements: page.elements.map((element) => element.type === 'text' && overrides.has(element.id)
+      ? { ...element, text: overrides.get(element.id)! } : element),
+  } }));
+  const folder = join(process.cwd(), 'test-results', 'full-interiors');
+  await mkdir(folder, { recursive: true });
+  for (const flow of flowPages) {
+    const scene = pages.find((page) => page.pageLabel === flow.pageLabel)!.scene;
+    const body = scene.elements.find((element) => element.id === flow.flow.id)!;
+    if (body.type !== 'text') throw new Error('Expected body text');
+    expect(body.y + body.height).toBe(940);
+    expect(measureTextBlock(body.text, body.width, body).height).toBe(798);
+    const inkTile = await renderSceneTile({ ...scene, page: { ...scene.page, backgroundColor: '#ffffff' }, elements: [{ ...body, color: '#000000' }] }, 700, 1000, new Map());
+    const { info } = await sharp(inkTile).trim({ background: '#ffffff', threshold: 10 }).toBuffer({ resolveWithObject: true });
+    const inkBottom = Math.abs(info.trimOffsetTop!) + info.height;
+    expect(inkBottom).toBeGreaterThan(880);
+    expect(inkBottom).toBeLessThan(940);
+    if (flow.pageLabel === 'PAGE_2' || flow.pageLabel === 'PAGE_7') {
+      await writeFile(join(folder, `${flow.pageLabel}.png`), await renderSceneTile(scene, 700, 1000, new Map()));
+    }
+  }
+  const input = parseRenderSnapshot({ version: 2, submissionRevision: 0, userId: 'fixture', submissionId: 'full-interiors', title: 'A Rainy Day', templateId: pin.templateId, templateVersion: 1, renderer: 'raster', mode: 'EDITOR', assets: [], images: [], pages, printProfile: DEFAULT_PRINT_PROFILE.id, outputs: ['print-sheet', 'reading-pdf'] });
+  const output = await generateTitchybookPdf(input, 'full-interiors-fixture');
+  const reading = storage.objects.get(output.readingPdfS3Key)!;
+  const sheet = storage.objects.get(output.pdfS3Key)!;
+  expect((await PDFDocument.load(reading)).getPageCount()).toBe(8);
+  expect((await PDFDocument.load(sheet)).getPageCount()).toBe(1);
+  expect(output.previews).toHaveLength(8);
+  expect(JSON.stringify(source)).toBe(before);
+  await writeFile(join(folder, 'reading.pdf'), reading);
+  await writeFile(join(folder, 'print-sheet.pdf'), sheet);
+}, 30000);
 
 it('fails explicitly on missing source objects instead of publishing an incomplete PDF', async () => {
   const input = snapshot();

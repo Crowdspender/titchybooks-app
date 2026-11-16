@@ -324,16 +324,24 @@ export async function continueAiBook(
       return "deadline-exceeded" as const;
     }
 
-    if (options.repair && current.repairCount >= current.maxRepairs) {
-      return "repair-exhausted" as const;
-    }
-
     const merged = options.patch
       ? ({
           ...((current.stageOutput as Record<string, unknown>) ?? {}),
           ...options.patch,
         } as Prisma.InputJsonValue)
       : undefined;
+
+    if (options.repair && current.repairCount >= current.maxRepairs) {
+      // Keep the final rejection, not the previous attempt's diagnostics. Leave
+      // the lease and counters intact so the caller can fence its terminal fail.
+      if (merged) {
+        await tx.aiBookJob.update({
+          where: { id: job.id },
+          data: { stageOutput: merged, ...(options.stage ? { stage: options.stage } : {}) },
+        });
+      }
+      return "repair-exhausted" as const;
+    }
 
     await tx.aiBookJob.update({
       where: { id: job.id },

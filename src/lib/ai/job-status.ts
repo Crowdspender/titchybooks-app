@@ -76,14 +76,14 @@ export function deriveAiBookPhase(input: AiBookPhaseInput): AiBookPhaseView {
     };
   }
 
-  const repairing = input.hasQaReport && input.repairCount > 0;
+  const repairing = input.stage === AiBookStage.CONTENT && input.repairCount > 0;
 
   if (input.status === AiBookJobStatus.QUEUED) {
     return repairing
       ? {
           phase: "repairing",
           label: "Revising",
-          message: "Some pages failed the quality check. Your book is queued to have just those pages rewritten.",
+          message: "Text or page-fit checks requested changes. Your book is queued for revision.",
           terminal: false,
           retryable: false,
         }
@@ -118,7 +118,7 @@ export function deriveAiBookPhase(input: AiBookPhaseInput): AiBookPhaseView {
         return {
           phase: "repairing",
           label: "Revising",
-          message: "Quality checks asked for changes, so the AI is rewriting only the pages that failed.",
+          message: "The AI is revising the requested text. Interior changes may reflow across pages; the result still needs validation.",
           terminal: false,
           retryable: false,
         };

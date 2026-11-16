@@ -18,7 +18,7 @@ describe("deriveAiBookPhase", () => {
 
   it("distinguishes a first queued attempt from a queued repair", () => {
     expect(deriveAiBookPhase(base)).toMatchObject({ phase: "queued", terminal: false });
-    expect(deriveAiBookPhase({ ...base, hasQaReport: true, repairCount: 1 })).toMatchObject({
+    expect(deriveAiBookPhase({ ...base, stage: AiBookStage.CONTENT, hasQaReport: true, repairCount: 1 })).toMatchObject({
       phase: "repairing",
       terminal: false,
     });
@@ -55,6 +55,27 @@ describe("deriveAiBookPhase", () => {
       repairCount: 1,
     });
     expect(view).toMatchObject({ phase: "repairing", label: "Revising", terminal: false });
+  });
+
+  it("reports queued and active page-fit repairs without requiring a QA report", () => {
+    const repair = { ...base, stage: AiBookStage.CONTENT, repairCount: 1 };
+    const queued = deriveAiBookPhase(repair);
+    expect(queued).toMatchObject({ phase: "repairing", terminal: false });
+    expect(queued.message).toContain("queued for revision");
+    const active = deriveAiBookPhase({ ...repair, status: AiBookJobStatus.PROCESSING });
+    expect(active).toMatchObject({ phase: "repairing", terminal: false });
+    expect(active.message).toContain("still needs validation");
+    expect(active.message).toContain("may reflow across pages");
+  });
+
+  it("does not label a queued render dependency as an active text repair", () => {
+    expect(deriveAiBookPhase({ ...base, stage: AiBookStage.RENDER, hasQaReport: true, repairCount: 1 }).phase).toBe("queued");
+  });
+
+  it("does not describe failed or completed repair cycles as still revising", () => {
+    const repair = { ...base, stage: AiBookStage.CONTENT, repairCount: 1 };
+    expect(deriveAiBookPhase({ ...repair, status: AiBookJobStatus.FAILED })).toMatchObject({ phase: "failed", terminal: true });
+    expect(deriveAiBookPhase({ ...repair, status: AiBookJobStatus.COMPLETED })).toMatchObject({ phase: "completed", terminal: true });
   });
 
   it("treats a QA rejection as needs-review rather than a retryable failure", () => {
