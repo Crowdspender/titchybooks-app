@@ -64,6 +64,31 @@ describe('validateRuntimeEnv', () => {
     expect(resolveSessionSecret({})).toBe('');
   });
 
+  it('resolves numbered rotation secrets when both plain variables are absent', () => {
+    // @auth/core signs with the newest numbered entry (unshift order 1,2,3).
+    expect(resolveSessionSecret({ AUTH_SECRET_1: 'old-secret' })).toBe('old-secret');
+    expect(resolveSessionSecret({ AUTH_SECRET_1: 'old', AUTH_SECRET_3: 'newest' })).toBe('newest');
+    expect(resolveSessionSecret({ AUTH_SECRET_2: 'mid', AUTH_SECRET_1: 'old' })).toBe('mid');
+    // Plain variables keep precedence over the rotation list; an empty plain
+    // value counts as absent (core falls through on zero-length secrets).
+    expect(resolveSessionSecret({ AUTH_SECRET: 'active', AUTH_SECRET_3: 'newest' })).toBe('active');
+    expect(resolveSessionSecret({ AUTH_SECRET: '', AUTH_SECRET_1: 'old-secret' })).toBe('old-secret');
+  });
+
+  it('accepts AUTH_SECRET_1 alone and flags a weak active rotation secret', () => {
+    const numberedOnly = validateRuntimeEnv(
+      validEnv({ NEXTAUTH_SECRET: undefined, AUTH_SECRET_1: 'a-long-enough-random-secret' }),
+    );
+    expect(numberedOnly.errors.some((e) => e.includes('secret'))).toBe(false);
+
+    // The newest numbered entry signs, so a weak AUTH_SECRET_3 must be flagged
+    // even when a strong AUTH_SECRET_1 exists for verification of old sessions.
+    const weakActive = validateRuntimeEnv(
+      validEnv({ NEXTAUTH_SECRET: undefined, AUTH_SECRET_1: 'a-long-enough-random-secret', AUTH_SECRET_3: 'short' }),
+    );
+    expect(weakActive.errors.some((e) => e.includes('Session secret'))).toBe(true);
+  });
+
   it('enforces the lease >= 2x heartbeat invariant', () => {
     const { errors } = validateRuntimeEnv(validEnv({ AI_BOOK_LEASE_MS: '60000', AI_HEARTBEAT_MS: '60000' }));
     expect(errors.some((e) => e.includes('twice AI_HEARTBEAT_MS'))).toBe(true);

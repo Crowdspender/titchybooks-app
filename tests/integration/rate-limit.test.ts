@@ -89,8 +89,9 @@ describe('durable rate limiting (RateLimitBucket)', () => {
     // A failed attempt keeps its slot.
     expect((await consumeRateLimit(key, spec)).allowed).toBe(true);
     // A successful attempt reserves then refunds, spending no budget.
-    expect((await consumeRateLimit(key, spec)).allowed).toBe(true);
-    await releaseRateLimit(key);
+    const success = await consumeRateLimit(key, spec);
+    expect(success.allowed).toBe(true);
+    await releaseRateLimit(key, success.windowExpiresAt);
     // Another failure fills the window...
     expect((await consumeRateLimit(key, spec)).allowed).toBe(true);
     // ...and the next admission is denied even though a success passed through.
@@ -101,13 +102,31 @@ describe('durable rate limiting (RateLimitBucket)', () => {
     const key = `${KEY_PREFIX}:release-floor:${Date.now()}`;
     const spec = { limit: 2, windowMs: 60_000 };
 
-    // Refunding an empty bucket is a harmless no-op.
-    await releaseRateLimit(key);
+    // Refunding a bucket that does not exist is a harmless no-op.
+    await releaseRateLimit(key, new Date(Date.now() + 60_000));
+    const first = await consumeRateLimit(key, spec);
+    expect(first.allowed).toBe(true);
+    await releaseRateLimit(key, first.windowExpiresAt);
+    await releaseRateLimit(key, first.windowExpiresAt); // would go negative without the GREATEST floor
     expect((await consumeRateLimit(key, spec)).allowed).toBe(true);
-    await releaseRateLimit(key);
-    await releaseRateLimit(key); // would go negative without the GREATEST floor
     expect((await consumeRateLimit(key, spec)).allowed).toBe(true);
-    expect((await consumeRateLimit(key, spec)).allowed).toBe(true);
+    expect((await consumeRateLimit(key, spec)).allowed).toBe(false);
+  });
+
+  it('release bound to an expired window cannot decrement its replacement', async () => {
+    const key = `${KEY_PREFIX}:release-window:${Date.now()}`;
+    const spec = { limit: 1, windowMs: 500 };
+
+    const stale = await consumeRateLimit(key, spec);
+    expect(stale.allowed).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    // A new request resets the bucket into a replacement window.
+    const fresh = await consumeRateLimit(key, spec);
+    expect(fresh.allowed).toBe(true);
+    expect(fresh.windowExpiresAt.getTime()).not.toBe(stale.windowExpiresAt.getTime());
+    // The late refund from the old window must be a no-op, not steal the
+    // replacement window's only slot.
+    await releaseRateLimit(key, stale.windowExpiresAt);
     expect((await consumeRateLimit(key, spec)).allowed).toBe(false);
   });
 });

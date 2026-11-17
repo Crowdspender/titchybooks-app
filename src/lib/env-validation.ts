@@ -40,16 +40,29 @@ export function isWeakSessionSecret(secret: string): boolean {
 }
 
 /**
- * The session secret NextAuth actually uses. src/auth.ts sets no explicit
- * `secret`, so next-auth resolves `AUTH_SECRET ?? NEXTAUTH_SECRET` (see
- * next-auth/lib/env.js). Resolved once here so the boot guard in
- * src/instrumentation.ts and both validation entry points check the same
- * effective value, in the same precedence order.
+ * The session secret NextAuth actually signs with. src/auth.ts sets no
+ * explicit `secret`, so next-auth resolves `AUTH_SECRET ?? NEXTAUTH_SECRET`
+ * (next-auth/lib/env.js); when BOTH are absent, @auth/core's setEnvDefaults
+ * builds a rotation list from AUTH_SECRET_1..3 and signs with the newest
+ * present entry (it unshifts 1, then 2, then 3, so the signing order is
+ * AUTH_SECRET_3, _2, _1 — see @auth/core/lib/utils/env.js in the locked
+ * 0.41.x). Resolved once here so the boot guard in src/instrumentation.ts
+ * and both validation entry points check the same effective value.
  */
 export function resolveSessionSecret(
   env: Record<string, string | undefined>,
 ): string {
-  return env.AUTH_SECRET ?? env.NEXTAUTH_SECRET ?? "";
+  // Truthiness, not ??: next-auth assigns AUTH_SECRET ?? NEXTAUTH_SECRET even
+  // when empty, and @auth/core then treats a zero-length secret as absent and
+  // falls through to the numbered rotation list.
+  return (
+    env.AUTH_SECRET ||
+    env.NEXTAUTH_SECRET ||
+    env.AUTH_SECRET_3 ||
+    env.AUTH_SECRET_2 ||
+    env.AUTH_SECRET_1 ||
+    ""
+  );
 }
 
 /**
@@ -69,7 +82,7 @@ export function validateRuntimeEnv(
   }
   const sessionSecret = resolveSessionSecret(env);
   if (!sessionSecret) {
-    errors.push("One of NEXTAUTH_SECRET / AUTH_SECRET must be set (sessions are unsigned).");
+    errors.push("One of NEXTAUTH_SECRET / AUTH_SECRET (or AUTH_SECRET_1..3) must be set (sessions are unsigned).");
   } else if (isWeakSessionSecret(sessionSecret)) {
     errors.push("Session secret is shorter than 16 chars or looks like a placeholder.");
   }

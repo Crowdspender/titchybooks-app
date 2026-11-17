@@ -23,6 +23,12 @@ export interface RateLimitResult {
   remaining: number;
   /** Milliseconds until the window resets (0 when allowed). */
   retryAfterMs: number;
+  /**
+   * Expiry of the window this result belongs to. Pass it back to
+   * releaseRateLimit() so a refund can only ever touch the exact window that
+   * created the reservation, never a replacement window after a reset.
+   */
+  windowExpiresAt: Date;
 }
 
 export async function consumeRateLimit(
@@ -53,7 +59,7 @@ export async function consumeRateLimit(
   const row = rows[0];
   if (!row) {
     // Should not happen (UPSERT always returns), but fail closed.
-    return { allowed: false, remaining: 0, retryAfterMs: windowMs };
+    return { allowed: false, remaining: 0, retryAfterMs: windowMs, windowExpiresAt: windowEnd };
   }
   const allowed = row.count <= limit;
   return {
@@ -62,6 +68,7 @@ export async function consumeRateLimit(
     retryAfterMs: allowed
       ? 0
       : Math.max(0, new Date(row.expiresAt).getTime() - now.getTime()),
+    windowExpiresAt: new Date(row.expiresAt),
   };
 }
 
@@ -75,15 +82,16 @@ export function clientIp(req: Request): string {
 /**
  * Refund one previously consumed slot (floor zero). Used to release an
  * admission reservation after the guarded work succeeds, so only failures
- * count toward the limit. Only touches a still-open window: an expired bucket
- * has already reset, and decrementing it would corrupt the fresh window.
+ * count toward the limit. The refund is bound to the EXACT window that
+ * created the reservation (the windowExpiresAt returned by consumeRateLimit):
+ * matching on bucketKey plus "still open" alone could decrement a replacement
+ * window if the original expired and a new request reset the bucket in between.
  */
-export async function releaseRateLimit(bucketKey: string): Promise<void> {
-  const now = new Date();
+export async function releaseRateLimit(bucketKey: string, windowExpiresAt: Date): Promise<void> {
   await prisma.$executeRaw`
     UPDATE "RateLimitBucket"
     SET "count" = GREATEST("count" - 1, 0)
-    WHERE "bucketKey" = ${bucketKey} AND "expiresAt" > ${now}`;
+    WHERE "bucketKey" = ${bucketKey} AND "expiresAt" = ${windowExpiresAt}`;
 }
 
 /**
@@ -95,14 +103,21 @@ export async function releaseRateLimit(bucketKey: string): Promise<void> {
  */
 export async function peekRateLimit(
   bucketKey: string,
-  { limit }: RateLimitWindow,
+  { limit, windowMs }: RateLimitWindow,
 ): Promise<RateLimitResult> {
   const now = new Date();
   const rows = await prisma.$queryRaw<{ count: number; expiresAt: Date }[]>`
     SELECT "count", "expiresAt" FROM "RateLimitBucket"
     WHERE "bucketKey" = ${bucketKey} AND "expiresAt" > ${now}`;
   const row = rows[0];
-  if (!row) return { allowed: true, remaining: limit, retryAfterMs: 0 };
+  if (!row) {
+    return {
+      allowed: true,
+      remaining: limit,
+      retryAfterMs: 0,
+      windowExpiresAt: new Date(now.getTime() + windowMs),
+    };
+  }
   const allowed = row.count < limit;
   return {
     allowed,
@@ -110,6 +125,7 @@ export async function peekRateLimit(
     retryAfterMs: allowed
       ? 0
       : Math.max(0, new Date(row.expiresAt).getTime() - now.getTime()),
+    windowExpiresAt: new Date(row.expiresAt),
   };
 }
 

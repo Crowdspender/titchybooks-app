@@ -50,15 +50,22 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         const ipWindow = { limit: 30, windowMs: 15 * 60_000 };
         const emailKey = `login:${email.toLowerCase()}`;
         const ipKey = `login-ip:${clientIp(request)}`;
-        // Atomically reserve a slot in BOTH buckets before the expensive
-        // password comparison. A read-only peek would let concurrent requests
-        // all pass the gate and run bcrypt before any of them counted, so the
-        // admission itself must consume; denied admissions never reach bcrypt.
-        const [emailRl, ipRl] = await Promise.all([
-          consumeRateLimit(emailKey, emailWindow),
-          consumeRateLimit(ipKey, ipWindow),
-        ]);
-        if (!emailRl.allowed || !ipRl.allowed) return null;
+        // Atomically reserve capacity before the expensive password
+        // comparison; a read-only peek would let concurrent requests all pass
+        // the gate and run bcrypt before any of them counted. The IP bucket
+        // is admitted FIRST: it is the coarse anti-spray gate, and an email
+        // denial must not spend the client's shared IP budget (that would let
+        // an attacker lock out a whole NAT by hammering one rate-limited
+        // account). Denied admissions never reach bcrypt.
+        const ipRl = await consumeRateLimit(ipKey, ipWindow);
+        if (!ipRl.allowed) return null;
+        const emailRl = await consumeRateLimit(emailKey, emailWindow);
+        if (!emailRl.allowed) {
+          // Refund the IP reservation, bound to the exact window that created
+          // it so the refund cannot land in a later replacement window.
+          await releaseRateLimit(ipKey, ipRl.windowExpiresAt);
+          return null;
+        }
 
         const user = await prisma.user.findUnique({
           where: { email },
@@ -72,10 +79,11 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         }
 
         // Success refunds both reservations so legitimate sign-ins never spend
-        // the brute-force budget, while every wrong guess stays counted.
+        // the brute-force budget, while every wrong guess stays counted. Each
+        // refund is bound to the window its reservation was made in.
         await Promise.all([
-          releaseRateLimit(emailKey),
-          releaseRateLimit(ipKey),
+          releaseRateLimit(emailKey, emailRl.windowExpiresAt),
+          releaseRateLimit(ipKey, ipRl.windowExpiresAt),
         ]);
 
         return {
