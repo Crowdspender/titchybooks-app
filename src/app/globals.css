@@ -92,7 +92,9 @@
 }
 
 /* ── Base Styles ───────────────────────────────────────────────────────────── */
-*, *::before, *::after {
+*,
+*::before,
+*::after {
   box-sizing: border-box;
 }
 
@@ -230,7 +232,8 @@ body {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-sm);
-  transition: box-shadow var(--transition-base), border-color var(--transition-base);
+  transition: box-shadow var(--transition-base), border-color
+    var(--transition-base);
 }
 .card-hover:hover {
   box-shadow: var(--shadow-md);
@@ -246,7 +249,8 @@ body {
   background: var(--color-surface-raised);
   border: 1.5px solid var(--color-border-strong);
   border-radius: var(--radius-md);
-  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+  transition: border-color var(--transition-fast), box-shadow
+    var(--transition-fast);
   font-family: inherit;
   letter-spacing: inherit;
 }
@@ -329,17 +333,32 @@ body {
 }
 
 /* ── AI Chat Markdown (preserved) ──────────────────────────────────────────── */
-.ai-markdown p { margin-bottom: 0.5rem; }
-.ai-markdown p:last-child { margin-bottom: 0; }
-.ai-markdown strong { font-weight: 600; }
-.ai-markdown em { font-style: italic; }
-.ai-markdown ul, .ai-markdown ol {
+.ai-markdown p {
+  margin-bottom: 0.5rem;
+}
+.ai-markdown p:last-child {
+  margin-bottom: 0;
+}
+.ai-markdown strong {
+  font-weight: 600;
+}
+.ai-markdown em {
+  font-style: italic;
+}
+.ai-markdown ul,
+.ai-markdown ol {
   margin: 0.4rem 0;
   padding-left: 1.25rem;
 }
-.ai-markdown ul { list-style-type: disc; }
-.ai-markdown ol { list-style-type: decimal; }
-.ai-markdown li { margin-bottom: 0.15rem; }
+.ai-markdown ul {
+  list-style-type: disc;
+}
+.ai-markdown ol {
+  list-style-type: decimal;
+}
+.ai-markdown li {
+  margin-bottom: 0.15rem;
+}
 .ai-markdown code {
   background: rgba(0, 0, 0, 0.06);
   border-radius: 4px;
@@ -354,15 +373,26 @@ body {
   overflow-x: auto;
   margin: 0.4rem 0;
 }
-.ai-markdown pre code { background: none; padding: 0; }
-.ai-markdown h1, .ai-markdown h2, .ai-markdown h3 {
+.ai-markdown pre code {
+  background: none;
+  padding: 0;
+}
+.ai-markdown h1,
+.ai-markdown h2,
+.ai-markdown h3 {
   font-weight: 600;
   margin-top: 0.6rem;
   margin-bottom: 0.25rem;
 }
-.ai-markdown h1 { font-size: 1.1em; }
-.ai-markdown h2 { font-size: 1em; }
-.ai-markdown h3 { font-size: 0.95em; }
+.ai-markdown h1 {
+  font-size: 1.1em;
+}
+.ai-markdown h2 {
+  font-size: 1em;
+}
+.ai-markdown h3 {
+  font-size: 0.95em;
+}
 
 /* ── Page navigation transitions (editor stage) ───────────────────────────── */
 @keyframes page-enter-forward {

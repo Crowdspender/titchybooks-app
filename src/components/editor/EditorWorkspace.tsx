@@ -436,9 +436,9 @@ export default function EditorWorkspace({
   const fontKey = useMemo(() => {
     try {
       return JSON.stringify(
-        requiredDesignFonts(PAGE_LABELS.flatMap((label) =>
-          resolvedPages[label].scene.elements
-        )),
+        requiredDesignFonts(
+          PAGE_LABELS.flatMap((label) => resolvedPages[label].scene.elements),
+        ),
       );
     } catch {
       return "invalid";
@@ -1651,9 +1651,14 @@ export default function EditorWorkspace({
   // AI apply) goes through handlePageSelect so the outgoing page is always
   // saved before the switch commits, and a failed save blocks the switch.
   function goToPage(pageLabel: PageLabel) {
+    if (loading || !submission) return;
     const targetIndex = PAGE_READING_ORDER.indexOf(pageLabel);
     setNavDirection(targetIndex >= readingIndex ? "forward" : "backward");
-    void handlePageSelect(pageLabel);
+    // handlePageSelect reports save failures itself, but a throw before its
+    // try block (e.g. syncDocument) must not become an unhandled rejection.
+    void handlePageSelect(pageLabel).catch((error) =>
+      reportSaveError(error, persistenceRef.current ?? undefined)
+    );
   }
 
   function goToNextPage() {
@@ -1884,673 +1889,701 @@ export default function EditorWorkspace({
       }}
     >
       <div className="mx-auto flex max-w-[1600px] flex-col gap-4">
-        {saveError && (
-          <div
-            role="alert"
-            className="card p-4 xl:shrink-0"
-            style={{ color: "var(--color-error)" }}
-          >
-            <p>{saveError}</p>
-            <button
-              className="btn btn-outline btn-sm mt-2"
-              onClick={() => {
-                const persistence = syncDocument();
-                void persistence.flushAll().catch((error) =>
-                  reportSaveError(error, persistence)
-                );
-              }}
-            >
-              Retry saving
-            </button>
-          </div>
-        )}
-        {/* Template instance banner */}
-        {isInstanceMode && (
-          <div
-            className="flex items-center justify-between rounded-xl px-5 py-3 xl:shrink-0"
-            style={{
-              background: "var(--color-secondary-light)",
-              border: "1px solid var(--color-secondary)",
-            }}
-          >
-            <div className="flex items-center gap-3">
-              <svg
-                className="h-5 w-5"
-                style={{ color: "var(--color-secondary)" }}
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-                strokeWidth={2}
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"
-                />
-              </svg>
-              <div>
-                <p
-                  className="text-sm font-medium"
-                  style={{ color: "var(--color-secondary)" }}
-                >
-                  Template Instance
-                </p>
-                <p
-                  className="text-xs"
-                  style={{ color: "var(--color-text-muted)" }}
-                >
-                  Template layout is protected. Edit eligible text and apply
-                  permitted styling without detaching.
-                </p>
-              </div>
-            </div>
-            <button
-              type="button"
-              onClick={handleDetachFromTemplate}
-              className="btn btn-outline btn-sm"
-              style={{
-                color: "var(--color-secondary)",
-                borderColor: "var(--color-secondary)",
-              }}
-            >
-              Unlock All Elements
-            </button>
-          </div>
-        )}
-        {/* App frame at xl: 113px = sticky Header (65px) + the root's vertical
-            padding (48px). Only the top bar and workspace grid live inside it;
-            the order panel below keeps normal flow. The rail scrolls inside
-            itself so editing properties never moves the canvas. */}
+        {
+          /* App frame at xl: 113px = sticky Header (65px) + the root's vertical
+            padding (48px). The banners, top bar and workspace grid all live
+            inside it so a visible save-error or template banner shrinks the
+            grid instead of pushing the rail below the fold; the order panel
+            below keeps normal flow. The rail scrolls inside itself so editing
+            properties never moves the canvas. */
+        }
         <div className="flex flex-col gap-4 xl:h-[calc(100dvh-113px)] xl:min-h-0">
-        <section
-          className="card p-5 backdrop-blur xl:shrink-0 xl:py-3"
-          style={{ background: "rgba(255,255,255,0.92)" }}
-        >
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-            <div className="space-y-2">
-              <p className="section-label">
-                Titchybooks Studio
-              </p>
-              <input
-                value={title === "Untitled Titchybooks" ? "" : title}
-                onFocus={() => {
-                  if (!frozenRef.current) pushHistory();
+          {saveError && (
+            <div
+              role="alert"
+              className="card p-4 xl:shrink-0"
+              style={{ color: "var(--color-error)" }}
+            >
+              <p>{saveError}</p>
+              <button
+                className="btn btn-outline btn-sm mt-2"
+                onClick={() => {
+                  const persistence = syncDocument();
+                  void persistence.flushAll().catch((error) =>
+                    reportSaveError(error, persistence)
+                  );
                 }}
-                onChange={(event) => {
-                  if (!frozenRef.current) setTitle(event.target.value);
-                }}
-                maxLength={120}
-                aria-label="Book title"
-                placeholder="Enter your book title"
-                className="w-full max-w-xl border-none bg-transparent p-0 text-3xl font-semibold tracking-tight outline-none"
-                style={{ color: "var(--color-text)" }}
-              />
-              <p
-                className="text-sm xl:hidden"
-                style={{ color: "var(--color-text-muted)" }}
               >
-                Compose each booklet page individually. Safe area guides are
-                shown on the canvas.
-              </p>
+                Retry saving
+              </button>
             </div>
-            <div className="flex flex-wrap items-center gap-3">
-              <span
-                className="badge"
-                role="status"
-                aria-live="polite"
-                style={{
-                  background: saveState === "saving"
-                    ? "var(--color-accent-light)"
-                    : saveState === "saved"
-                    ? "var(--color-success-light)"
-                    : saveState === "error"
-                    ? "var(--color-error-light)"
-                    : "var(--color-border)",
-                  color: saveState === "saving"
-                    ? "#92400E"
-                    : saveState === "saved"
-                    ? "#065F46"
-                    : saveState === "error"
-                    ? "#991B1B"
-                    : "var(--color-text-muted)",
-                }}
-              >
-                {saveState === "saving"
-                  ? "Saving..."
-                  : saveState === "saved"
-                  ? "Saved"
-                  : saveState === "error"
-                  ? "Save failed"
-                  : "Ready"}
-              </span>
-              <button
-                type="button"
-                onClick={undo}
-                disabled={!canUndo}
-                className="btn btn-outline btn-sm"
-                title="Undo (Ctrl+Z)"
-              >
-                Undo
-              </button>
-              <button
-                type="button"
-                onClick={redo}
-                disabled={!canRedo}
-                className="btn btn-outline btn-sm"
-                title="Redo (Ctrl+Shift+Z)"
-              >
-                Redo
-              </button>
-              <div className="relative group">
-                <button
-                  type="button"
-                  className="btn btn-outline btn-sm"
+          )}
+          {/* Template instance banner */}
+          {isInstanceMode && (
+            <div
+              className="flex items-center justify-between rounded-xl px-5 py-3 xl:shrink-0"
+              style={{
+                background: "var(--color-secondary-light)",
+                border: "1px solid var(--color-secondary)",
+              }}
+            >
+              <div className="flex items-center gap-3">
+                <svg
+                  className="h-5 w-5"
+                  style={{ color: "var(--color-secondary)" }}
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={2}
                 >
-                  Add Shape ▾
-                </button>
-                <div className="invisible absolute left-0 top-full pt-2 opacity-0 transition-all duration-150 group-hover:visible group-hover:opacity-100 z-50">
-                  <div
-                    className="flex flex-col gap-1 card p-2 shadow-lg"
-                    style={{ minWidth: "140px" }}
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"
+                  />
+                </svg>
+                <div>
+                  <p
+                    className="text-sm font-medium"
+                    style={{ color: "var(--color-secondary)" }}
                   >
-                    <button
-                      type="button"
-                      onClick={() => addShapeElement("rect")}
-                      className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm transition"
-                      style={{ color: "var(--color-text)" }}
-                      onMouseEnter={(e) => {
-                        e.currentTarget.style.background =
-                          "var(--color-surface)";
-                      }}
-                      onMouseLeave={(e) => {
-                        e.currentTarget.style.background = "transparent";
-                      }}
-                    >
-                      <div
-                        className="h-4 w-4 rounded-sm border-2"
-                        style={{ borderColor: "var(--color-text-muted)" }}
-                      />
-                      Rectangle
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => addShapeElement("circle")}
-                      className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm transition"
-                      style={{ color: "var(--color-text)" }}
-                      onMouseEnter={(e) => {
-                        e.currentTarget.style.background =
-                          "var(--color-surface)";
-                      }}
-                      onMouseLeave={(e) => {
-                        e.currentTarget.style.background = "transparent";
-                      }}
-                    >
-                      <div
-                        className="h-4 w-4 rounded-full border-2"
-                        style={{ borderColor: "var(--color-text-muted)" }}
-                      />
-                      Circle
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => addShapeElement("line")}
-                      className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm transition"
-                      style={{ color: "var(--color-text)" }}
-                      onMouseEnter={(e) => {
-                        e.currentTarget.style.background =
-                          "var(--color-surface)";
-                      }}
-                      onMouseLeave={(e) => {
-                        e.currentTarget.style.background = "transparent";
-                      }}
-                    >
-                      <div
-                        className="h-0.5 w-4"
-                        style={{ background: "var(--color-text-muted)" }}
-                      />
-                      Line
-                    </button>
-                  </div>
+                    Template Instance
+                  </p>
+                  <p
+                    className="text-xs"
+                    style={{ color: "var(--color-text-muted)" }}
+                  >
+                    Template layout is protected. Edit eligible text and apply
+                    permitted styling without detaching.
+                  </p>
                 </div>
               </div>
               <button
                 type="button"
-                onClick={addTextElement}
-                className="btn btn-primary btn-sm"
-              >
-                Add Text Box
-              </button>
-              <button
-                type="button"
-                onClick={() => setPreviewOpen(true)}
+                onClick={handleDetachFromTemplate}
                 className="btn btn-outline btn-sm"
+                style={{
+                  color: "var(--color-secondary)",
+                  borderColor: "var(--color-secondary)",
+                }}
               >
-                Preview booklet
-              </button>
-              <button
-                type="button"
-                onClick={() => void handleSubmit()}
-                disabled={submitting || Boolean(fontStatus) ||
-                  designIssues.some((issue) => issue.severity === "error")}
-                className="btn btn-secondary btn-sm"
-              >
-                {submitting ? "Submitting..." : "Submit For PDF"}
+                Unlock All Elements
               </button>
             </div>
-          </div>
-        </section>
+          )}
+          {
+            /* backdrop-blur creates a stacking context, trapping the Add Shape
+            menu's z-50 inside this section. Without an explicit level the
+            whole bar sorts as z-auto and later positioned siblings (the
+            Background ColorPicker) paint over the open menu. z-30 keeps the
+            bar above page content but below the z-50 header and modals. */
+          }
+          <section
+            className="card relative z-30 p-5 backdrop-blur xl:shrink-0 xl:py-3"
+            style={{ background: "rgba(255,255,255,0.92)" }}
+          >
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+              <div className="space-y-2">
+                <p className="section-label">
+                  Titchybooks Studio
+                </p>
+                <input
+                  value={title === "Untitled Titchybooks" ? "" : title}
+                  onFocus={() => {
+                    if (!frozenRef.current) pushHistory();
+                  }}
+                  onChange={(event) => {
+                    if (!frozenRef.current) setTitle(event.target.value);
+                  }}
+                  maxLength={120}
+                  aria-label="Book title"
+                  placeholder="Enter your book title"
+                  className="w-full max-w-xl border-none bg-transparent p-0 text-3xl font-semibold tracking-tight outline-none"
+                  style={{ color: "var(--color-text)" }}
+                />
+                <p
+                  className="text-sm xl:hidden"
+                  style={{ color: "var(--color-text-muted)" }}
+                >
+                  Compose each booklet page individually. Safe area guides are
+                  shown on the canvas.
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-3">
+                <span
+                  className="badge"
+                  role="status"
+                  aria-live="polite"
+                  style={{
+                    background: saveState === "saving"
+                      ? "var(--color-accent-light)"
+                      : saveState === "saved"
+                      ? "var(--color-success-light)"
+                      : saveState === "error"
+                      ? "var(--color-error-light)"
+                      : "var(--color-border)",
+                    color: saveState === "saving"
+                      ? "#92400E"
+                      : saveState === "saved"
+                      ? "#065F46"
+                      : saveState === "error"
+                      ? "#991B1B"
+                      : "var(--color-text-muted)",
+                  }}
+                >
+                  {saveState === "saving"
+                    ? "Saving..."
+                    : saveState === "saved"
+                    ? "Saved"
+                    : saveState === "error"
+                    ? "Save failed"
+                    : "Ready"}
+                </span>
+                <button
+                  type="button"
+                  onClick={undo}
+                  disabled={!canUndo}
+                  className="btn btn-outline btn-sm"
+                  title="Undo (Ctrl+Z)"
+                >
+                  Undo
+                </button>
+                <button
+                  type="button"
+                  onClick={redo}
+                  disabled={!canRedo}
+                  className="btn btn-outline btn-sm"
+                  title="Redo (Ctrl+Shift+Z)"
+                >
+                  Redo
+                </button>
+                <div className="relative group">
+                  <button
+                    type="button"
+                    className="btn btn-outline btn-sm"
+                  >
+                    Add Shape ▾
+                  </button>
+                  <div
+                    data-testid="add-shape-menu"
+                    className="invisible absolute left-0 top-full pt-2 opacity-0 transition-all duration-150 group-hover:visible group-hover:opacity-100 z-50"
+                  >
+                    <div
+                      className="flex flex-col gap-1 card p-2 shadow-lg"
+                      style={{ minWidth: "140px" }}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => addShapeElement("rect")}
+                        className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm transition"
+                        style={{ color: "var(--color-text)" }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.background =
+                            "var(--color-surface)";
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.background = "transparent";
+                        }}
+                      >
+                        <div
+                          className="h-4 w-4 rounded-sm border-2"
+                          style={{ borderColor: "var(--color-text-muted)" }}
+                        />
+                        Rectangle
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => addShapeElement("circle")}
+                        className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm transition"
+                        style={{ color: "var(--color-text)" }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.background =
+                            "var(--color-surface)";
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.background = "transparent";
+                        }}
+                      >
+                        <div
+                          className="h-4 w-4 rounded-full border-2"
+                          style={{ borderColor: "var(--color-text-muted)" }}
+                        />
+                        Circle
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => addShapeElement("line")}
+                        className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm transition"
+                        style={{ color: "var(--color-text)" }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.background =
+                            "var(--color-surface)";
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.background = "transparent";
+                        }}
+                      >
+                        <div
+                          className="h-0.5 w-4"
+                          style={{ background: "var(--color-text-muted)" }}
+                        />
+                        Line
+                      </button>
+                    </div>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={addTextElement}
+                  className="btn btn-primary btn-sm"
+                >
+                  Add Text Box
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPreviewOpen(true)}
+                  className="btn btn-outline btn-sm"
+                >
+                  Preview booklet
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleSubmit()}
+                  disabled={submitting || Boolean(fontStatus) ||
+                    designIssues.some((issue) => issue.severity === "error")}
+                  className="btn btn-secondary btn-sm"
+                >
+                  {submitting ? "Submitting..." : "Submit For PDF"}
+                </button>
+              </div>
+            </div>
+          </section>
 
-        <div className="grid items-start gap-4 xl:min-h-0 xl:flex-1 xl:grid-cols-[minmax(0,1fr)_340px] xl:items-stretch">
-          <section className="min-w-0 space-y-4 xl:flex xl:min-h-0 xl:flex-col xl:overflow-y-auto">
-            <div className="card p-4 xl:shrink-0">
-              <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                <div>
+          <div className="grid items-start gap-4 xl:min-h-0 xl:flex-1 xl:grid-cols-[minmax(0,1fr)_340px] xl:items-stretch">
+            <section className="min-w-0 space-y-4 xl:flex xl:min-h-0 xl:flex-col xl:overflow-y-auto">
+              <div className="card p-4 xl:shrink-0">
+                <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                  <div>
+                    <p
+                      className="text-sm font-semibold"
+                      style={{ color: "var(--color-text)" }}
+                    >
+                      {PAGE_LABEL_DISPLAY[activePageLabel]}
+                    </p>
+                    <p
+                      className="text-sm"
+                      style={{ color: "var(--color-text-muted)" }}
+                    >
+                      {isInstanceMode
+                        ? "Select editable template text in Layers to change its words or style."
+                        : "Drag elements freely, then resize or rotate from the page."}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-4">
+                    <span
+                      className="text-xs font-medium tabular-nums"
+                      aria-live="polite"
+                      style={{ color: "var(--color-text-muted)" }}
+                    >
+                      Page {readingIndex + 1} of 8
+                    </span>
+                    <label
+                      className="flex items-center gap-2 text-sm"
+                      style={{ color: "var(--color-text-muted)" }}
+                    >
+                      <span>Background</span>
+                      <ColorPicker
+                        value={activeResolvedScene.page.backgroundColor}
+                        onChange={(color) => {
+                          updateScene({
+                            ...activePage.scene,
+                            backgroundOverride: color,
+                          });
+                        }}
+                      />
+                    </label>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-stretch gap-2 xl:min-h-[420px] xl:flex-1">
+                <button
+                  type="button"
+                  onClick={goToPreviousPage}
+                  disabled={readingIndex <= 0 || navigating}
+                  aria-label="Previous page"
+                  title="Previous page (ArrowLeft)"
+                  className="hidden shrink-0 self-center rounded-full p-2 transition disabled:opacity-40 sm:block sm:p-3"
+                  style={{
+                    border: "1.5px solid var(--color-border-strong)",
+                    background: "var(--color-surface-raised)",
+                    color: "var(--color-text)",
+                  }}
+                >
+                  <svg
+                    className="h-5 w-5"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                    strokeWidth={2}
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M15 19l-7-7 7-7"
+                    />
+                  </svg>
+                </button>
+                <div className="min-w-0 flex-1">
+                  <div
+                    key={activePageLabel}
+                    className={`xl:h-full ${
+                      navDirection === "forward"
+                        ? "page-enter-forward"
+                        : "page-enter-backward"
+                    }`}
+                  >
+                    <EditorCanvas
+                      key={`canvas-${fontRetry}`}
+                      scene={{
+                        ...activeResolvedScene,
+                        elements: mergedElements,
+                      }}
+                      assets={assets}
+                      selectedElementId={selectedElementId}
+                      onSelectElement={(elementId) => {
+                        // Allow selecting template TEXT elements so users can edit
+                        // the text content. Other template types remain fully locked.
+                        if (
+                          isInstanceMode && elementId &&
+                          isTemplateElement(
+                            elementId,
+                            activeTemplateElements,
+                          ) &&
+                          !isTemplateTextElement(elementId)
+                        ) {
+                          return;
+                        }
+                        setSelectedElementId(elementId);
+                      }}
+                      onSceneChange={(next) => {
+                        // Strip any template-layer elements before persisting;
+                        // instance sceneJson must remain user-layer only (aside
+                        // from `templateTextOverrides`, which the canvas never
+                        // modifies directly).
+                        updateScene(
+                          applyCanvasGeometry(activePage.scene, next),
+                        );
+                      }}
+                      onTextCommit={(elementId, text) => {
+                        // Inline canvas edits route exactly like the properties
+                        // panel: template text becomes a per-instance override,
+                        // other template elements stay fixed, user elements
+                        // update in place (one history step per edit session).
+                        if (isTemplateTextElement(elementId)) {
+                          updateTemplateTextOverride(elementId, text);
+                          return;
+                        }
+                        if (
+                          isTemplateElement(elementId, activeTemplateElements)
+                        ) {
+                          return;
+                        }
+                        updateElement(
+                          elementId,
+                          (element) =>
+                            element.type === "text"
+                              ? { ...element, text }
+                              : element,
+                        );
+                      }}
+                      pageLabel={activePageLabel}
+                      templateElementIds={new Set(
+                        activeTemplateElements.map((e) => e.id),
+                      )}
+                      templateTextElementIds={new Set(
+                        activeTemplateElements
+                          .filter((e) =>
+                            e.type === "text" && !e.locked &&
+                            !isProtectedDesign(e)
+                          )
+                          .map((e) => e.id),
+                      )}
+                      isInstanceMode={isInstanceMode}
+                      maxWidth={700}
+                      maxHeight={isXl ? undefined : stageMaxHeight}
+                      onSwipeLeft={goToNextPage}
+                      onSwipeRight={goToPreviousPage}
+                    />
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={goToNextPage}
+                  disabled={readingIndex >= PAGE_READING_ORDER.length - 1 ||
+                    navigating}
+                  aria-label="Next page"
+                  title="Next page (ArrowRight)"
+                  className="hidden shrink-0 self-center rounded-full p-2 transition disabled:opacity-40 sm:block sm:p-3"
+                  style={{
+                    border: "1.5px solid var(--color-border-strong)",
+                    background: "var(--color-surface-raised)",
+                    color: "var(--color-text)",
+                  }}
+                >
+                  <svg
+                    className="h-5 w-5"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                    strokeWidth={2}
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M9 5l7 7-7 7"
+                    />
+                  </svg>
+                </button>
+              </div>
+
+              <div className="xl:shrink-0">
+                <PageFilmstrip
+                  activePageLabel={activePageLabel}
+                  thumbnails={pageThumbnails}
+                  elementCounts={elementCounts}
+                  onSelect={goToPage}
+                />
+              </div>
+              <p
+                className="text-xs xl:hidden xl:shrink-0"
+                style={{ color: "var(--color-text-muted)" }}
+              >
+                Swipe the page, press the arrow keys, or pick a thumbnail to
+                move between pages. Changes are saved before each switch.
+              </p>
+            </section>
+
+            <div
+              data-testid="editor-tools-rail"
+              className="space-y-4 xl:min-h-0 xl:overflow-y-auto xl:overscroll-contain xl:pr-1 xl:pb-2"
+            >
+              <BookDesignPanel
+                scene={activePage.scene}
+                pageLabel={activePageLabel}
+                selectedElement={selectedElement}
+                onApply={applyBookDesign}
+                onGestureStart={() => {
+                  if (!designGesture.current.active) {designGesture.current = {
+                      active: true,
+                      recorded: false,
+                    };}
+                }}
+                onGestureEnd={() => {
+                  designGesture.current = { active: false, recorded: false };
+                }}
+                issues={designIssues}
+                fontStatus={fontStatus}
+                onRetryFonts={() => setFontRetry((value) => value + 1)}
+              />
+              <PropertiesPanel
+                isTemplateAuthor={submission?.isTemplate}
+                guidedTypography
+                selectedElement={selectedElement}
+                onChangeElement={(elementId, updater) => {
+                  // For template TEXT elements: apply the updater, extract
+                  // only the `text` change, and write to templateTextOverrides.
+                  // All other property changes (position, size, etc.) are
+                  // silently dropped so the template layout stays fixed.
+                  if (isTemplateTextElement(elementId)) {
+                    const template = activeTemplateElementsWithOverrides.find(
+                      (element) => element.id === elementId,
+                    );
+                    if (template && template.type === "text") {
+                      const next = updater(template);
+                      if (next.type === "text") {
+                        updateTemplateTextOverride(elementId, next.text);
+                      }
+                    }
+                    return;
+                  }
+                  // Block property changes on all other template elements
+                  if (isTemplateElement(elementId, activeTemplateElements)) {
+                    return;
+                  }
+                  updateElement(elementId, updater);
+                }}
+                onDeleteElement={deleteElement}
+                onDuplicateElement={duplicateElement}
+                onToggleVisibility={(elementId) => {
+                  if (isTemplateElement(elementId, activeTemplateElements)) {
+                    return;
+                  }
+                  toggleElementVisibility(elementId);
+                }}
+                onToggleLock={toggleElementLock}
+                onBringForward={bringForward}
+                onSendBackward={sendBackward}
+                isInstanceMode={isInstanceMode}
+                templateTextOriginal={selectedElement &&
+                    selectedElement.layer === "template" &&
+                    selectedElement.type === "text"
+                  ? (() => {
+                    const original = activeTemplateElements.find(
+                      (el) => el.id === selectedElement.id,
+                    );
+                    return original && original.type === "text"
+                      ? original.text
+                      : undefined;
+                  })()
+                  : undefined}
+                onResetTemplateText={clearTemplateTextOverride}
+                assetDimensions={assetDimensionsMap}
+                physicalWidthMm={physicalWidthMm}
+                physicalHeightMm={physicalHeightMm}
+              />
+              <LayerPanel
+                elements={activeResolvedScene.elements.slice(
+                  activeTemplateElements.length,
+                )}
+                templateElements={activeTemplateElementsWithOverrides}
+                selectedElementId={selectedElementId}
+                onSelectElement={(elementId) => {
+                  // Allow selecting template TEXT elements so users can edit
+                  // the text via the properties panel.
+                  if (
+                    isInstanceMode &&
+                    isTemplateElement(elementId, activeTemplateElements) &&
+                    !isTemplateTextElement(elementId)
+                  ) {
+                    return;
+                  }
+                  setSelectedElementId(elementId);
+                }}
+                onToggleVisibility={(elementId) => {
+                  if (isTemplateElement(elementId, activeTemplateElements)) {
+                    return;
+                  }
+                  toggleElementVisibility(elementId);
+                }}
+                onToggleLock={toggleElementLock}
+                onDuplicateElement={duplicateElement}
+                onDeleteElement={deleteElement}
+                isInstanceMode={isInstanceMode}
+              />
+
+              <section className="card p-5">
+                <div className="flex items-center justify-between">
                   <p
                     className="text-sm font-semibold"
                     style={{ color: "var(--color-text)" }}
                   >
-                    {PAGE_LABEL_DISPLAY[activePageLabel]}
+                    Asset Library
                   </p>
-                  <p
-                    className="text-sm"
-                    style={{ color: "var(--color-text-muted)" }}
-                  >
-                    {isInstanceMode
-                      ? "Select editable template text in Layers to change its words or style."
-                      : "Drag elements freely, then resize or rotate from the page."}
-                  </p>
-                </div>
-                <div className="flex items-center gap-4">
-                  <span
-                    className="text-xs font-medium tabular-nums"
-                    aria-live="polite"
-                    style={{ color: "var(--color-text-muted)" }}
-                  >
-                    Page {readingIndex + 1} of 8
-                  </span>
-                  <label
-                    className="flex items-center gap-2 text-sm"
-                    style={{ color: "var(--color-text-muted)" }}
-                  >
-                    <span>Background</span>
-                    <ColorPicker
-                      value={activeResolvedScene.page.backgroundColor}
-                      onChange={(color) => {
-                        updateScene({
-                          ...activePage.scene,
-                          backgroundOverride: color,
-                        });
-                      }}
+                  <label className="btn btn-secondary btn-sm cursor-pointer">
+                    {assetUploading ? "Uploading..." : "Upload"}
+                    <input
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp"
+                      onChange={handleAssetUpload}
+                      disabled={assetUploading}
+                      className="hidden"
                     />
                   </label>
                 </div>
-              </div>
-            </div>
-
-            <div className="flex items-stretch gap-2 xl:min-h-[420px] xl:flex-1">
-              <button
-                type="button"
-                onClick={goToPreviousPage}
-                disabled={readingIndex <= 0 || navigating}
-                aria-label="Previous page"
-                title="Previous page (ArrowLeft)"
-                className="hidden shrink-0 self-center rounded-full p-2 transition disabled:opacity-40 sm:block sm:p-3"
-                style={{
-                  border: "1.5px solid var(--color-border-strong)",
-                  background: "var(--color-surface-raised)",
-                  color: "var(--color-text)",
-                }}
-              >
-                <svg
-                  className="h-5 w-5"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                  strokeWidth={2}
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    d="M15 19l-7-7 7-7"
-                  />
-                </svg>
-              </button>
-              <div className="min-w-0 flex-1">
-                <div
-                  key={activePageLabel}
-                  className={`xl:h-full ${navDirection === "forward"
-                    ? "page-enter-forward"
-                    : "page-enter-backward"}`}
-                >
-                  <EditorCanvas
-                    key={`canvas-${fontRetry}`}
-                    scene={{ ...activeResolvedScene, elements: mergedElements }}
-                    assets={assets}
-                    selectedElementId={selectedElementId}
-                    onSelectElement={(elementId) => {
-                      // Allow selecting template TEXT elements so users can edit
-                      // the text content. Other template types remain fully locked.
-                      if (
-                        isInstanceMode && elementId &&
-                        isTemplateElement(elementId, activeTemplateElements) &&
-                        !isTemplateTextElement(elementId)
-                      ) {
-                        return;
-                      }
-                      setSelectedElementId(elementId);
-                    }}
-                    onSceneChange={(next) => {
-                      // Strip any template-layer elements before persisting;
-                      // instance sceneJson must remain user-layer only (aside
-                      // from `templateTextOverrides`, which the canvas never
-                      // modifies directly).
-                      updateScene(applyCanvasGeometry(activePage.scene, next));
-                    }}
-                    onTextCommit={(elementId, text) => {
-                      // Inline canvas edits route exactly like the properties
-                      // panel: template text becomes a per-instance override,
-                      // other template elements stay fixed, user elements
-                      // update in place (one history step per edit session).
-                      if (isTemplateTextElement(elementId)) {
-                        updateTemplateTextOverride(elementId, text);
-                        return;
-                      }
-                      if (
-                        isTemplateElement(elementId, activeTemplateElements)
-                      ) {
-                        return;
-                      }
-                      updateElement(elementId, (element) =>
-                        element.type === "text"
-                          ? { ...element, text }
-                          : element);
-                    }}
-                    pageLabel={activePageLabel}
-                    templateElementIds={new Set(
-                      activeTemplateElements.map((e) => e.id),
-                    )}
-                    templateTextElementIds={new Set(
-                      activeTemplateElements
-                        .filter((e) =>
-                          e.type === "text" && !e.locked && !isProtectedDesign(e)
-                        )
-                        .map((e) => e.id),
-                    )}
-                    isInstanceMode={isInstanceMode}
-                    maxWidth={700}
-                    maxHeight={isXl ? undefined : stageMaxHeight}
-                    onSwipeLeft={goToNextPage}
-                    onSwipeRight={goToPreviousPage}
-                  />
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={goToNextPage}
-                disabled={readingIndex >= PAGE_READING_ORDER.length - 1 ||
-                  navigating}
-                aria-label="Next page"
-                title="Next page (ArrowRight)"
-                className="hidden shrink-0 self-center rounded-full p-2 transition disabled:opacity-40 sm:block sm:p-3"
-                style={{
-                  border: "1.5px solid var(--color-border-strong)",
-                  background: "var(--color-surface-raised)",
-                  color: "var(--color-text)",
-                }}
-              >
-                <svg
-                  className="h-5 w-5"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                  strokeWidth={2}
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    d="M9 5l7 7-7 7"
-                  />
-                </svg>
-              </button>
-            </div>
-
-            <div className="xl:shrink-0">
-              <PageFilmstrip
-                activePageLabel={activePageLabel}
-                thumbnails={pageThumbnails}
-                elementCounts={elementCounts}
-                onSelect={goToPage}
-              />
-            </div>
-            <p
-              className="text-xs xl:hidden xl:shrink-0"
-              style={{ color: "var(--color-text-muted)" }}
-            >
-              Swipe the page, press the arrow keys, or pick a thumbnail to
-              move between pages. Changes are saved before each switch.
-            </p>
-          </section>
-
-          <div
-            data-testid="editor-tools-rail"
-            className="space-y-4 xl:min-h-0 xl:overflow-y-auto xl:overscroll-contain xl:pr-1 xl:pb-2"
-          >
-            <BookDesignPanel
-              scene={activePage.scene}
-              pageLabel={activePageLabel}
-              selectedElement={selectedElement}
-              onApply={applyBookDesign}
-              onGestureStart={() => {
-                if (!designGesture.current.active) {designGesture.current = {
-                    active: true,
-                    recorded: false,
-                  };}
-              }}
-              onGestureEnd={() => {
-                designGesture.current = { active: false, recorded: false };
-              }}
-              issues={designIssues}
-              fontStatus={fontStatus}
-              onRetryFonts={() => setFontRetry((value) => value + 1)}
-            />
-            <PropertiesPanel
-              isTemplateAuthor={submission?.isTemplate}
-              guidedTypography
-              selectedElement={selectedElement}
-              onChangeElement={(elementId, updater) => {
-                // For template TEXT elements: apply the updater, extract
-                // only the `text` change, and write to templateTextOverrides.
-                // All other property changes (position, size, etc.) are
-                // silently dropped so the template layout stays fixed.
-                if (isTemplateTextElement(elementId)) {
-                  const template = activeTemplateElementsWithOverrides.find(
-                    (element) => element.id === elementId,
-                  );
-                  if (template && template.type === "text") {
-                    const next = updater(template);
-                    if (next.type === "text") {
-                      updateTemplateTextOverride(elementId, next.text);
-                    }
-                  }
-                  return;
-                }
-                // Block property changes on all other template elements
-                if (isTemplateElement(elementId, activeTemplateElements)) {
-                  return;
-                }
-                updateElement(elementId, updater);
-              }}
-              onDeleteElement={deleteElement}
-              onDuplicateElement={duplicateElement}
-              onToggleVisibility={(elementId) => {
-                if (isTemplateElement(elementId, activeTemplateElements)) {
-                  return;
-                }
-                toggleElementVisibility(elementId);
-              }}
-              onToggleLock={toggleElementLock}
-              onBringForward={bringForward}
-              onSendBackward={sendBackward}
-              isInstanceMode={isInstanceMode}
-              templateTextOriginal={selectedElement &&
-                  selectedElement.layer === "template" &&
-                  selectedElement.type === "text"
-                ? (() => {
-                  const original = activeTemplateElements.find(
-                    (el) => el.id === selectedElement.id,
-                  );
-                  return original && original.type === "text"
-                    ? original.text
-                    : undefined;
-                })()
-                : undefined}
-              onResetTemplateText={clearTemplateTextOverride}
-              assetDimensions={assetDimensionsMap}
-              physicalWidthMm={physicalWidthMm}
-              physicalHeightMm={physicalHeightMm}
-            />
-            <LayerPanel
-              elements={activeResolvedScene.elements.slice(
-                activeTemplateElements.length,
-              )}
-              templateElements={activeTemplateElementsWithOverrides}
-              selectedElementId={selectedElementId}
-              onSelectElement={(elementId) => {
-                // Allow selecting template TEXT elements so users can edit
-                // the text via the properties panel.
-                if (
-                  isInstanceMode &&
-                  isTemplateElement(elementId, activeTemplateElements) &&
-                  !isTemplateTextElement(elementId)
-                ) {
-                  return;
-                }
-                setSelectedElementId(elementId);
-              }}
-              onToggleVisibility={(elementId) => {
-                if (isTemplateElement(elementId, activeTemplateElements)) {
-                  return;
-                }
-                toggleElementVisibility(elementId);
-              }}
-              onToggleLock={toggleElementLock}
-              onDuplicateElement={duplicateElement}
-              onDeleteElement={deleteElement}
-              isInstanceMode={isInstanceMode}
-            />
-
-            <section className="card p-5">
-              <div className="flex items-center justify-between">
                 <p
-                  className="text-sm font-semibold"
-                  style={{ color: "var(--color-text)" }}
+                  className="mt-3 text-xs leading-5"
+                  style={{ color: "var(--color-text-muted)" }}
                 >
-                  Asset Library
+                  Click any thumbnail to place another copy on the current page.
                 </p>
-                <label className="btn btn-secondary btn-sm cursor-pointer">
-                  {assetUploading ? "Uploading..." : "Upload"}
-                  <input
-                    type="file"
-                    accept="image/jpeg,image/png,image/webp"
-                    onChange={handleAssetUpload}
-                    disabled={assetUploading}
-                    className="hidden"
-                  />
-                </label>
-              </div>
-              <p
-                className="mt-3 text-xs leading-5"
-                style={{ color: "var(--color-text-muted)" }}
-              >
-                Click any thumbnail to place another copy on the current page.
-              </p>
-              <div className="mt-4 grid grid-cols-2 gap-3">
-                {assets.length === 0
-                  ? (
-                    <p
-                      className="col-span-2 text-sm leading-6"
-                      style={{ color: "var(--color-text-muted)" }}
-                    >
-                      Upload images to start placing artwork on the page.
-                    </p>
-                  )
-                  : (
-                    assets.map((asset) => (
-                      <div
-                        key={asset.id}
-                        className="group relative overflow-hidden rounded-xl transition"
-                        style={{
-                          border: "1px solid var(--color-border)",
-                          background: "var(--color-surface)",
-                        }}
+                <div className="mt-4 grid grid-cols-2 gap-3">
+                  {assets.length === 0
+                    ? (
+                      <p
+                        className="col-span-2 text-sm leading-6"
+                        style={{ color: "var(--color-text-muted)" }}
                       >
-                        <button
-                          type="button"
-                          onClick={() => addImageElement(asset)}
-                          className="block h-full w-full text-left"
+                        Upload images to start placing artwork on the page.
+                      </p>
+                    )
+                    : (
+                      assets.map((asset) => (
+                        <div
+                          key={asset.id}
+                          className="group relative overflow-hidden rounded-xl transition"
+                          style={{
+                            border: "1px solid var(--color-border)",
+                            background: "var(--color-surface)",
+                          }}
                         >
-                          {asset.previewUrl ?? asset.downloadUrl
-                            ? (
-                              // eslint-disable-next-line @next/next/no-img-element
-                              <img
-                                src={asset.previewUrl ?? asset.downloadUrl ??
-                                  ""}
-                                alt={asset.originalFilename}
-                                className="h-28 w-full object-cover"
-                              />
-                            )
-                            : (
-                              <div
-                                className="flex h-28 items-center justify-center text-xs"
-                                style={{
-                                  background: "var(--color-border)",
-                                  color: "var(--color-text-muted)",
-                                }}
-                              >
-                                No preview
-                              </div>
-                            )}
-                          <div className="px-3 py-2">
-                            <p
-                              className="truncate text-xs font-medium"
-                              style={{ color: "var(--color-text)" }}
-                            >
-                              {asset.originalFilename}
-                            </p>
-                          </div>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            handleAssetDelete(
-                              asset.id,
-                              asset.originalFilename,
-                            )}
-                          className="absolute right-2 top-2 rounded-full p-1.5 text-white opacity-0 shadow-sm transition group-hover:opacity-100"
-                          style={{ background: "var(--color-error)" }}
-                          title="Delete asset"
-                        >
-                          <svg
-                            className="h-3.5 w-3.5"
-                            fill="none"
-                            viewBox="0 0 24 24"
-                            stroke="currentColor"
-                            strokeWidth={2}
+                          <button
+                            type="button"
+                            onClick={() => addImageElement(asset)}
+                            className="block h-full w-full text-left"
                           >
-                            <path
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
-                            />
-                          </svg>
-                        </button>
-                      </div>
-                    ))
-                  )}
-              </div>
-            </section>
+                            {asset.previewUrl ?? asset.downloadUrl
+                              ? (
+                                // eslint-disable-next-line @next/next/no-img-element
+                                <img
+                                  src={asset.previewUrl ?? asset.downloadUrl ??
+                                    ""}
+                                  alt={asset.originalFilename}
+                                  className="h-28 w-full object-cover"
+                                />
+                              )
+                              : (
+                                <div
+                                  className="flex h-28 items-center justify-center text-xs"
+                                  style={{
+                                    background: "var(--color-border)",
+                                    color: "var(--color-text-muted)",
+                                  }}
+                                >
+                                  No preview
+                                </div>
+                              )}
+                            <div className="px-3 py-2">
+                              <p
+                                className="truncate text-xs font-medium"
+                                style={{ color: "var(--color-text)" }}
+                              >
+                                {asset.originalFilename}
+                              </p>
+                            </div>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              handleAssetDelete(
+                                asset.id,
+                                asset.originalFilename,
+                              )}
+                            className="absolute right-2 top-2 rounded-full p-1.5 text-white opacity-0 shadow-sm transition group-hover:opacity-100"
+                            style={{ background: "var(--color-error)" }}
+                            title="Delete asset"
+                          >
+                            <svg
+                              className="h-3.5 w-3.5"
+                              fill="none"
+                              viewBox="0 0 24 24"
+                              stroke="currentColor"
+                              strokeWidth={2}
+                            >
+                              <path
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                              />
+                            </svg>
+                          </button>
+                        </div>
+                      ))
+                    )}
+                </div>
+              </section>
+            </div>
           </div>
-        </div>
         </div>
 
         {submission && (

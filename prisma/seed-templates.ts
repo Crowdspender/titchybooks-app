@@ -18,62 +18,68 @@ export async function seedTemplates(prisma: PrismaClient, adminId: string): Prom
   for (const recipe of SEED_RECIPES) {
     const pages = pageSeeds(recipe);
     const elements = elementSeeds(recipe);
-    const existing = await prisma.submission.findUnique({
-      where: { managedKey: recipe.key },
-      select: { id: true },
-    });
+    // One transaction per recipe: readers (catalog, pipeline) must never see
+    // a half-refreshed template — pages replaced but elements missing, or a
+    // stale APPROVED status over new rows. Preflight runs inside it, before
+    // the publication status flips.
+    await prisma.$transaction(async (tx) => {
+      const existing = await tx.submission.findUnique({
+        where: { managedKey: recipe.key },
+        select: { id: true },
+      });
 
-    const template = existing
-      ? await prisma.submission.update({
-          where: { id: existing.id },
-          data: { title: recipe.title, pages: { deleteMany: {}, create: pages } },
-        })
-      : await prisma.submission.create({
-          data: {
-            userId: adminId,
-            mode: "TEMPLATE",
-            title: recipe.title,
-            status: "DRAFT",
-            isTemplate: true,
-            version: 1,
-            managedKey: recipe.key,
-            pages: { create: pages },
-          },
-        });
+      const template = existing
+        ? await tx.submission.update({
+            where: { id: existing.id },
+            data: { title: recipe.title, pages: { deleteMany: {}, create: pages } },
+          })
+        : await tx.submission.create({
+            data: {
+              userId: adminId,
+              mode: "TEMPLATE",
+              title: recipe.title,
+              status: "DRAFT",
+              isTemplate: true,
+              version: 1,
+              managedKey: recipe.key,
+              pages: { create: pages },
+            },
+          });
 
-    await prisma.templateElement.deleteMany({ where: { templateId: template.id } });
-    await prisma.templateElement.createMany({
-      data: elements.map((element) => ({ templateId: template.id, ...element })),
-    });
+      await tx.templateElement.deleteMany({ where: { templateId: template.id } });
+      await tx.templateElement.createMany({
+        data: elements.map((element) => ({ templateId: template.id, ...element })),
+      });
 
-    const rows = await prisma.templateElement.findMany({
-      where: { templateId: template.id },
-      select: { pageLabel: true, elementJson: true },
-    });
-    const backgrounds = new Map<PageLabel, string>(
-      PAGE_LABELS.map((label) => [label, backgroundFor(recipe, label)]),
-    );
-    const { result, manifest } = preflightTemplateRows({
-      templateId: template.id,
-      templateVersion: template.version,
-      rows,
-      pageBackgrounds: backgrounds,
-    });
+      const rows = await tx.templateElement.findMany({
+        where: { templateId: template.id },
+        select: { pageLabel: true, elementJson: true },
+      });
+      const backgrounds = new Map<PageLabel, string>(
+        PAGE_LABELS.map((label) => [label, backgroundFor(recipe, label)]),
+      );
+      const { result, manifest } = preflightTemplateRows({
+        templateId: template.id,
+        templateVersion: template.version,
+        rows,
+        pageBackgrounds: backgrounds,
+      });
 
-    await prisma.submission.update({
-      where: { id: template.id },
-      data: {
-        status: result.ok ? "APPROVED" : "DRAFT",
-        aiReady: result.ok,
-        aiManifest: result.ok ? (manifest as unknown as Prisma.InputJsonValue) : Prisma.DbNull,
-        publishedAt: result.ok ? new Date() : null,
-      },
-    });
+      await tx.submission.update({
+        where: { id: template.id },
+        data: {
+          status: result.ok ? "APPROVED" : "DRAFT",
+          aiReady: result.ok,
+          aiManifest: result.ok ? (manifest as unknown as Prisma.InputJsonValue) : Prisma.DbNull,
+          publishedAt: result.ok ? new Date() : null,
+        },
+      });
 
-    if (result.ok) {
-      console.log(`Seeded AI-ready template: ${recipe.title}`);
-    } else {
-      console.error(`Seeded template "${recipe.title}" is not AI-ready: ${summarizePreflight(result)}`);
-    }
+      if (result.ok) {
+        console.log(`Seeded AI-ready template: ${recipe.title}`);
+      } else {
+        console.error(`Seeded template "${recipe.title}" is not AI-ready: ${summarizePreflight(result)}`);
+      }
+    });
   }
 }

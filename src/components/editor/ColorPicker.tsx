@@ -146,7 +146,13 @@ export default function ColorPicker(
     };
 
     return (
-        <div ref={pickerRef} className={`relative ${className}`}>
+        // While open, the popover must sort above the canvas but below the
+        // studio top bar (z-30), whose Add Shape menu overlays this row.
+        // z-auto here would let the later-DOM picker paint over that menu.
+        <div
+            ref={pickerRef}
+            className={`relative ${isOpen ? "z-20" : ""} ${className}`}
+        >
             <div className="flex items-center gap-2">
                 <button
                     type="button"

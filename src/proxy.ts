@@ -1,6 +1,7 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
+import { isCronAuthorized } from "@/lib/queue-drain";
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
@@ -8,14 +9,24 @@ const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
  * Defense-in-depth CSRF check for cookie-authenticated API mutations.
  * The session cookie is already SameSite=Lax (browsers will not send it on
  * cross-site POSTs); on top of that we require any browser request bearing
- * an Origin/Referer to come from the same origin. Non-browser callers (the
- * cron drain workflow, server-to-server) send no Origin and rely on bearer
- * tokens instead. /api/auth/* keeps NextAuth's own CSRF-token protection.
+ * an Origin/Referer to come from the same origin, reject anything the browser
+ * labels cross-site, and reject malformed Referers. With no usable origin
+ * signal only bearer-authenticated callers (the cron drain workflow) pass;
+ * the Stripe webhook is exempt because its authenticity is the signed
+ * payload, not a header. /api/auth/* keeps NextAuth's own CSRF protection.
  */
 function isAllowedOrigin(req: NextRequest): boolean {
   if (SAFE_METHODS.has(req.method.toUpperCase())) return true;
   const path = req.nextUrl.pathname;
-  if (!path.startsWith("/api/") || path.startsWith("/api/auth")) return true;
+  if (
+    !path.startsWith("/api/") ||
+    path === "/api/auth" ||
+    path.startsWith("/api/auth/")
+  ) return true;
+
+  // Browsers label cross-site fetches/navigations themselves; trust that
+  // label over any spoofable Origin/Referer value.
+  if (req.headers.get("sec-fetch-site") === "cross-site") return false;
 
   const referer = req.headers.get("referer");
   let source = req.headers.get("origin");
@@ -23,11 +34,12 @@ function isAllowedOrigin(req: NextRequest): boolean {
     try {
       source = new URL(referer).origin;
     } catch {
-      source = null; // malformed referer: treated like no Origin below
+      return false; // malformed referer and no Origin: unusable provenance
     }
   }
-  if (!source) return true;
-  return source === req.nextUrl.origin;
+  if (source) return source === req.nextUrl.origin;
+  if (path === "/api/stripe/webhook") return true;
+  return isCronAuthorized(req);
 }
 
 export const proxy = auth(async (req) => {

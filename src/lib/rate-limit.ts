@@ -72,6 +72,47 @@ export function clientIp(req: Request): string {
   return ip || "unknown";
 }
 
+/**
+ * Refund one previously consumed slot (floor zero). Used to release an
+ * admission reservation after the guarded work succeeds, so only failures
+ * count toward the limit. Only touches a still-open window: an expired bucket
+ * has already reset, and decrementing it would corrupt the fresh window.
+ */
+export async function releaseRateLimit(bucketKey: string): Promise<void> {
+  const now = new Date();
+  await prisma.$executeRaw`
+    UPDATE "RateLimitBucket"
+    SET "count" = GREATEST("count" - 1, 0)
+    WHERE "bucketKey" = ${bucketKey} AND "expiresAt" > ${now}`;
+}
+
+/**
+ * Read-only pre-check: would the next consumeRateLimit() call be allowed?
+ * Advisory only — it does not reserve capacity, so concurrent callers can all
+ * observe "allowed" before any of them counts. To gate expensive work (e.g.
+ * bcrypt) atomically, consumeRateLimit() up front and releaseRateLimit() after
+ * success instead of peeking.
+ */
+export async function peekRateLimit(
+  bucketKey: string,
+  { limit }: RateLimitWindow,
+): Promise<RateLimitResult> {
+  const now = new Date();
+  const rows = await prisma.$queryRaw<{ count: number; expiresAt: Date }[]>`
+    SELECT "count", "expiresAt" FROM "RateLimitBucket"
+    WHERE "bucketKey" = ${bucketKey} AND "expiresAt" > ${now}`;
+  const row = rows[0];
+  if (!row) return { allowed: true, remaining: limit, retryAfterMs: 0 };
+  const allowed = row.count < limit;
+  return {
+    allowed,
+    remaining: Math.max(0, limit - row.count - 1),
+    retryAfterMs: allowed
+      ? 0
+      : Math.max(0, new Date(row.expiresAt).getTime() - now.getTime()),
+  };
+}
+
 /** Standard 429 response with a Retry-After header, for route handlers. */
 export function tooManyRequests(
   result: RateLimitResult,

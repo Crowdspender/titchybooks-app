@@ -1,7 +1,7 @@
 import NextAuth from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 import { prisma } from "@/lib/prisma";
-import { consumeRateLimit } from "@/lib/rate-limit";
+import { clientIp, consumeRateLimit, releaseRateLimit } from "@/lib/rate-limit";
 import { compare } from "bcryptjs";
 
 declare module "next-auth" {
@@ -33,7 +33,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         email: { label: "Email", type: "email" },
         password: { label: "Password", type: "password" },
       },
-      async authorize(credentials) {
+      async authorize(credentials, request) {
         if (!credentials?.email || !credentials?.password) {
           return null;
         }
@@ -41,24 +41,42 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         const email = credentials.email as string;
         const password = credentials.password as string;
 
-        // Durable brute-force guard: cap verification attempts per email per
-        // window. This also bounds the bcrypt CPU cost an attacker can force.
-        // Exceeding the limit looks exactly like a wrong password to the
-        // caller (no account-enumeration signal).
-        const rl = await consumeRateLimit(`login:${email.toLowerCase()}`, {
-          limit: 15,
-          windowMs: 15 * 60_000,
-        });
-        if (!rl.allowed) return null;
+        // Durable brute-force guard: cap failed verifications per email and
+        // per client IP per window, so one client cannot exhaust the per-email
+        // allowance across many accounts. This also bounds the bcrypt CPU cost
+        // an attacker can force. Exceeding either limit looks exactly like a
+        // wrong password to the caller (no account-enumeration signal).
+        const emailWindow = { limit: 15, windowMs: 15 * 60_000 };
+        const ipWindow = { limit: 30, windowMs: 15 * 60_000 };
+        const emailKey = `login:${email.toLowerCase()}`;
+        const ipKey = `login-ip:${clientIp(request)}`;
+        // Atomically reserve a slot in BOTH buckets before the expensive
+        // password comparison. A read-only peek would let concurrent requests
+        // all pass the gate and run bcrypt before any of them counted, so the
+        // admission itself must consume; denied admissions never reach bcrypt.
+        const [emailRl, ipRl] = await Promise.all([
+          consumeRateLimit(emailKey, emailWindow),
+          consumeRateLimit(ipKey, ipWindow),
+        ]);
+        if (!emailRl.allowed || !ipRl.allowed) return null;
 
         const user = await prisma.user.findUnique({
           where: { email },
         });
 
-        if (!user) return null;
+        const isValid = user ? await compare(password, user.passwordHash) : false;
+        if (!user || !isValid) {
+          // The reservation already counted this failure against both the
+          // account and the client; nothing more to consume.
+          return null;
+        }
 
-        const isValid = await compare(password, user.passwordHash);
-        if (!isValid) return null;
+        // Success refunds both reservations so legitimate sign-ins never spend
+        // the brute-force budget, while every wrong guess stays counted.
+        await Promise.all([
+          releaseRateLimit(emailKey),
+          releaseRateLimit(ipKey),
+        ]);
 
         return {
           id: user.id,

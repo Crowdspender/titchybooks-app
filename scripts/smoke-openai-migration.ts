@@ -192,6 +192,11 @@ Rules:
 }
 
 async function main() {
+  if (!process.env.OPENAI_API_KEY) {
+    console.error("OPENAI_API_KEY is not set; cannot run the OpenAI migration smoke test.");
+    process.exitCode = 1;
+    return;
+  }
   const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
   console.log(`OPENAI_MODEL resolved to: ${MODEL}`);
 

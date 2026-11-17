@@ -28,12 +28,14 @@ export function getStripeClient(): Stripe {
   return client;
 }
 
-// Stripe treats HUF as a zero-decimal currency; EUR/GBP amounts are cents/pence.
-const ZERO_DECIMAL_CURRENCIES = new Set(["huf"]);
+// Every supported currency (HUF, EUR, GBP) charges in hundredths on Stripe:
+// HUF is zero-decimal only for payouts, not for charges. Sending whole forint
+// would undercharge by 100x.
 
-// Stripe minimum charge per currency, in its smallest chargeable unit.
+// Stripe minimum charge per currency, in its smallest chargeable unit
+// (HUF 175.00 Ft = 17500 filler).
 const MINIMUM_AMOUNTS: Partial<Record<Currency, number>> = {
-  HUF: 100,
+  HUF: 17500,
   EUR: 50,
   GBP: 30,
 };
@@ -50,9 +52,7 @@ export function toStripeAmount(
   rates?: Partial<CurrencyRates> | null,
 ): number {
   const converted = convertFromHuf(amountHuf, currency, rates);
-  const units = ZERO_DECIMAL_CURRENCIES.has(currency.toLowerCase())
-    ? Math.round(converted)
-    : Math.round(converted * 100);
+  const units = Math.round(converted * 100);
   const minimum = MINIMUM_AMOUNTS[currency] ?? 1;
   if (units < minimum) {
     throw new Error(

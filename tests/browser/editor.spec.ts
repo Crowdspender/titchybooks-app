@@ -308,6 +308,29 @@ test('canvas stays visible while the tools rail scrolls independently', async ({
   expect(await stage.boundingBox()).toEqual(box);
 });
 
+test('save-error banner shrinks the frame instead of pushing the rail off-screen', async ({ page }) => {
+  const id = await openDraft(page);
+  await addText(page, 'Banner frame text');
+  await page.route(`**/api/submissions/${id}/pages/*`, route => route.request().method() === 'PUT'
+    ? route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'Injected save failure' }) }) : route.continue());
+  await page.getByRole('button', { name: 'Next page', exact: true }).click();
+  // The failed flush blocks navigation and mounts the alert banner.
+  await expect(page.getByRole('button', { name: 'Edit Front Cover', exact: true })).toHaveAttribute('aria-current', 'page');
+  await expect(page.getByRole('alert').filter({ hasText: 'Injected save failure' })).toBeVisible();
+  const rail = page.getByTestId('editor-tools-rail');
+  const viewport = page.viewportSize()!;
+  // The banner lives inside the height-constrained frame, so the document
+  // still does not scroll and the deepest rail content stays reachable.
+  expect(await page.evaluate(() => window.scrollY)).toBe(0);
+  await rail.evaluate(el => { el.scrollTop = el.scrollHeight; });
+  const deepHint = rail.getByText('Click any thumbnail to place another copy on the current page.');
+  const hintBox = (await deepHint.boundingBox())!;
+  expect(hintBox.y + hintBox.height).toBeLessThanOrEqual(viewport.height);
+  const stageBox = (await page.locator('.konvajs-content').boundingBox())!;
+  expect(stageBox.y).toBeGreaterThanOrEqual(0);
+  expect(stageBox.y + stageBox.height).toBeLessThanOrEqual(viewport.height);
+});
+
 test('double-click edits text directly inside the canvas text box', async ({ page }) => {
   await openDraft(page);
   await page.getByRole('button', { name: 'Add Text Box', exact: true }).click();
@@ -344,4 +367,49 @@ test('double-click edits text directly inside the canvas text box', async ({ pag
   // The background click also deselects; reselect to inspect the commit.
   await page.mouse.click(textPoint.x, textPoint.y);
   await expect(railText).toHaveValue('Committed by blur');
+  // Ending the inline session must bring the resize controls back: dragging
+  // the top-left Transformer anchor resizes the box instead of moving it.
+  const widthInput = page.locator('label:has(span:text-is("Width")) + input');
+  const widthBefore = await widthInput.inputValue();
+  const scale = box.width / 700;
+  const corner = { x: box.x + 72 * scale, y: box.y + 88 * scale };
+  await page.mouse.move(corner.x, corner.y);
+  await page.mouse.down();
+  await page.mouse.move(corner.x + 60, corner.y + 40, { steps: 8 });
+  await page.mouse.up();
+  await expect(widthInput).not.toHaveValue(widthBefore);
+});
+
+test('Add Shape menu paints above the background color picker', async ({ page }) => {
+  await openDraft(page);
+  // Below md the page-info row stacks left-aligned, putting the picker
+  // trigger under the toolbar's Add Shape menu. Zooming out lets the
+  // toolbar fit one row (media queries stay viewport-based), which brings
+  // the open menu down over the picker exactly like a zoomed-out window.
+  await page.setViewportSize({ width: 700, height: 900 });
+  await page.evaluate(() => { document.body.style.zoom = '0.75'; });
+  await page.getByRole('button', { name: 'Add Shape' }).hover();
+  const menu = page.getByTestId('add-shape-menu');
+  await expect(menu).toBeVisible();
+  const menuBox = (await menu.boundingBox())!;
+  const triggerBoxes = [
+    await page.getByRole('button', { name: /Open color picker/ }).boundingBox(),
+    await page.getByPlaceholder('#000000').boundingBox(),
+  ];
+  const centers = triggerBoxes
+    .filter((box): box is NonNullable<typeof box> => Boolean(box))
+    .map(box => ({ x: box.x + box.width / 2, y: box.y + box.height / 2 }));
+  const overlap = centers.find(point =>
+    point.x >= menuBox.x && point.x <= menuBox.x + menuBox.width &&
+    point.y >= menuBox.y && point.y <= menuBox.y + menuBox.height);
+  expect(overlap, `menu ${JSON.stringify(menuBox)} must overlap picker ${JSON.stringify(triggerBoxes)}`).toBeTruthy();
+  // Hit-testing proves paint order: the topmost node at the shared point
+  // must belong to the menu, not the swatch/hex input painted over it.
+  const topIsMenu = await page.evaluate(([x, y]) => {
+    const node = document.elementFromPoint(x, y);
+    return Boolean(node && node.closest('[data-testid="add-shape-menu"]'));
+  }, [overlap!.x, overlap!.y]);
+  expect(topIsMenu).toBe(true);
+  // Playwright's hit-target check also rejects an obscured menu click.
+  await menu.getByRole('button', { name: 'Rectangle', exact: true }).click();
 });

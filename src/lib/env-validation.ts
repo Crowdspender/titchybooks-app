@@ -31,6 +31,28 @@ function parseNum(env: Record<string, string | undefined>, name: string, fallbac
 }
 
 /**
+ * A session secret this weak makes every session cookie forgeable, so it is
+ * rejected independently of the non-blocking configuration report (see
+ * src/instrumentation.ts). Shared by both entry points.
+ */
+export function isWeakSessionSecret(secret: string): boolean {
+  return secret.length < 16 || secret.startsWith("change-me");
+}
+
+/**
+ * The session secret NextAuth actually uses. src/auth.ts sets no explicit
+ * `secret`, so next-auth resolves `AUTH_SECRET ?? NEXTAUTH_SECRET` (see
+ * next-auth/lib/env.js). Resolved once here so the boot guard in
+ * src/instrumentation.ts and both validation entry points check the same
+ * effective value, in the same precedence order.
+ */
+export function resolveSessionSecret(
+  env: Record<string, string | undefined>,
+): string {
+  return env.AUTH_SECRET ?? env.NEXTAUTH_SECRET ?? "";
+}
+
+/**
  * Check an environment record (defaults to process.env) and return every
  * problem found. Errors = must not boot in production; warnings = degraded
  * features worth flagging loudly.
@@ -45,12 +67,10 @@ export function validateRuntimeEnv(
   if (!env.DATABASE_URL) {
     errors.push("DATABASE_URL is not set (Prisma cannot connect).");
   }
-  if (!env.NEXTAUTH_SECRET && !env.AUTH_SECRET) {
+  const sessionSecret = resolveSessionSecret(env);
+  if (!sessionSecret) {
     errors.push("One of NEXTAUTH_SECRET / AUTH_SECRET must be set (sessions are unsigned).");
-  } else if (
-    (env.NEXTAUTH_SECRET ?? env.AUTH_SECRET ?? "").length < 16 ||
-    (env.NEXTAUTH_SECRET ?? env.AUTH_SECRET ?? "").startsWith("change-me")
-  ) {
+  } else if (isWeakSessionSecret(sessionSecret)) {
     errors.push("Session secret is shorter than 16 chars or looks like a placeholder.");
   }
   // The drain routes fail closed without CRON_SECRET, which silently stops
@@ -82,6 +102,8 @@ export function validateRuntimeEnv(
   }
   if (heartbeat === null) {
     errors.push("AI_HEARTBEAT_MS is set but not a number.");
+  } else if (heartbeat <= 0) {
+    errors.push("AI_HEARTBEAT_MS must be a positive number of milliseconds.");
   }
   if (budget === null) {
     errors.push("DRAIN_BUDGET_MS is set but not a number.");

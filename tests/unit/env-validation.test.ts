@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { validateRuntimeEnv, assertProductionEnv, reportProductionEnv } from '../../src/lib/env-validation';
+import { validateRuntimeEnv, assertProductionEnv, reportProductionEnv, resolveSessionSecret } from '../../src/lib/env-validation';
 
 /** A minimal environment that passes all checks. */
 function validEnv(overrides: Record<string, string | undefined> = {}) {
@@ -42,9 +42,38 @@ describe('validateRuntimeEnv', () => {
     expect(errors.some((e) => e.includes('Session secret'))).toBe(true);
   });
 
+  it('checks the effective secret in NextAuth precedence (AUTH_SECRET before NEXTAUTH_SECRET)', () => {
+    // A weak AUTH_SECRET wins over a strong NEXTAUTH_SECRET: NextAuth signs
+    // with AUTH_SECRET, so the validator must flag it despite the strong fallback.
+    const weakActive = validateRuntimeEnv(
+      validEnv({ AUTH_SECRET: 'change-me-please', NEXTAUTH_SECRET: 'a-long-enough-random-secret' }),
+    );
+    expect(weakActive.errors.some((e) => e.includes('Session secret'))).toBe(true);
+
+    // A strong AUTH_SECRET with a weak NEXTAUTH_SECRET is fine: the weak
+    // fallback is never used, so it must not raise a secret error.
+    const strongActive = validateRuntimeEnv(
+      validEnv({ AUTH_SECRET: 'a-long-enough-random-secret', NEXTAUTH_SECRET: 'short' }),
+    );
+    expect(strongActive.errors.some((e) => e.includes('Session secret'))).toBe(false);
+  });
+
+  it('resolveSessionSecret mirrors the next-auth selection order', () => {
+    expect(resolveSessionSecret({ AUTH_SECRET: 'active', NEXTAUTH_SECRET: 'fallback' })).toBe('active');
+    expect(resolveSessionSecret({ NEXTAUTH_SECRET: 'fallback' })).toBe('fallback');
+    expect(resolveSessionSecret({})).toBe('');
+  });
+
   it('enforces the lease >= 2x heartbeat invariant', () => {
     const { errors } = validateRuntimeEnv(validEnv({ AI_BOOK_LEASE_MS: '60000', AI_HEARTBEAT_MS: '60000' }));
     expect(errors.some((e) => e.includes('twice AI_HEARTBEAT_MS'))).toBe(true);
+  });
+
+  it('rejects non-positive and non-numeric heartbeat values', () => {
+    for (const raw of ['0', '-5', 'abc']) {
+      const { errors } = validateRuntimeEnv(validEnv({ AI_HEARTBEAT_MS: raw }));
+      expect(errors.some((e) => e.includes('AI_HEARTBEAT_MS'))).toBe(true);
+    }
   });
 
   it('enforces the lease > drain budget invariant', () => {

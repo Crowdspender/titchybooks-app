@@ -17,19 +17,21 @@ const prisma = new PrismaClient();
 
 async function seedAdmin() {
   const email = process.env.ADMIN_EMAIL || "admin@titchybooks.com";
-  // No default password: an accidentally-seeded admin with a known password
-  // is a full compromise. Set ADMIN_PASSWORD before seeding.
-  const password = process.env.ADMIN_PASSWORD;
-  if (!password) {
-    throw new Error(
-      "ADMIN_PASSWORD is not set. Refusing to seed an admin account with a default password.",
-    );
-  }
 
   const existing = await prisma.user.findUnique({ where: { email } });
   if (existing) {
     console.log(`Admin user already exists: ${email}`);
     return;
+  }
+
+  // No default password: an accidentally-seeded admin with a known password
+  // is a full compromise. Set ADMIN_PASSWORD before seeding a NEW admin;
+  // re-runs with an existing admin stay password-free.
+  const password = process.env.ADMIN_PASSWORD;
+  if (!password) {
+    throw new Error(
+      "ADMIN_PASSWORD is not set. Refusing to seed an admin account with a default password.",
+    );
   }
 
   const passwordHash = hashSync(password, 12);

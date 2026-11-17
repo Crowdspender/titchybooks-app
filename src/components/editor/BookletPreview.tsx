@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useEffectEvent, useMemo, useRef } from "react";
 import {
   PAGE_LABEL_DISPLAY,
   PAGE_READING_ORDER,
@@ -39,6 +39,10 @@ export default function BookletPreview({
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
   const restoreFocusRef = useRef<HTMLElement | null>(null);
+  // The parent passes a fresh onClose arrow on every render; reading it
+  // through an event keeps the focus trap and scroll lock mounted for the
+  // whole open session instead of tearing down and re-focusing per render.
+  const closePreview = useEffectEvent(() => onClose());
   // Pure derivation from the resolved scenes; the dialog only mounts on the
   // client, so the offscreen-canvas renders are safe to memoize.
   const previews = useMemo(() => {
@@ -65,7 +69,7 @@ export default function BookletPreview({
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
         event.preventDefault();
-        onClose();
+        closePreview();
         return;
       }
       if (event.key !== "Tab") return;
@@ -95,7 +99,7 @@ export default function BookletPreview({
       document.body.style.overflow = previousOverflow;
       restoreFocusRef.current?.focus();
     };
-  }, [open, onClose]);
+  }, [open]);
 
   if (!open) return null;
 
@@ -106,7 +110,10 @@ export default function BookletPreview({
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) onClose();
       }}
-      style={{ background: "rgba(15, 19, 28, 0.55)", backdropFilter: "blur(3px)" }}
+      style={{
+        background: "rgba(15, 19, 28, 0.55)",
+        backdropFilter: "blur(3px)",
+      }}
     >
       <div
         ref={dialogRef}

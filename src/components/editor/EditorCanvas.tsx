@@ -229,13 +229,18 @@ function CanvasTextElement({
   const transformerRef = useRef<Konva.Transformer | null>(null);
 
   useEffect(() => {
-    if (!isSelected || !nodeRef.current || !transformerRef.current) {
+    if (
+      !isSelected || isEditing || !nodeRef.current || !transformerRef.current
+    ) {
       return;
     }
 
     transformerRef.current.nodes([nodeRef.current]);
     transformerRef.current.getLayer()?.batchDraw();
-  }, [isSelected]);
+    // isEditing must re-run the attach: the Transformer unmounts for the
+    // inline textarea session, so ending the edit remounts it empty and the
+    // controls only return once the nodes are attached again.
+  }, [isSelected, isEditing]);
 
   if (element.typographyVersion) {
     return (
@@ -1077,12 +1082,14 @@ export default function EditorCanvas({
   const brandBandY = safeAreaY + safeAreaHeight - brandBandPx;
   const [cropModeId, setCropModeId] = useState<string | null>(null);
   const [editingTextId, setEditingTextId] = useState<string | null>(null);
-  const swipeRef = useRef<{
-    x: number;
-    y: number;
-    time: number;
-    active: boolean;
-  } | null>(null);
+  const swipeRef = useRef<
+    {
+      x: number;
+      y: number;
+      time: number;
+      active: boolean;
+    } | null
+  >(null);
   const swipeEnabled = Boolean(onSwipeLeft || onSwipeRight);
   const assetMap = new Map(
     assets.map((asset) => [asset.id, asset]),
@@ -1212,9 +1219,11 @@ export default function EditorCanvas({
         ...(swipeEnabled ? { touchAction: "pan-y" } : {}),
       }}
     >
-      {/* Relative wrapper sized to the stage so the inline text editor can
+      {
+        /* Relative wrapper sized to the stage so the inline text editor can
           be positioned in stage coordinates; the white page surface and its
-          shadow never stretch across the whole workspace column. */}
+          shadow never stretch across the whole workspace column. */
+      }
       <div
         style={{
           position: "relative",
@@ -1224,245 +1233,243 @@ export default function EditorCanvas({
           boxShadow: "0 20px 50px rgba(0, 0, 0, 0.1)",
         }}
       >
-      <Stage
-        ref={stageRef}
-        width={stageWidth}
-        height={stageHeight}
-        className="rounded-xl bg-white"
-        style={{
-          width: stageWidth,
-          height: stageHeight,
-        }}
-        onMouseDown={(event) => {
-          if (event.target === event.target.getStage()) {
-            onSelectElement(null);
-            setCropModeId(null);
-          }
-        }}
-        onTouchStart={handleTouchStart}
-        onTouchMove={handleTouchMove}
-        onTouchEnd={handleTouchEnd}
-        onTouchCancel={() => {
-          swipeRef.current = null;
-        }}
-      >
-        <Layer>
-          <Rect
-            x={0}
-            y={0}
-            width={stageWidth}
-            height={stageHeight}
-            fill={scene.page.backgroundColor}
-            listening={false}
-          />
-          <Rect
-            x={EDITOR_SAFE_MARGIN_PX * scale}
-            y={safeAreaY * scale}
-            width={(scene.page.widthPx - EDITOR_SAFE_MARGIN_PX * 2) * scale}
-            height={safeAreaHeight * scale}
-            stroke="#f97316"
-            dash={[8, 6]}
-            strokeWidth={1}
-            listening={false}
-          />
-          {scene.elements
-            .slice()
-            .sort((left, right) =>
-              left.zIndex - right.zIndex
-            )
-            .map((element) => {
-              const isTemplateEl = isInstanceMode &&
-                templateElementIds.has(element.id);
+        <Stage
+          ref={stageRef}
+          width={stageWidth}
+          height={stageHeight}
+          className="rounded-xl bg-white"
+          style={{
+            width: stageWidth,
+            height: stageHeight,
+          }}
+          onMouseDown={(event) => {
+            if (event.target === event.target.getStage()) {
+              onSelectElement(null);
+              setCropModeId(null);
+            }
+          }}
+          onTouchStart={handleTouchStart}
+          onTouchMove={handleTouchMove}
+          onTouchEnd={handleTouchEnd}
+          onTouchCancel={() => {
+            swipeRef.current = null;
+          }}
+        >
+          <Layer>
+            <Rect
+              x={0}
+              y={0}
+              width={stageWidth}
+              height={stageHeight}
+              fill={scene.page.backgroundColor}
+              listening={false}
+            />
+            <Rect
+              x={EDITOR_SAFE_MARGIN_PX * scale}
+              y={safeAreaY * scale}
+              width={(scene.page.widthPx - EDITOR_SAFE_MARGIN_PX * 2) * scale}
+              height={safeAreaHeight * scale}
+              stroke="#f97316"
+              dash={[8, 6]}
+              strokeWidth={1}
+              listening={false}
+            />
+            {scene.elements
+              .slice()
+              .sort((left, right) => left.zIndex - right.zIndex)
+              .map((element) => {
+                const isTemplateEl = isInstanceMode &&
+                  templateElementIds.has(element.id);
 
-              // For template elements in instance mode: render but disable all interactions
-              if (isTemplateEl) {
-                const isTextEditable = templateTextElementIds.has(element.id);
-                return (
-                  <TemplateLayerElement
-                    key={element.id}
-                    element={element}
-                    scale={scale}
-                    assetMap={assetMap}
-                    isTextEditable={isTextEditable}
-                    isSelected={selectedElementId === element.id}
-                    isEditing={editingTextId === element.id}
-                    onSelect={() => onSelectElement(element.id)}
-                    onEnterEdit={isTextEditable &&
-                        element.type === "text" &&
-                        !element.typographyVersion &&
-                        !element.locked && onTextCommit
-                      ? () => {
-                        onSelectElement(element.id);
-                        setEditingTextId(element.id);
-                      }
-                      : undefined}
-                  />
-                );
-              }
-
-              // Normal (user) element rendering
-              if (element.type === "image") {
-                const imageSrc = assetMap.get(element.assetId)?.previewUrl ??
-                  assetMap.get(element.assetId)?.downloadUrl ??
-                  null;
-                if (cropModeId === element.id) {
+                // For template elements in instance mode: render but disable all interactions
+                if (isTemplateEl) {
+                  const isTextEditable = templateTextElementIds.has(element.id);
                   return (
-                    <CanvasImageCropOverlay
+                    <TemplateLayerElement
+                      key={element.id}
+                      element={element}
+                      scale={scale}
+                      assetMap={assetMap}
+                      isTextEditable={isTextEditable}
+                      isSelected={selectedElementId === element.id}
+                      isEditing={editingTextId === element.id}
+                      onSelect={() => onSelectElement(element.id)}
+                      onEnterEdit={isTextEditable &&
+                          element.type === "text" &&
+                          !element.typographyVersion &&
+                          !element.locked && onTextCommit
+                        ? () => {
+                          onSelectElement(element.id);
+                          setEditingTextId(element.id);
+                        }
+                        : undefined}
+                    />
+                  );
+                }
+
+                // Normal (user) element rendering
+                if (element.type === "image") {
+                  const imageSrc = assetMap.get(element.assetId)?.previewUrl ??
+                    assetMap.get(element.assetId)?.downloadUrl ??
+                    null;
+                  if (cropModeId === element.id) {
+                    return (
+                      <CanvasImageCropOverlay
+                        key={element.id}
+                        element={element}
+                        src={imageSrc}
+                        scale={scale}
+                        onUpdateCrop={(nextCrop) => {
+                          updateElement(element.id, (current) =>
+                            current.type === "image"
+                              ? {
+                                ...current,
+                                crop: {
+                                  ...current.crop,
+                                  x: nextCrop.x,
+                                  y: nextCrop.y,
+                                },
+                              }
+                              : current);
+                        }}
+                      />
+                    );
+                  }
+                  return (
+                    <CanvasImageElement
                       key={element.id}
                       element={element}
                       src={imageSrc}
                       scale={scale}
-                      onUpdateCrop={(nextCrop) => {
-                        updateElement(element.id, (current) =>
-                          current.type === "image"
-                            ? {
-                              ...current,
-                              crop: {
-                                ...current.crop,
-                                x: nextCrop.x,
-                                y: nextCrop.y,
-                              },
-                            }
-                            : current);
+                      isSelected={selectedElementId === element.id}
+                      onSelect={() => onSelectElement(element.id)}
+                      onEnterCropMode={() => {
+                        onSelectElement(element.id);
+                        setCropModeId(element.id);
+                      }}
+                      onDragEnd={(position) => {
+                        updateElement(element.id, (current) => ({
+                          ...current,
+                          ...position,
+                        }));
+                      }}
+                      onTransformEnd={(next) => {
+                        updateElement(element.id, (current) => ({
+                          ...current,
+                          ...next,
+                        }));
                       }}
                     />
                   );
                 }
-                return (
-                  <CanvasImageElement
-                    key={element.id}
-                    element={element}
-                    src={imageSrc}
-                    scale={scale}
-                    isSelected={selectedElementId === element.id}
-                    onSelect={() => onSelectElement(element.id)}
-                    onEnterCropMode={() => {
-                      onSelectElement(element.id);
-                      setCropModeId(element.id);
-                    }}
-                    onDragEnd={(position) => {
-                      updateElement(element.id, (current) => ({
-                        ...current,
-                        ...position,
-                      }));
-                    }}
-                    onTransformEnd={(next) => {
-                      updateElement(element.id, (current) => ({
-                        ...current,
-                        ...next,
-                      }));
-                    }}
-                  />
-                );
-              }
 
-              if (element.type === "text") {
-                return (
-                  <CanvasTextElement
-                    key={element.id}
-                    element={element}
-                    scale={scale}
-                    isSelected={selectedElementId === element.id}
-                    isEditing={editingTextId === element.id}
-                    onSelect={() => onSelectElement(element.id)}
-                    onEnterEdit={!element.locked && onTextCommit
-                      ? () => setEditingTextId(element.id)
-                      : undefined}
-                    onDragEnd={(position) => {
-                      updateElement(element.id, (current) => ({
-                        ...current,
-                        ...position,
-                      }));
-                    }}
-                    onTransformEnd={(next) => {
-                      updateElement(element.id, (current) => ({
-                        ...current,
-                        ...next,
-                      }));
-                    }}
-                  />
-                );
-              }
+                if (element.type === "text") {
+                  return (
+                    <CanvasTextElement
+                      key={element.id}
+                      element={element}
+                      scale={scale}
+                      isSelected={selectedElementId === element.id}
+                      isEditing={editingTextId === element.id}
+                      onSelect={() => onSelectElement(element.id)}
+                      onEnterEdit={!element.locked && onTextCommit
+                        ? () => setEditingTextId(element.id)
+                        : undefined}
+                      onDragEnd={(position) => {
+                        updateElement(element.id, (current) => ({
+                          ...current,
+                          ...position,
+                        }));
+                      }}
+                      onTransformEnd={(next) => {
+                        updateElement(element.id, (current) => ({
+                          ...current,
+                          ...next,
+                        }));
+                      }}
+                    />
+                  );
+                }
 
-              if (element.type === "shape") {
-                return (
-                  <CanvasShapeElement
-                    key={element.id}
-                    element={element}
-                    scale={scale}
-                    isSelected={selectedElementId === element.id}
-                    onSelect={() => onSelectElement(element.id)}
-                    onDragEnd={(position) => {
-                      updateElement(element.id, (current) => ({
-                        ...current,
-                        ...position,
-                      }));
-                    }}
-                    onTransformEnd={(next) => {
-                      updateElement(element.id, (current) => ({
-                        ...current,
-                        ...next,
-                      }));
-                    }}
-                  />
-                );
-              }
+                if (element.type === "shape") {
+                  return (
+                    <CanvasShapeElement
+                      key={element.id}
+                      element={element}
+                      scale={scale}
+                      isSelected={selectedElementId === element.id}
+                      onSelect={() => onSelectElement(element.id)}
+                      onDragEnd={(position) => {
+                        updateElement(element.id, (current) => ({
+                          ...current,
+                          ...position,
+                        }));
+                      }}
+                      onTransformEnd={(next) => {
+                        updateElement(element.id, (current) => ({
+                          ...current,
+                          ...next,
+                        }));
+                      }}
+                    />
+                  );
+                }
 
-              return null;
-            })}
-          {isBackCover
-            ? (
-              <>
-                <Rect
-                  x={EDITOR_SAFE_MARGIN_PX * scale}
-                  y={brandBandY * scale}
-                  width={(scene.page.widthPx - EDITOR_SAFE_MARGIN_PX * 2) *
-                    scale}
-                  height={BACK_COVER_BRAND_BAND_PX * scale}
-                  fill="#f5f5f4"
-                  listening={false}
-                />
-                <Rect
-                  x={EDITOR_SAFE_MARGIN_PX * scale}
-                  y={brandBandY * scale}
-                  width={(scene.page.widthPx - EDITOR_SAFE_MARGIN_PX * 2) *
-                    scale}
-                  height={1}
-                  fill="#d6d3d1"
-                  listening={false}
-                />
-                <Text
-                  x={EDITOR_SAFE_MARGIN_PX * scale}
-                  y={(brandBandY + BACK_COVER_BRAND_BAND_PX / 2) * scale -
-                    9 * scale}
-                  width={(scene.page.widthPx - EDITOR_SAFE_MARGIN_PX * 2) *
-                    scale}
-                  height={BACK_COVER_BRAND_BAND_PX * scale}
-                  text={BACK_COVER_BRAND_TEXT}
-                  fontFamily="Helvetica, Arial, sans-serif"
-                  fontSize={18 * scale}
-                  fontStyle="bold"
-                  fill="#44403c"
-                  align="center"
-                  verticalAlign="top"
-                  listening={false}
-                />
-              </>
-            )
-            : null}
-        </Layer>
-      </Stage>
-      {editingElement && onTextCommit
-        ? (
-          <CanvasTextEditor
-            key={editingElement.id}
-            element={editingElement}
-            scale={scale}
-            onCommit={(text) => finishTextEdit(text)}
-            onCancel={() => finishTextEdit(null)}
-          />
-        )
-        : null}
+                return null;
+              })}
+            {isBackCover
+              ? (
+                <>
+                  <Rect
+                    x={EDITOR_SAFE_MARGIN_PX * scale}
+                    y={brandBandY * scale}
+                    width={(scene.page.widthPx - EDITOR_SAFE_MARGIN_PX * 2) *
+                      scale}
+                    height={BACK_COVER_BRAND_BAND_PX * scale}
+                    fill="#f5f5f4"
+                    listening={false}
+                  />
+                  <Rect
+                    x={EDITOR_SAFE_MARGIN_PX * scale}
+                    y={brandBandY * scale}
+                    width={(scene.page.widthPx - EDITOR_SAFE_MARGIN_PX * 2) *
+                      scale}
+                    height={1}
+                    fill="#d6d3d1"
+                    listening={false}
+                  />
+                  <Text
+                    x={EDITOR_SAFE_MARGIN_PX * scale}
+                    y={(brandBandY + BACK_COVER_BRAND_BAND_PX / 2) * scale -
+                      9 * scale}
+                    width={(scene.page.widthPx - EDITOR_SAFE_MARGIN_PX * 2) *
+                      scale}
+                    height={BACK_COVER_BRAND_BAND_PX * scale}
+                    text={BACK_COVER_BRAND_TEXT}
+                    fontFamily="Helvetica, Arial, sans-serif"
+                    fontSize={18 * scale}
+                    fontStyle="bold"
+                    fill="#44403c"
+                    align="center"
+                    verticalAlign="top"
+                    listening={false}
+                  />
+                </>
+              )
+              : null}
+          </Layer>
+        </Stage>
+        {editingElement && onTextCommit
+          ? (
+            <CanvasTextEditor
+              key={editingElement.id}
+              element={editingElement}
+              scale={scale}
+              onCommit={(text) => finishTextEdit(text)}
+              onCancel={() => finishTextEdit(null)}
+            />
+          )
+          : null}
       </div>
     </div>
   );

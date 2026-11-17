@@ -76,9 +76,7 @@ export default function PageFilmstrip({
                 background: isActive
                   ? "var(--color-primary-muted)"
                   : "var(--color-surface)",
-                color: isActive
-                  ? "var(--color-primary)"
-                  : "var(--color-text)",
+                color: isActive ? "var(--color-primary)" : "var(--color-text)",
                 opacity: disabled && !isActive ? 0.6 : 1,
               }}
             >

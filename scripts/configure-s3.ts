@@ -31,11 +31,18 @@ function required(name: string): string {
   return value;
 }
 
-function allowedOrigins(): string[] {
-  const raw =
+function allowedOrigins(requireExplicit: boolean): string[] {
+  const configured =
     process.env.CORS_ALLOWED_ORIGINS?.trim() ||
-    process.env.NEXTAUTH_URL?.trim() ||
-    "http://localhost:3000";
+    process.env.NEXTAUTH_URL?.trim();
+  // The localhost fallback is a dry-run convenience only: applying it to a
+  // real bucket would replace production CORS rules with a localhost origin.
+  if (!configured && requireExplicit) {
+    throw new Error(
+      "CORS_ALLOWED_ORIGINS or NEXTAUTH_URL must be set before applying bucket CORS rules (refusing to apply the localhost dry-run default).",
+    );
+  }
+  const raw = configured || "http://localhost:3000";
   const origins = raw.split(",").map((value) => {
     const url = new URL(value.trim());
     if (url.protocol !== "https:" && url.protocol !== "http:") {
@@ -88,8 +95,8 @@ function lifecycleRules(): LifecycleRule[] {
 async function main() {
   const bucket = required("S3_BUCKET_NAME");
   const region = required("AWS_REGION");
-  const origins = allowedOrigins();
   const apply = process.argv.includes("--apply");
+  const origins = allowedOrigins(apply);
 
   const policy = bucketPolicy(bucket);
   const publicAccessBlock = {
@@ -198,6 +205,8 @@ async function main() {
         ),
     ],
     [
+      // PutBucketLifecycleConfiguration REPLACES the bucket's entire lifecycle
+      // configuration: any existing rule not present in `lifecycle` is removed.
       "lifecycle",
       () =>
         client.send(
