@@ -33,7 +33,7 @@ if (action === 'unit') {
 } else if (action === 'pricing') {
   run('node_modules/tsx/dist/cli.mjs', ['src/lib/pricing/__tests__/engine.test.ts']);
 } else if (action === 'design') {
-  run('node_modules/@playwright/test/cli.js', ['test', '--config', 'playwright.design.config.ts']);
+  run('node_modules/@playwright/test/cli.js', ['test', '--config', 'playwright.design.config.ts', ...process.argv.slice(3)]);
 } else if (action === 'design-server') {
   run('node_modules/tsx/dist/cli.mjs', ['scripts/design-browser-server.mts']);
 } else if (action === 'migrate') {

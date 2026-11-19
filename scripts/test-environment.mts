@@ -7,6 +7,8 @@ const inheritedNames = [
   'TEMP', 'TMP', 'TMPDIR', 'HOME', 'USERPROFILE', 'LOCALAPPDATA', 'APPDATA',
   'PROGRAMFILES', 'ProgramFiles', 'ProgramFiles(x86)', 'ProgramData',
   'CI', 'TERM', 'COLORTERM', 'FORCE_COLOR', 'NO_COLOR', 'NODE_ENV',
+  // Playwright must find browsers installed outside the default cache (CI).
+  'PLAYWRIGHT_BROWSERS_PATH',
 ];
 // Runners execute from the workspace root, including Playwright's CJS loader.
 const networkGuard = pathToFileURL(resolve('scripts/test-network-guard.mjs'));

@@ -39,7 +39,9 @@ const server = await createServer({
         if (download) {
           const url = new URL(req.url!, 'http://127.0.0.1:3200');
           const mode = download[1];
-          const kind = url.searchParams.get('kind');
+          // Closed alphabets only: decoded query values never reach the markup.
+          const kind = url.searchParams.get('kind') === 'reading' ? 'reading' : 'print';
+          const disposition = url.searchParams.get('disposition') === 'inline' ? 'inline' : 'attachment';
           const content = kind === 'reading' ? readingBytes : pdfBytes;
           const status = mode === 'missing' ? 404 : mode === 'unauthenticated' ? 401 : mode === 'error' && !recovered.has(mode) ? 503 : 200;
           res.setHeader('Cache-Control', 'private, no-store');
@@ -47,12 +49,12 @@ const server = await createServer({
             res.statusCode = status;
             res.setHeader('Content-Type', 'text/html; charset=utf-8');
             const message = status === 404 ? 'The stored PDF is missing.' : status === 401 ? 'Sign in to request this PDF.' : 'The PDF request could not be started. Please retry.';
-            res.end(`<!doctype html><html lang="en"><title>PDF unavailable</title><main><h1>PDF unavailable</h1><p role="alert">${message}</p><a href="${url.pathname}?kind=${kind}">Retry PDF request</a><a href="/tests/browser-fixtures/design.html?pdfCase=${mode}">Back to fixture</a></main></html>`);
+            const retry = `${url.pathname}?${new URLSearchParams({ kind, disposition })}`;
+            res.end(`<!doctype html><html lang="en"><title>PDF unavailable</title><main><h1>PDF unavailable</h1><p role="alert">${message}</p><a href="${retry}">Retry PDF request</a><a href="/tests/browser-fixtures/design.html?pdfCase=${mode}">Back to fixture</a></main></html>`);
             return;
           }
           res.setHeader('Content-Type', 'application/pdf');
           res.setHeader('Content-Length', content.length);
-          const disposition = url.searchParams.get('disposition') === 'inline' ? 'inline' : 'attachment';
           res.setHeader('Content-Disposition', `${disposition}; filename="controlled-pdf-download-${kind === 'reading' ? 'reading-74x105mm' : 'print-sheet-a4-fold'}.pdf"`);
           if (mode === 'slow' || mode === 'interrupted') {
             res.write(content.subarray(0, 128));

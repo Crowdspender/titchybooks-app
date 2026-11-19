@@ -8,6 +8,7 @@ import {
     SEED_RECIPES,
 } from "../../prisma/seed-recipes";
 import {
+    createEmptyEditorScene,
     editorElementSchema,
     type EditorScene,
     editorSceneSchema,
@@ -17,7 +18,12 @@ import { layoutDesignText } from "@/lib/editor/design-text-layout";
 import { DEFAULT_RESOLVED_CONFIG } from "@/lib/pricing/constants";
 import "@/app/globals.css";
 
-const pdfCase = new URLSearchParams(location.search).get("pdfCase");
+const params = new URLSearchParams(location.search);
+const pdfCase = params.get("pdfCase");
+// bootCase mounts the editor without a submissionId so the boot path creates
+// drafts through the mocked POST /api/submissions, exercising pointer and
+// intent ownership without a database.
+const bootCase = params.has("bootCase");
 const recipe = SEED_RECIPES[0];
 const elements = elementSeeds(recipe).map((row) => ({
     ...row,
@@ -32,8 +38,8 @@ const initial = {
     status: "DRAFT",
     mode: "EDITOR",
     isTemplate: false,
-    templateId: "fixture-template",
-    templateVersion: 1,
+    templateId: "fixture-template" as string | null,
+    templateVersion: 1 as number | null,
     pages: pageSeeds(recipe).map((row) => {
         const templateTextOverrides = Object.fromEntries(
             elements.filter((element) =>
@@ -58,9 +64,40 @@ const initial = {
 };
 const stored = sessionStorage.getItem(fixtureKey);
 const book: typeof initial = stored ? JSON.parse(stored) : initial;
+// Drafts issued by the mocked create endpoint; kept in memory only.
+const createdBooks = new Map<string, typeof initial>();
+function createBook(n: number): typeof initial {
+    return {
+        id: `created-${n}`,
+        userId: "fixture-user",
+        revision: 0,
+        title: "",
+        status: "DRAFT",
+        mode: "EDITOR",
+        isTemplate: false,
+        templateId: null,
+        templateVersion: null,
+        pages: pageSeeds(recipe).map((row) => ({
+            ...row,
+            revision: 0,
+            sceneJson: JSON.stringify(createEmptyEditorScene()),
+        })),
+    };
+}
+let currentSubmissionId: string | undefined = bootCase ? undefined : "fixture";
 const controls = {
     failPage: "",
-    failFonts: new URLSearchParams(location.search).has("failFonts"),
+    failFonts: params.has("failFonts"),
+    // Boot-path knobs: delay the create POST, 404 the created draft loads,
+    // count create requests, and record every accepted server save.
+    createDelay: Number(params.get("createDelay") ?? 0),
+    failLoad: params.has("failLoad"),
+    createCount: 0,
+    saves: [] as Array<{ part: string; value: string; revision: number }>,
+    setSubmissionId: (id: string | undefined) => {
+        currentSubmissionId = id;
+        render();
+    },
     book,
     layouts: () =>
         book.pages.map((page) => {
@@ -124,6 +161,50 @@ window.fetch = async (input, init) => {
             }],
         });
     }
+    if (!pdfCase && url.pathname === "/api/submissions" && init?.method === "POST") {
+        controls.createCount++;
+        if (controls.createDelay > 0) {
+            await new Promise((resolve) => setTimeout(resolve, controls.createDelay));
+        }
+        const created = createBook(controls.createCount);
+        createdBooks.set(created.id, created);
+        return json({ submission: created });
+    }
+    const createdMatch = url.pathname.match(
+        /^\/api\/submissions\/(created-\d+)(?:\/pages\/(.+))?$/,
+    );
+    if (createdMatch) {
+        const created = createdBooks.get(createdMatch[1]);
+        if (!created) return json({ error: "Unknown draft" }, 404);
+        if (createdMatch[2]) {
+            if (init?.method !== "PUT") return json({ error: "Unsupported method" }, 405);
+            const page = created.pages.find((page) => page.pageLabel === createdMatch[2]);
+            if (!page) return json({ error: "Unknown page" }, 404);
+            const body = JSON.parse(String(init.body)) as {
+                scene: EditorScene;
+                revision: number;
+            };
+            if (body.revision !== page.revision) {
+                return json({ error: "Stale revision" }, 409);
+            }
+            page.sceneJson = JSON.stringify(body.scene);
+            page.revision++;
+            controls.saves.push({ part: page.pageLabel, value: page.sceneJson, revision: page.revision });
+            return json({ page });
+        }
+        if (init?.method === "PATCH") {
+            const body = JSON.parse(String(init.body)) as { title: string; revision: number };
+            if (body.revision !== created.revision) {
+                return json({ error: "Stale title revision" }, 409);
+            }
+            created.title = body.title;
+            created.revision++;
+            controls.saves.push({ part: "title", value: created.title, revision: created.revision });
+        } else if (controls.failLoad) {
+            return json({ error: "Draft not found" }, 404);
+        }
+        return json({ submission: created });
+    }
     // Native PDF links are served by the controlled HTTP fixture, not this fetch mock.
     if (url.pathname === "/api/assets") return json({ assets: [] });
     if (url.pathname.includes("/api/pricing")) {
@@ -163,6 +244,7 @@ window.fetch = async (input, init) => {
         }
         page.sceneJson = JSON.stringify(body.scene);
         page.revision++;
+        controls.saves.push({ part: page.pageLabel, value: page.sceneJson, revision: page.revision });
         sessionStorage.setItem(fixtureKey, JSON.stringify(book));
         return json({ page });
     }
@@ -174,24 +256,29 @@ window.fetch = async (input, init) => {
             }
             book.title = body.title;
             book.revision++;
+            controls.saves.push({ part: "title", value: book.title, revision: book.revision });
             sessionStorage.setItem(fixtureKey, JSON.stringify(book));
         }
         return json({ submission: book });
     }
     return json({ error: "Not available in isolated fixture" }, 503);
 };
-createRoot(document.getElementById("root")!).render(
-    <>
-        <div className="border-b bg-amber-50 px-6 py-2 text-xs">
-            LOCAL FIXTURE · No database, accounts, or external services
-        </div>
-        {pdfCase
-            ? (
-                <div className="p-6">
-                    <SubmissionList />
-                </div>
-            )
-            : <EditorWorkspace submissionId="fixture" />}
-        <Toaster />
-    </>,
-);
+const root = createRoot(document.getElementById("root")!);
+function render() {
+    root.render(
+        <>
+            <div className="border-b bg-amber-50 px-6 py-2 text-xs">
+                LOCAL FIXTURE · No database, accounts, or external services
+            </div>
+            {pdfCase
+                ? (
+                    <div className="p-6">
+                        <SubmissionList />
+                    </div>
+                )
+                : <EditorWorkspace submissionId={currentSubmissionId} />}
+            <Toaster />
+        </>,
+    );
+}
+render();
