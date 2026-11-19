@@ -73,6 +73,34 @@ export function parseArtifactManifest(value: unknown): ArtifactManifest | null {
   return result.success ? result.data : null;
 }
 
+export interface ArtifactAvailability {
+  printSheet: boolean;
+  readingPdf: boolean;
+  legacyPrintOnly: boolean;
+}
+
+/**
+ * Availability under the download route's manifest rules: a malformed or
+ * mismatched manifest would 409 at transfer time, so links must not be
+ * advertised. A null manifest is a valid historical fact (print-only books).
+ */
+export function artifactAvailability(submission: {
+  id: string;
+  revision: number;
+  pdfS3Key: string | null;
+  readingPdfS3Key: string | null;
+  artifactManifest: unknown;
+}): ArtifactAvailability {
+  const manifest = parseArtifactManifest(submission.artifactManifest);
+  const mismatch = submission.artifactManifest !== null &&
+    (!manifest || manifest.submissionId !== submission.id || manifest.submissionRevision !== submission.revision);
+  const printSheet = Boolean(submission.pdfS3Key) && !mismatch &&
+    (!manifest || manifest.print.s3Key === submission.pdfS3Key);
+  const readingPdf = Boolean(submission.readingPdfS3Key) && !mismatch &&
+    (!manifest || manifest.reading.s3Key === submission.readingPdfS3Key);
+  return { printSheet, readingPdf, legacyPrintOnly: printSheet && !readingPdf && submission.artifactManifest === null };
+}
+
 export function sha256(bytes: Buffer): string {
   return createHash("sha256").update(bytes).digest("hex");
 }

@@ -1,12 +1,12 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import sharp from 'sharp';
-import { PDFArray, PDFDocument, PDFName, PDFRawStream, decodePDFRawStream } from 'pdf-lib';
+import { PDFArray, PDFDocument, PDFName, PDFNumber, PDFRawStream, decodePDFRawStream } from 'pdf-lib';
 import { generateTitchybookPdf } from '@/lib/pdf/generate';
 import { renderSceneToPdfPage } from '@/lib/pdf/vector-render';
 import { parseRenderSnapshot, type RenderSnapshot } from '@/lib/pdf/snapshot';
 import { PAGE_LABELS } from '@/lib/constants';
 import { createEmptyEditorScene } from '@/lib/editor/schema';
-import { FULL_INTERIOR_TEXT, imageElement, sceneWithText } from '../fixtures/scenes';
+import { FULL_INTERIOR_TEXT, imageElement, sceneWithText, textElement } from '../fixtures/scenes';
 import { buildPinnedTemplate, buildTemplateManifest } from '@/lib/ai/template-contract';
 import { interiorFlowPages, paginatePlan, prepareAiBookLayout } from '@/lib/ai/flow';
 import { applyPrintPalette, selectPrintPalette } from '@/lib/ai/print-palette';
@@ -177,11 +177,19 @@ it('renders text near the bottom of all six expanded private interior pages', as
 it('embeds upright pages in reading order independently of scene storage order', async () => {
   const input = snapshot();
   const colors = ['#112233', '#334455', '#556677', '#778899', '#99aabb', '#bbccdd', '#dd1122', '#22dd44'];
-  input.pages.forEach((page, i) => { page.scene.elements = []; page.scene.page.backgroundColor = colors[i]; });
+  // A solid color survives a 180° raster rotation; an asymmetric corner
+  // marker does not, so orientation is checked on the embedded pixels.
+  input.pages.forEach((page, i) => {
+    const marker = textElement('corner-marker', 'X');
+    if (marker.type !== 'text') throw new Error('Expected a text marker');
+    page.scene.elements = [{ ...marker, x: 10, y: 10, fontSize: 64, color: '#000000' }];
+    page.scene.page.backgroundColor = colors[i];
+  });
   const before = JSON.stringify(input);
   const result = await generateTitchybookPdf(input, 'reading-order');
   const reading = await PDFDocument.load(storage.objects.get(result.readingPdfS3Key)!);
   expect(result.previews.map(page => page.pageLabel)).toEqual(READING_ORDER);
+  expect(reading.getPageCount()).toBe(READING_ORDER.length);
   for (const [index, page] of reading.getPages().entries()) {
     const objects = page.node.Resources()!.lookup(PDFName.of('XObject'));
     const entries = (objects as import('pdf-lib').PDFDict).entries();
@@ -189,6 +197,21 @@ it('embeds upright pages in reading order independently of scene storage order',
     const pixels = Buffer.from(decodePDFRawStream(image).decode());
     const expected = input.pages.find(page => page.pageLabel === READING_ORDER[index])!.scene.page.backgroundColor;
     expect(pixels.subarray(0, 3).toString('hex')).toBe(expected.slice(1));
+    const width = (image.dict.lookup(PDFName.of('Width')) as PDFNumber).asNumber();
+    const height = (image.dict.lookup(PDFName.of('Height')) as PDFNumber).asNumber();
+    const channels = pixels.length / (width * height);
+    const isInk = (x: number, y: number) => {
+      const offset = (y * width + x) * channels;
+      return pixels[offset] < 30 && pixels[offset + 1] < 30 && pixels[offset + 2] < 30;
+    };
+    let topLeftInk = 0;
+    for (let y = 0; y < Math.floor(height * 0.15); y++)
+      for (let x = 0; x < Math.floor(width * 0.3); x++) if (isInk(x, y)) topLeftInk += 1;
+    expect(topLeftInk).toBeGreaterThan(0);
+    let bottomRightInk = 0;
+    for (let y = Math.floor(height * 0.85); y < height; y++)
+      for (let x = Math.floor(width * 0.7); x < width; x++) if (isInk(x, y)) bottomRightInk += 1;
+    expect(bottomRightInk).toBe(0);
     expect(page.getRotation().angle).toBe(0);
     expect(page.getWidth()).toBeCloseTo(mmToPoints(74));
     expect(page.getHeight()).toBeCloseTo(mmToPoints(105));

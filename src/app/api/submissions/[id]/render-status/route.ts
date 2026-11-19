@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
+import { artifactAvailability } from "@/lib/pdf/artifacts";
 const privateHeaders = { 'Cache-Control': 'private, no-store', Vary: 'Cookie' };
 
 export const dynamic = "force-dynamic";
@@ -30,6 +31,7 @@ export async function GET(
       userId: true,
       status: true,
       title: true,
+      revision: true,
       pdfS3Key: true,
       readingPdfS3Key: true,
       artifactManifest: true,
@@ -61,9 +63,11 @@ export async function GET(
 
   const job = submission.renderJobs[0] ?? null;
   const canDownload = submission.status === "APPROVED" || session.user.role === "ADMIN";
-  const hasPrintSheet = Boolean(submission.pdfS3Key);
-  const hasReadingPdf = Boolean(submission.readingPdfS3Key);
-  const legacyPrintOnly = hasPrintSheet && !hasReadingPdf && submission.artifactManifest === null;
+  // Mirror the download route's manifest rules before advertising a link: a
+  // malformed or mismatched manifest would 409 at transfer time. Null
+  // manifests remain valid historical facts.
+  const { printSheet: hasPrintSheet, readingPdf: hasReadingPdf, legacyPrintOnly } =
+    artifactAvailability({ id, ...submission });
   const base = `/api/submissions/${encodeURIComponent(id)}/downloads`;
   const available = {
     printSheet: canDownload && hasPrintSheet,

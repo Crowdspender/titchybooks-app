@@ -3,15 +3,15 @@ import { Readable } from 'node:stream';
 import { PDFDocument } from 'pdf-lib';
 import { describeArtifact, type ArtifactManifest } from '@/lib/pdf/artifacts';
 import { pdfErrorResponse, submissionPdfResponse } from '@/lib/pdf/download';
-import { openS3Object, s3Client } from '@/lib/s3';
-import { GET as download } from '@/app/api/submissions/[id]/downloads/route';
-import { GET as aiDownload } from '@/app/api/ai/books/[id]/downloads/route';
+import { headS3Object, openS3Object, s3Client } from '@/lib/s3';
+import { GET as download, HEAD as downloadHead } from '@/app/api/submissions/[id]/downloads/route';
+import { GET as aiDownload, HEAD as aiHead } from '@/app/api/ai/books/[id]/downloads/route';
 
 const mocks = vi.hoisted(() => ({ find: vi.fn(), job: vi.fn(), auth: vi.fn() }));
 vi.mock('@/lib/prisma', () => ({ prisma: { submission: { findUnique: mocks.find }, aiBookJob: { findUnique: mocks.job } } }));
 vi.mock('@/auth', () => ({ auth: mocks.auth }));
 vi.mock('@/lib/s3', async () => ({
-  ...await vi.importActual<typeof import('@/lib/s3')>('@/lib/s3'), openS3Object: vi.fn(),
+  ...await vi.importActual<typeof import('@/lib/s3')>('@/lib/s3'), openS3Object: vi.fn(), headS3Object: vi.fn(),
 }));
 let bytes: Buffer;
 let manifest: ArtifactManifest;
@@ -35,6 +35,7 @@ beforeEach(async () => {
     reading: await describeArtifact({ kind: 'reading', s3Key: 'private/reading.pdf', bytes }) };
   source = Readable.from([bytes.subarray(0, 128), bytes.subarray(128)]);
   vi.mocked(openS3Object).mockResolvedValue({ body: source, size: bytes.length, contentType: 'application/octet-stream' });
+  vi.mocked(headS3Object).mockResolvedValue({ size: bytes.length, contentType: 'application/pdf' });
   mocks.find.mockResolvedValue(row());
   mocks.auth.mockResolvedValue({ user: owner });
   mocks.job.mockResolvedValue({ id: 'book', userId: owner.id, status: 'COMPLETED', submissionId: 'book' });
@@ -58,6 +59,25 @@ it('uses inline only when explicitly requested', async () => {
   expect(result.headers.get('content-disposition')).toMatch(/^inline;/);
   await result.arrayBuffer();
 });
+it('answers HEAD with verified metadata without opening the object body', async () => {
+  const result = await submissionPdfResponse(request(), 'book', owner, 'HEAD');
+  expect(result.status).toBe(200);
+  expect(result.body).toBeNull();
+  expect(result.headers.get('content-length')).toBe(String(bytes.length));
+  expect(result.headers.get('content-disposition')).toContain('print-sheet-a4-fold.pdf');
+  expect(headS3Object).toHaveBeenCalledWith('private/print.pdf');
+  expect(openS3Object).not.toHaveBeenCalled();
+});
+it('reports a missing object on HEAD without opening a body', async () => {
+  vi.mocked(headS3Object).mockResolvedValue(null);
+  expect((await submissionPdfResponse(request(), 'book', owner, 'HEAD')).status).toBe(404);
+  expect(openS3Object).not.toHaveBeenCalled();
+});
+it('rejects an unverifiable HEAD length against the published descriptor', async () => {
+  vi.mocked(headS3Object).mockResolvedValue({ size: bytes.length + 1, contentType: 'application/pdf' });
+  expect((await submissionPdfResponse(request(), 'book', owner, 'HEAD')).status).toBe(502);
+  expect(openS3Object).not.toHaveBeenCalled();
+});
 it.each([
   ['?kind=invalid', 400], ['', 400], ['?kind=print&disposition=bad', 400],
 ])('rejects invalid options %s before storage', async (query, code) => {
@@ -69,11 +89,13 @@ it('rejects expired authentication before database or storage access', async () 
   expect(mocks.find).not.toHaveBeenCalled();
   expect(openS3Object).not.toHaveBeenCalled();
 });
+// Factories run inside each test, after beforeEach has built the manifest:
+// the missing-key case must differ from the valid row only in pdfS3Key.
 it.each([
-  [null, 404], [{ ...row(), userId: 'other' }, 403], [{ ...row(), status: 'SUBMITTED' }, 403],
-  [{ ...row(), pdfS3Key: null }, 409], [{ ...row(), artifactManifest: {} }, 409],
+  [() => null, 404], [() => ({ ...row(), userId: 'other' }), 403], [() => ({ ...row(), status: 'SUBMITTED' }), 403],
+  [() => ({ ...row(), pdfS3Key: null }), 409], [() => ({ ...row(), artifactManifest: {} }), 409],
 ])('fails closed for missing, foreign, unapproved or inconsistent books %#', async (value, code) => {
-  mocks.find.mockResolvedValue(value);
+  mocks.find.mockResolvedValue(value());
   expect((await response()).status).toBe(code);
   expect(openS3Object).not.toHaveBeenCalled();
 });
@@ -125,8 +147,20 @@ it.each(['truncated', 'overflow', 'checksum', 'source-error'])('fails an incompl
   expect(source.destroyed).toBe(true);
 });
 it('does not consume storage until the response is read and releases it on cancellation', async () => {
+  source.destroy();
+  let pulls = 0;
+  source = new Readable({
+    read() {
+      pulls += 1;
+      this.push(pulls === 1 ? bytes.subarray(0, 128) : pulls === 2 ? bytes.subarray(128) : null);
+    },
+  });
+  vi.mocked(openS3Object).mockResolvedValue({ body: source, size: bytes.length, contentType: 'application/pdf' });
   const result = await response();
-  expect(source.readableLength).toBe(0);
+  // readableLength alone cannot prove laziness: a fully buffered source also
+  // reports zero. Record actual reads instead.
+  expect(pulls).toBe(0);
+  expect(source.destroyed).toBe(false);
   await result.body!.cancel();
   expect(source.destroyed).toBe(true);
 });
@@ -154,12 +188,32 @@ it.each(['submission', 'ai'])('delegates the %s route to the shared authenticate
   expect(result.headers.get('location')).toBeNull();
   expect(Buffer.from(await result.arrayBuffer())).toEqual(bytes);
 });
+it.each(['submission', 'ai'])('delegates the %s HEAD route to metadata-only verification', async kind => {
+  const result = await (kind === 'ai' ? aiHead : downloadHead)(request(), params);
+  expect(result.status).toBe(200);
+  expect(result.body).toBeNull();
+  expect(result.headers.get('content-length')).toBe(String(bytes.length));
+  expect(openS3Object).not.toHaveBeenCalled();
+});
 it.each([
   [null, 404], [{ userId: 'other', status: 'COMPLETED', submissionId: 'book' }, 403],
   [{ userId: owner.id, status: 'PROCESSING', submissionId: 'book' }, 409],
 ])('preserves AI job access and completion checks %#', async (job, code) => {
   mocks.job.mockResolvedValue(job);
   expect((await aiDownload(request(), params)).status).toBe(code);
+  expect(openS3Object).not.toHaveBeenCalled();
+});
+it.each([
+  [{ userId: owner.id, status: 'PROCESSING', submissionId: 'book' }],
+  [null],
+])('rejects an invalid AI download kind before the job lookup %#', async job => {
+  mocks.job.mockResolvedValue(job);
+  expect((await aiDownload(request('?kind=invalid'), params)).status).toBe(400);
+  expect(mocks.job).not.toHaveBeenCalled();
+});
+it('denies an AI job whose submission belongs to another account', async () => {
+  mocks.find.mockResolvedValue({ ...row(), userId: 'other' });
+  expect((await aiDownload(request(), params)).status).toBe(403);
   expect(openS3Object).not.toHaveBeenCalled();
 });
 it.each(['submission', 'ai'])('sanitizes %s authentication failures into visible retry responses', async kind => {
@@ -191,4 +245,14 @@ it('opens the actual SDK adapter as an abortable Node stream without buffering',
   expect(object.size).toBe(bytes.length);
   expect(send.mock.calls[0][0].input).toMatchObject({ Key: 'private/print.pdf' });
   expect(send.mock.calls[0][1]).toEqual({ abortSignal: controller.signal });
+});
+it('bounds storage connect and socket inactivity so a stalled transfer fails instead of hanging', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/s3')>('@/lib/s3');
+  const configured = actual.s3Client.config.requestHandler as unknown;
+  const handler = (typeof configured === 'function' ? await (configured as () => Promise<unknown>)() : configured) as { configProvider: Promise<{ connectionTimeout?: number; socketTimeout?: number }> };
+  // The pinned handler materializes its config on first handle(); until then
+  // the resolved defaults (including our timeouts) live in configProvider.
+  const configs = await handler.configProvider;
+  expect(configs.connectionTimeout).toBeGreaterThan(0);
+  expect(configs.socketTimeout).toBeGreaterThan(0);
 });

@@ -16,7 +16,11 @@ export interface RenderArtifacts {
 }
 export async function loadAssetBuffers(input: RenderSnapshot) {
   return new Map(await Promise.all(input.assets.map(async asset => {
-    const buffer = await downloadFromS3(asset.s3Key);
+    const raw = await downloadFromS3(asset.s3Key);
+    const probe = await sharp(raw).metadata();
+    // Finalized dimensions are EXIF-applied, but the SVG rasterizer and the
+    // vector extractor ignore EXIF, so normalize orientation once here.
+    const buffer = probe.orientation && probe.orientation !== 1 ? await sharp(raw).rotate().toBuffer() : raw;
     const metadata = !asset.width || !asset.height ? await sharp(buffer).metadata() : null;
     return [asset.id, { buffer, mimeType: asset.mimeType, width: asset.width ?? metadata?.width ?? 1,
       height: asset.height ?? metadata?.height ?? 1 }] as const;

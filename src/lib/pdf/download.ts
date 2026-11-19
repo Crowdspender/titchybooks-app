@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
-import { openS3Object } from '@/lib/s3';
+import { headS3Object, openS3Object } from '@/lib/s3';
 import { artifactFilename, parseArtifactManifest, type ArtifactKind } from './artifacts';
 
 export const privatePdfHeaders = {
@@ -44,8 +44,30 @@ function options(request: Request): { kind: ArtifactKind; disposition: 'inline' 
   return { kind, disposition };
 }
 
+/**
+ * Validate transfer options before any lookup so a malformed query fails fast
+ * with 400 instead of surfacing as a job/book state error. Returns null when
+ * the query is valid.
+ */
+export function pdfQueryErrorResponse(request: Request): NextResponse | null {
+  try { options(request); return null; }
+  catch (cause) {
+    if (cause instanceof PdfDownloadError) return pdfErrorResponse(request, cause.status, cause.message);
+    throw cause;
+  }
+}
+
+function pdfSuccessHeaders(kind: ArtifactKind, disposition: 'inline' | 'attachment', size: number, title: string | null) {
+  return {
+    ...privatePdfHeaders,
+    'Content-Type': 'application/pdf',
+    'Content-Length': String(size),
+    'Content-Disposition': `${disposition}; filename="${artifactFilename(kind, title)}"`,
+  };
+}
+
 /** Fresh authorization for every transfer; approved masters are only read, never regenerated. */
-export async function submissionPdfResponse(request: Request, id: string, actor: Actor | null): Promise<NextResponse> {
+export async function submissionPdfResponse(request: Request, id: string, actor: Actor | null, method: 'GET' | 'HEAD' = 'GET'): Promise<NextResponse> {
   let body: Awaited<ReturnType<typeof openS3Object>>['body'] | undefined;
   try {
     if (!actor?.id) throw new PdfDownloadError(401, 'Sign in to request this PDF.');
@@ -68,6 +90,16 @@ export async function submissionPdfResponse(request: Request, id: string, actor:
       throw new PdfDownloadError(409, 'The PDF does not match its published artifact record. Please contact support.');
     }
     const descriptor = manifest?.[kind];
+    if (method === 'HEAD') {
+      // Metadata-only transfer: HEAD must never open the object body, or every
+      // probe would pull the whole PDF out of storage.
+      const head = await headS3Object(key);
+      if (!head) throw new PdfDownloadError(404, 'The stored PDF is missing. Please contact support; retrying will not regenerate or replace an approved master.');
+      if (!Number.isSafeInteger(head.size) || !head.size || head.size < 0 || (descriptor && head.size !== descriptor.bytes)) {
+        throw new PdfDownloadError(502, 'The stored PDF length could not be verified. Please retry or contact support.');
+      }
+      return new NextResponse(null, { headers: pdfSuccessHeaders(kind, disposition, head.size, submission.title) });
+    }
     let object: Awaited<ReturnType<typeof openS3Object>>;
     try { object = await openS3Object(key, request.signal); }
     catch (cause) {
@@ -126,12 +158,7 @@ export async function submissionPdfResponse(request: Request, id: string, actor:
       },
       cancel() { finished = true; cleanup(); },
     }, { highWaterMark: 0 });
-    return new NextResponse(stream, { headers: {
-      ...privatePdfHeaders,
-      'Content-Type': 'application/pdf',
-      'Content-Length': String(size),
-      'Content-Disposition': `${disposition}; filename="${artifactFilename(kind, submission.title)}"`,
-    } });
+    return new NextResponse(stream, { headers: pdfSuccessHeaders(kind, disposition, size, submission.title) });
   } catch (cause) {
     body?.destroy();
     if (cause instanceof PdfDownloadError) return pdfErrorResponse(request, cause.status, cause.message);

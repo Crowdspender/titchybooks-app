@@ -23,7 +23,15 @@ it.each([
       />,
     );
     expect(screen.queryAllByRole("link")).toHaveLength(links);
-    if (missing) expect(screen.getByText(missing)).toBeDefined();
+    if (missing) {
+      // Existence is not visibility: the explanation must not be hidden.
+      const message = screen.getByText(missing);
+      expect(message.hasAttribute("hidden")).toBe(false);
+      expect(message.closest("[hidden]")).toBeNull();
+      expect(message.closest('[aria-hidden="true"]')).toBeNull();
+      expect(message.style.display).not.toBe("none");
+      expect(message.style.visibility).not.toBe("hidden");
+    }
     if (print) {
       expect(
         screen.getByRole("link", { name: "Download print sheet" }).getAttribute(

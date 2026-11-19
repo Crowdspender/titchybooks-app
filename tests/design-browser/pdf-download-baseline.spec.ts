@@ -10,7 +10,7 @@ test.use({ channel: 'chromium' });
 test.beforeEach(async ({ context, request }) => {
   await context.route('**/*', route => new URL(route.request().url()).origin === 'http://127.0.0.1:3200'
     ? route.continue() : route.abort());
-  await request.post('/fixtures/reset');
+  await expect(await request.post('/fixtures/reset')).toBeOK();
 });
 async function open(page: Page, mode: string) {
   await page.goto(`/tests/browser-fixtures/design.html?pdfCase=${mode}`);
@@ -99,7 +99,30 @@ test('HTTP failure is visible and a recovered retry saves a valid PDF', async ({
   expect((await PDFDocument.load(await readFile(info.outputPath('retry.pdf')))).getPageCount()).toBe(1);
 });
 
-test('preview is a separate inline native link', async ({ page, request }, info) => {
+test('an inline reading retry keeps kind and disposition after recovery', async ({ page, request }) => {
+  await page.goto('/api/submissions/download-fixture-error/downloads?kind=reading&disposition=inline');
+  await expect(page.getByRole('alert')).toContainText('could not be started');
+  const retry = page.getByRole('link', { name: 'Retry PDF request' });
+  const href = await retry.getAttribute('href');
+  expect(href).toContain('kind=reading');
+  expect(href).toContain('disposition=inline');
+  await request.post('/fixtures/recover');
+  const response = await request.get(href!);
+  expect(response.status()).toBe(200);
+  expect(response.headers()['content-disposition']).toMatch(/^inline; filename="controlled-pdf-download-reading-74x105mm\.pdf"/);
+  expect((await PDFDocument.load(await response.body())).getPageCount()).toBe(8);
+});
+
+test('a hostile kind value is normalized out of the error page markup', async ({ page }) => {
+  await page.goto('/api/submissions/download-fixture-error/downloads?kind=%22%3E%3Cscript%3Ealert(1)%3C/script%3E&disposition=%22onmouseover%3D%22alert(1)');
+  await expect(page.getByRole('alert')).toContainText('could not be started');
+  const retry = page.getByRole('link', { name: 'Retry PDF request' });
+  await expect(retry).toBeVisible();
+  expect(await retry.getAttribute('href')).toMatch(/\?kind=print&disposition=attachment$/);
+  expect(await page.locator('script').count()).toBe(0);
+});
+
+test('preview is a separate inline native link', async ({ page, context, request }, info) => {
   await open(page, 'normal');
   const preview = page.getByRole('link', { name: 'Preview reading PDF', exact: true });
   await expect(preview).toHaveAttribute('target', '_blank');
@@ -107,9 +130,17 @@ test('preview is a separate inline native link', async ({ page, request }, info)
   expect(href).toContain('kind=reading&disposition=inline');
   const response = await request.get(href!);
   expect(response.headers()['content-disposition']).toMatch(/^inline;/);
+  // Capture the popup's own navigation response: a 500 in the new tab must
+  // fail the test even when the separate API request succeeds.
+  const popupResponse = context.waitForEvent('response', candidate =>
+    candidate.request().isNavigationRequest() && candidate.url().endsWith(href!));
   const popup = page.waitForEvent('popup');
   await preview.click();
   const opened = await popup;
+  const navigation = await popupResponse;
+  expect(navigation.status()).toBe(200);
+  expect(navigation.headers()['content-type']).toContain('application/pdf');
+  expect(navigation.headers()['content-disposition']).toMatch(/^inline;/);
   await opened.waitForURL('**/*disposition=inline', { timeout: 15000 });
   expect(opened.url()).toContain('disposition=inline');
   await opened.screenshot({ path: info.outputPath('inline-preview.png') });

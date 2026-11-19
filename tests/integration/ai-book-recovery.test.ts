@@ -11,7 +11,7 @@ import { prisma } from '@/lib/prisma';
 // ownership, phase derivation and queue sampling all run for real.
 const session = vi.hoisted(() => ({ user: null as null | { id: string; role: string } }));
 vi.mock('@/auth', () => ({ auth: async () => (session.user ? { user: session.user } : null) }));
-const storage = vi.hoisted(() => ({ getPresignedDownloadUrl: vi.fn(), openS3Object: vi.fn() }));
+const storage = vi.hoisted(() => ({ getPresignedDownloadUrl: vi.fn(), openS3Object: vi.fn(), headS3Object: vi.fn() }));
 vi.mock('@/lib/s3', () => storage);
 vi.mock('@/lib/ai/client', () => ({ isAIConfigured: () => true }));
 
@@ -19,6 +19,7 @@ import { GET as listJobs, POST as startJob } from '@/app/api/ai/books/route';
 import { GET as jobStatus } from '@/app/api/ai/books/[id]/route';
 import { GET as download } from '@/app/api/ai/books/[id]/downloads/route';
 import { GET as renderStatus } from '@/app/api/submissions/[id]/render-status/route';
+import { GET as submissionDownload } from '@/app/api/submissions/[id]/downloads/route';
 
 let pdfBytes: Buffer;
 const params = (id: string) => ({ params: Promise.resolve({ id }) });
@@ -204,7 +205,7 @@ describe('AI book recovery surface', () => {
     session.user = await createUser('ADMIN');
     const proof = await downloadFor(job.id, 'print');
     expect(proof.status).toBe(200);
-    await proof.arrayBuffer();
+    expect(Buffer.from(await proof.arrayBuffer())).toEqual(pdfBytes);
 
     session.user = await createUser();
     expect((await downloadFor(job.id, 'print')).status).toBe(403);
@@ -253,6 +254,13 @@ describe('AI book recovery surface', () => {
     const half = await (await renderStatus(request(), params(printOnly.id))).json();
     expect(half).toMatchObject({ ready: false, readingPdfAvailable: false, readingPdfUrl: null });
     expect(half.pdfUrl).toBe(`/api/submissions/${printOnly.id}/downloads?kind=print`);
+
+    // The advertised print link must actually transfer the manifest-verified
+    // bytes, while the null reading key stays refused at the download route.
+    const printTransfer = await submissionDownload(request(`http://localhost/api/submissions/${printOnly.id}/downloads?kind=print`), params(printOnly.id));
+    expect(printTransfer.status).toBe(200);
+    expect(Buffer.from(await printTransfer.arrayBuffer())).toEqual(pdfBytes);
+    expect((await submissionDownload(request(`http://localhost/api/submissions/${printOnly.id}/downloads?kind=reading`), params(printOnly.id))).status).toBe(409);
 
     // A book queued for render is not downloadable yet.
     const unfinished = await createBook(owner.id, { status: 'PENDING' });

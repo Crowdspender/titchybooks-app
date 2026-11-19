@@ -26,6 +26,8 @@ test('real authenticated dashboard requests same-origin download and shows a san
   expect((await response).status()).toBe(503); // Node egress fence rejects real S3; this is not real-provider acceptance.
   await expect(page.getByRole('alert')).toContainText('could not be started');
   await expect(page.getByRole('link', { name: 'Retry PDF request' })).toBeVisible();
+  // The sanitized error page must never expose the retained storage key.
+  expect(await page.content()).not.toContain(`pdfs/${user.id}/${draft.id}/retained.pdf`);
   await page.screenshot({ path: info.outputPath('authenticated-download-error.png'), fullPage: true });
   expect(await db.submission.findUniqueOrThrow({ where: { id: draft.id } })).toEqual(before);
 });

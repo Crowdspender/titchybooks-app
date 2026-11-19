@@ -6,6 +6,7 @@ import {
   HeadObjectCommand,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { NodeHttpHandler } from "@smithy/node-http-handler";
 import type { Readable } from 'node:stream';
 
 export const s3Client = new S3Client({
@@ -14,6 +15,10 @@ export const s3Client = new S3Client({
     accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
     secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!,
   },
+  // The SDK ships with both timeouts disabled: a stalled storage socket would
+  // otherwise hang a streaming download forever. socketTimeout is inactivity-
+  // based, so large PDFs that keep delivering bytes are never cut off.
+  requestHandler: new NodeHttpHandler({ connectionTimeout: 5_000, socketTimeout: 30_000 }),
 });
 
 const BUCKET = process.env.S3_BUCKET_NAME!;

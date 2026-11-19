@@ -95,6 +95,19 @@ export const renderSnapshotSchema = z.discriminatedUnion('version', [
   renderSnapshotV1Schema,
 ]);
 
+/**
+ * Structural shape used by the asset-removal reference scan. Qualification
+ * policy (font hashes, print profile, panel counts) is deliberately excluded:
+ * retained snapshots must stay scannable after that policy evolves, and an
+ * absent historical snapshot is skipped by the caller.
+ */
+export const retainedRenderSnapshotSchema = z.object({
+  version: z.union([z.literal(1), z.literal(2)]),
+  pages: pageSchema,
+  assets: z.array(assetSchema),
+  images: imageSchema,
+});
+
 export type RenderSnapshot = z.infer<typeof renderSnapshotSchema>;
 export type RenderSnapshotV2 = z.infer<typeof renderSnapshotV2Schema>;
 export class InvalidRenderInput extends Error {}
