@@ -8,6 +8,8 @@ const statements = migration.match(/BEGIN;|LOCK TABLE[^;]+;|DO \$\$[\s\S]*?END \
 async function apply(tx: Prisma.TransactionClient) {
   // Exercise the exact migration statements in the caller's transaction. Temp
   // tables shadow public tables; nothing touches application or provider schemas.
+  // Prove the parser does not silently omit any executable migration statement.
+  expect(statements.join('').replace(/\s/g, '')).toBe(migration.replace(/^--.*$/gm, '').replace(/\s/g, ''));
   expect(statements).toHaveLength(6);
   expect(statements[0]).toBe('BEGIN;');
   expect(statements[5]).toBe('COMMIT;');
@@ -37,11 +39,23 @@ describe('additive settlement migration safety', () => {
     });
   });
 
-  it('stops at duplicate preflight without deleting either history row or adding columns', async () => {
+  it('stops at duplicate preflight before any schema change and preserves both history rows', async () => {
     await db.$transaction(async tx => {
       await legacyTables(tx);
       await tx.$executeRawUnsafe(`INSERT INTO "VaultEntry" VALUES ('second-vault', 'original-order', false, 'Second retained title')`);
       const before = await tx.$queryRawUnsafe('SELECT * FROM "VaultEntry" ORDER BY "id"');
+      // Preflight ordering is a property of the landed file, not of rollback:
+      // ROLLBACK TO SAVEPOINT would undo DDL that ran before the raise, so prove
+      // the duplicate check precedes the first schema change by executing the
+      // statements in order and stopping at the failing DO block.
+      expect(statements[1]).toMatch(/^LOCK TABLE "VaultEntry"/);
+      expect(statements[2]).toMatch(/^DO \$\$/);
+      expect(statements[3]).toMatch(/^ALTER TABLE "Order"/);
+      await tx.$executeRawUnsafe('SAVEPOINT preflight_probe');
+      await tx.$executeRawUnsafe(statements[1]);
+      await expect(tx.$executeRawUnsafe(statements[2])).rejects.toThrow('Duplicate VaultEntry.orderId links exist');
+      await tx.$executeRawUnsafe('ROLLBACK TO SAVEPOINT preflight_probe');
+      // The whole migration still aborts atomically on the same duplicate.
       await tx.$executeRawUnsafe('SAVEPOINT migration_attempt');
       await expect(apply(tx)).rejects.toThrow('Duplicate VaultEntry.orderId links exist');
       await tx.$executeRawUnsafe('ROLLBACK TO SAVEPOINT migration_attempt');

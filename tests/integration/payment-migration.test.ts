@@ -56,16 +56,23 @@ describe('additive payment reconciliation migration', () => {
       await tx.$executeRawUnsafe('CREATE TABLE neon_auth.batch5_payment_preservation_probe (id TEXT, value TEXT)');
       await tx.$executeRawUnsafe("INSERT INTO neon_auth.batch5_payment_preservation_probe VALUES ('synthetic-original', 'preserve')");
       const probe = await tx.$queryRawUnsafe('SELECT * FROM neon_auth.batch5_payment_preservation_probe');
-      await apply(tx);
+      // Independent pre-migration baseline: captured before apply so a statement
+      // that mutated public rows could not move the reference along with the copy.
       const columns = Object.keys(before).filter(key => !added.includes(key)).map(key => `"${key}"`).join(',');
       const original = await tx.$queryRawUnsafe(`SELECT ${columns} FROM public."Order" ORDER BY "id"`);
+      await apply(tx);
       expect(await tx.$queryRawUnsafe(`SELECT ${columns} FROM "Order" ORDER BY "id"`)).toEqual(original);
       expect(await tx.$queryRawUnsafe('SELECT "paymentState", "paymentSummary", "paymentHold", "paymentRevision" FROM "Order"'))
         .toEqual([{ paymentState: null, paymentSummary: null, paymentHold: false, paymentRevision: 0 }]);
       expect(await tx.$queryRawUnsafe('SELECT to_jsonb(a) AS row FROM "PaymentAttempt" a')).toEqual([]);
       expect(await tx.$queryRawUnsafe('SELECT * FROM "PaymentEvent"')).toEqual([]);
       expect(await tx.$queryRawUnsafe('SELECT * FROM neon_auth.batch5_payment_preservation_probe')).toEqual(probe);
+      // Consent/artifact preservation is checked inside the rehearsal too: after
+      // rollback a mutating migration would look innocent, so compare before it.
+      expect(await tx.vaultEntry.findUniqueOrThrow({ where: { id: vault.id } })).toEqual(vault);
+      expect(await tx.submission.findUniqueOrThrow({ where: { id: submission.id } })).toEqual(submission);
     });
+    // Post-rollback checks remain as test-isolation verification.
     expect(await db.order.findUniqueOrThrow({ where: { id: order.id } })).toEqual(before);
     expect(await db.vaultEntry.findUniqueOrThrow({ where: { id: vault.id } })).toEqual(vault);
     expect(await db.submission.findUniqueOrThrow({ where: { id: submission.id } })).toEqual(submission);

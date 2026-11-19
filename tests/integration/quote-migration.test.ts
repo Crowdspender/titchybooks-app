@@ -9,7 +9,9 @@ const added = ['quoteSnapshot', 'expectedMinorAmount', 'fxRate', 'quoteAcceptedA
 afterEach(async () => { await cleanupFixtures(); });
 async function rehearsal(work: (tx: Prisma.TransactionClient) => Promise<void>) {
   try {
-    await db.$transaction(async tx => { await work(tx); throw new Error('ROLLBACK_QUOTE_REHEARSAL'); });
+    // The freeze loop makes dozens of savepoint round-trips; the default 5s
+    // interactive-transaction budget can expire mid-loop under load.
+    await db.$transaction(async tx => { await work(tx); throw new Error('ROLLBACK_QUOTE_REHEARSAL'); }, { timeout: 30000 });
   } catch (error) { if (!(error instanceof Error) || error.message !== 'ROLLBACK_QUOTE_REHEARSAL') throw error; }
 }
 async function legacyTable(tx: Prisma.TransactionClient) {
@@ -18,6 +20,8 @@ async function legacyTable(tx: Prisma.TransactionClient) {
   for (const column of added) await tx.$executeRawUnsafe(`ALTER TABLE "Order" DROP COLUMN "${column}"`);
 }
 async function apply(tx: Prisma.TransactionClient) {
+  // Prove the parser does not silently omit any executable migration statement.
+  expect(statements.join('').replace(/\s/g, '')).toBe(migration.replace(/^--.*$/gm, '').replace(/\s/g, ''));
   expect(statements).toHaveLength(9); expect(statements[0]).toBe('BEGIN;'); expect(statements.at(-1)).toBe('COMMIT;');
   for (const sql of statements.slice(1, -1)) {
     // Only namespace changes: exact constraint/trigger body runs on shadow temp tables.
