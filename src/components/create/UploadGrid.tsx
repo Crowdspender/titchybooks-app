@@ -39,6 +39,9 @@ export default function UploadGrid() {
   const [submitting, setSubmitting] = useState(false);
   const submitLock = useRef(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  // A failed POST with no response may already have committed the book.
+  const [submitAmbiguous, setSubmitAmbiguous] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
 
   const handleUploaded = useCallback(
     (pageLabel: PageLabel, s3Key: string, file: File) => {
@@ -63,6 +66,7 @@ export default function UploadGrid() {
     submitLock.current = true;
     setSubmitting(true);
     setSubmitError(null);
+    setSubmitAmbiguous(false);
 
     try {
       const images = PAGE_LABELS.map((label, idx) => {
@@ -83,17 +87,23 @@ export default function UploadGrid() {
       });
 
       if (!res.ok) {
-        const data = await res.json();
+        const data = await res.json().catch(() => ({}));
         throw new Error(data.error || "Submission failed");
       }
 
       toast.success("Images submitted. PDF generation is queued.");
+      setSubmitted(true);
       router.push("/dashboard");
+      // Navigation is asynchronous and the grid stays mounted until the
+      // dashboard replaces it: keep the lock so a second click cannot create
+      // a duplicate book from the same batch.
     } catch (err) {
       const message = err instanceof Error ? err.message : "Submission failed";
+      // Only a request that never received a response is ambiguous; any HTTP
+      // error status is a definitive rejection of the atomic create.
+      setSubmitAmbiguous(err instanceof TypeError);
       setSubmitError(message);
       toast.error(message);
-    } finally {
       submitLock.current = false;
       setSubmitting(false);
     }
@@ -126,7 +136,10 @@ export default function UploadGrid() {
 
       {submitError && (
         <p role="alert">
-          {submitError}. Your selected images remain available to retry.
+          {submitError}.{" "}
+          {submitAmbiguous
+            ? "The book may already have been created — check your dashboard before retrying. Your selected images remain available."
+            : "Your selected images remain available to retry."}
         </p>
       )}
       <div className="flex justify-center">
@@ -136,7 +149,11 @@ export default function UploadGrid() {
           disabled={!allUploaded || submitting}
           className="px-6 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
         >
-          {submitting ? "Submitting..." : "Create Titchybooks"}
+          {submitted
+            ? "Opening dashboard…"
+            : submitting
+            ? "Submitting..."
+            : "Create Titchybooks"}
         </button>
       </div>
     </div>

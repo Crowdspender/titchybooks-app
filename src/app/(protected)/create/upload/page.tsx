@@ -5,11 +5,14 @@ import { prisma } from "@/lib/prisma";
 import UploadGrid from "@/components/create/UploadGrid";
 
 export default async function UploadPage({ searchParams }: {
-    searchParams: Promise<{ replaces?: string }>;
+    searchParams: Promise<{ replaces?: string | string[] }>;
 }) {
     const session = await auth();
     if (!session?.user?.id) redirect("/login");
     const { replaces } = await searchParams;
+    // Next.js supplies an array for repeated parameters; only a single
+    // nonempty string may reach Prisma's scalar id filter.
+    if (replaces !== undefined && (typeof replaces !== "string" || replaces.length === 0)) notFound();
     const original = replaces
         ? await prisma.submission.findFirst({
             where: {

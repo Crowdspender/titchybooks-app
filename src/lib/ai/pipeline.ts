@@ -27,6 +27,7 @@ import { normalizeContentPlan, parseContentPlan, parseContentRepair, type Conten
 import { interiorFlowPages, interiorFlowRepairTargets, interiorFlowSlotIds, interiorFlowWindow, paginatePlan, prepareAiBookLayout, type FlowWindow } from "./flow";
 import { applyPrintPalette, printSafetyIssues, selectPrintPalette } from "./print-palette";
 import { getOpenAIClient, getOpenAIModel } from "./client";
+import { AssetReferenceError } from "@/lib/assets/references";
 import { hasTerminalFinding, isRetryable, repairFeedback, repairableSlotIds, runQaChecklist, type QaReport } from "./qa";
 import {
   buildPinnedTemplate,
@@ -897,7 +898,9 @@ export async function processAiBookJob(
       console.warn(JSON.stringify({ event: "ai-book-lease-lost", jobId: job.id, stage: currentStage }));
       return;
     }
-    const terminal = error instanceof AiBookTerminalError;
+    // A removed source can never become valid again: retrying the same pin
+    // would spend the whole failure budget without an actionable outcome.
+    const terminal = error instanceof AiBookTerminalError || error instanceof AssetReferenceError;
     const message = error instanceof Error ? error.message : undefined;
     console.error(
       JSON.stringify({

@@ -55,6 +55,56 @@ it('rejects an APNG animation-control chunk', async () => {
   const bytes = Buffer.concat([storage.bytes.subarray(0, 33), animation, storage.bytes.subarray(33)]);
   await expect(verifyImageBytes(bytes)).rejects.toBeInstanceOf(ImageUploadError);
 });
+const CRC_TABLE = Array.from({ length: 256 }, (_, n) => {
+  let c = n;
+  for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+  return c >>> 0;
+});
+function crc32(bytes: Buffer): number {
+  let crc = 0xffffffff;
+  for (const byte of bytes) crc = CRC_TABLE[(crc ^ byte) & 0xff] ^ (crc >>> 8);
+  return (crc ^ 0xffffffff) >>> 0;
+}
+function pngChunk(type: string, data: Buffer): Buffer {
+  const chunk = Buffer.alloc(12 + data.length);
+  chunk.writeUInt32BE(data.length, 0);
+  chunk.write(type, 4, 'ascii');
+  data.copy(chunk, 8);
+  chunk.writeUInt32BE(crc32(chunk.subarray(4, 8 + data.length)), 8 + data.length);
+  return chunk;
+}
+it('rejects a valid two-frame animated PNG', async () => {
+  const chunks: Array<{ type: string; data: Buffer }> = [];
+  for (let offset = 8; offset < storage.bytes.length;) {
+    const length = storage.bytes.readUInt32BE(offset);
+    chunks.push({ type: storage.bytes.toString('ascii', offset + 4, offset + 8), data: storage.bytes.subarray(offset + 8, offset + 8 + length) });
+    offset += 12 + length;
+  }
+  const ihdr = chunks.find(chunk => chunk.type === 'IHDR')!.data;
+  const idat = chunks.find(chunk => chunk.type === 'IDAT')!.data;
+  const frameControl = (sequence: number) => {
+    const data = Buffer.alloc(26);
+    data.writeUInt32BE(sequence, 0);
+    data.writeUInt32BE(8, 4); data.writeUInt32BE(12, 8);
+    data.writeUInt16BE(100, 20); data.writeUInt16BE(1000, 22);
+    return data;
+  };
+  const animationControl = Buffer.alloc(8);
+  animationControl.writeUInt32BE(2, 0);
+  const secondFrame = Buffer.alloc(4 + idat.length);
+  secondFrame.writeUInt32BE(2, 0); idat.copy(secondFrame, 4);
+  const bytes = Buffer.concat([
+    storage.bytes.subarray(0, 8), pngChunk('IHDR', ihdr), pngChunk('acTL', animationControl),
+    pngChunk('fcTL', frameControl(0)), pngChunk('IDAT', idat),
+    pngChunk('fcTL', frameControl(1)), pngChunk('fdAT', secondFrame), pngChunk('IEND', Buffer.alloc(0)),
+  ]);
+  // This sharp build does not report APNG page counts, so prove the fixture
+  // is a well-formed image by decoding it; the acTL chunk walker is the
+  // animation defense under test.
+  expect((await sharp(bytes).metadata()).format).toBe('png');
+  expect((await sharp(bytes).raw().toBuffer()).length).toBe(8 * 12 * 3);
+  await expect(verifyImageBytes(bytes)).rejects.toThrow('Animated');
+});
 it('finalizes exact verified bytes, and preserves the accepted key after an upload overwrite', async () => {
   const firstBytes = Buffer.from(storage.bytes);
   const first = await finalizeImageUpload('assets/user/upload.png', 'assets/user/canonical');
@@ -75,13 +125,24 @@ it.each([null, { size: 0 }, { size: MAX_FILE_SIZE + 1 }])('rejects invalid HEAD 
   expect(uploadToS3).not.toHaveBeenCalled();
 });
 
-it('bounds the actual S3 stream even when the advertised size is smaller', async () => {
+it('bounds the actual S3 stream before EOF even when the advertised size is smaller', async () => {
   const actual = await vi.importActual<typeof import('@/lib/s3')>('@/lib/s3');
-  const body = Readable.from([Buffer.alloc(4), Buffer.alloc(5)]);
+  let releaseEof!: () => void;
+  const eof = new Promise<void>(resolve => { releaseEof = resolve; });
+  let emitted = 0;
+  const body = new Readable({
+    read() {
+      if (emitted < 2) { this.push(Buffer.alloc(emitted === 0 ? 4 : 5)); emitted += 1; return; }
+      void eof.then(() => this.push(null)); // Stay open until the test permits EOF.
+    },
+  });
   const destroy = vi.spyOn(body, 'destroy');
   vi.spyOn(actual.s3Client, 'send').mockResolvedValueOnce({ Body: body, ContentLength: 1 } as never);
-  await expect(actual.downloadFromS3('source', { maxBytes: 8 })).rejects.toBeInstanceOf(actual.S3ObjectSizeError);
-  expect(destroy).toHaveBeenCalled();
+  try {
+    await expect(actual.downloadFromS3('source', { maxBytes: 8 })).rejects.toBeInstanceOf(actual.S3ObjectSizeError);
+    expect(destroy).toHaveBeenCalled();
+    expect(body.readableEnded).toBe(false); // The size check fired before EOF was permitted.
+  } finally { releaseEof(); body.destroy(); }
 });
 it('rejects a short S3 transfer rather than accepting a misleading encoded size', async () => {
   const actual = await vi.importActual<typeof import('@/lib/s3')>('@/lib/s3');

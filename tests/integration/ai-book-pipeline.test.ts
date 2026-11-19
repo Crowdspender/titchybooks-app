@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { randomUUID } from 'node:crypto';
 import {
   db,
   createUser,
@@ -8,7 +9,7 @@ import {
 import { prisma } from '@/lib/prisma';
 import type { Prisma } from '@prisma/client';
 import { SEED_RECIPES, elementSeeds, type SeedTextElement } from '../../prisma/seed-recipes';
-import { FULL_INTERIOR_TEXT, NATURAL_GUIDE_SECTIONS } from '../fixtures/scenes';
+import { FULL_INTERIOR_TEXT, NATURAL_GUIDE_SECTIONS, imageElement } from '../fixtures/scenes';
 import { editorElementSchema } from '@/lib/editor/schema';
 import { parseRenderSnapshot } from '@/lib/pdf/snapshot';
 
@@ -239,6 +240,33 @@ async function composedOverride(submissionId: string, pageLabel: PageLabel, slot
 }
 
 describe('autonomous AI book pipeline', () => {
+  it('fails terminally on the first attempt when a persisted pin references a removed image', async () => {
+    // Simulate the race outcome the stage fence guards against: the pin was
+    // captured while the image was active, then the source was removed before
+    // the stage transaction persisted it. Retrying can never make it valid.
+    const assetId = randomUUID();
+    await db.asset.create({ data: { id: assetId, userId: user.id, s3Key: `assets/${user.id}/${assetId}.png`, originalFilename: 'fixture.png', mimeType: 'image/png', fileSize: 1, width: 1, height: 1, deletedAt: new Date() } });
+    const pin = recipePin(RECIPE, templateId);
+    pin.pages.find(page => page.pageLabel === 'FRONT_COVER')!.elements.push(imageElement(assetId));
+    pin.manifest.pages.find(page => page.pageLabel === 'FRONT_COVER')!.images.push({ id: `image-${assetId}`, assetId, box: { x: 30, y: 40, width: 250, height: 90 } });
+    const { jobId } = await enqueueAiBookJob(user.id, 'a story about a rainy day', templateId);
+    await db.aiBookJob.update({ where: { id: jobId }, data: { stage: 'COMPOSE', stageOutput: {
+      templateId, pinnedTemplate: pin, manifest: pin.manifest, contentPlan: fakePlan(), manuscriptPlan: fakePlan(),
+    } as unknown as Prisma.InputJsonValue } });
+    const job = await claimAiBookJob();
+    expect(job).not.toBeNull();
+
+    await processAiBookJob(job!);
+
+    const stored = await db.aiBookJob.findUniqueOrThrow({ where: { id: jobId } });
+    expect(stored.status).toBe('FAILED');
+    expect(stored.failureCount).toBe(1);
+    expect(stored.completedAt).toBeInstanceOf(Date);
+    expect(stored.errorMessage).toContain('missing or removed');
+    // The composition transaction rolled back: no draft was created.
+    expect(await db.submission.count({ where: { userId: user.id, isTemplate: false } })).toBe(0);
+  });
+
   it('runs CONCEPT -> CONTENT -> COMPOSE -> RENDER -> QA and auto-approves', async () => {
     const sourceBefore = await db.templateElement.findMany({ where: { templateId }, orderBy: { order: 'asc' } });
     const { jobId } = await enqueueAiBookJob(user.id, 'a story about a rainy day', templateId);

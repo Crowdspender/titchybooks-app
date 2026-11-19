@@ -5,6 +5,7 @@ import { ACCEPTED_IMAGE_TYPES } from "@/lib/constants";
 import { prisma } from "@/lib/prisma";
 import { finalizeImageUpload, ImageUploadError } from "@/lib/assets/upload";
 import { lockAssetReferences } from '@/lib/assets/references';
+import { deleteS3Object } from '@/lib/s3';
 
 export const dynamic = "force-dynamic";
 
@@ -81,6 +82,12 @@ export async function POST(request: Request) {
           create: { id: uploadId, userId: session.user.id!, originalFilename: parsed.data.originalFilename, ...verified },
         });
       });
+      // A competing completion may have won the upsert with different staged
+      // bytes. The losing canonical key is content-addressed and referenced by
+      // no row, so it can be removed without touching the winner or the source.
+      if (asset.s3Key !== verified.s3Key) {
+        await deleteS3Object(verified.s3Key).catch(error => console.error('Failed to clean up losing canonical upload:', error));
+      }
     }
     if (asset.userId !== session.user.id) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     if (asset.deletedAt) return NextResponse.json({ error: 'This image was removed from the library.' }, { status: 409 });

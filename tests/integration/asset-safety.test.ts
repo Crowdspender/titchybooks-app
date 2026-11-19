@@ -6,14 +6,16 @@ import sharp from 'sharp';
 import { db, createDraft, createUser, cleanupFixtures } from '../fixtures/database';
 import { Prisma } from '@prisma/client';
 import { createEmptyEditorScene } from '@/lib/editor/schema';
-import { imageElement } from '../fixtures/scenes';
+import { imageElement, textElement } from '../fixtures/scenes';
 import { PAGE_LABELS } from '@/lib/constants';
 import { buildPinnedTemplate, buildTemplateManifest } from '@/lib/ai/template-contract';
 import { createInstanceWithOverrides, duplicateAsDraft, lockSubmission, savePage } from '@/lib/editor/submission-store';
 import { lockAssetReferences, removeAssetFromLibrary, requireNoTemplateDependents } from '@/lib/assets/references';
 import { enqueueInTransaction, enqueueRenderJob, claimRenderJob, processRenderJob } from '@/lib/pdf/render-job';
 import { enqueueAiBookJob, claimAiBookJob, advanceStage, continueAiBook, completeAiBook, AiBookStage } from '@/lib/ai/ai-book-job';
-import { PDFDocument } from 'pdf-lib';
+import { PDFDocument, PDFDict, PDFName, PDFRawStream } from 'pdf-lib';
+import { loadAssetBuffers } from '@/lib/pdf/render-output';
+import type { RenderSnapshot } from '@/lib/pdf/snapshot';
 import { prisma } from '@/lib/prisma';
 import { GET as list, POST as register } from '@/app/api/assets/route';
 import { GET as image } from '@/app/api/assets/[assetId]/image/route';
@@ -91,6 +93,44 @@ it('concurrent finalizations produce one accepted asset without replacing its so
   expect(await db.asset.count({ where: { userId: state.user!.id } })).toBe(1);
   expect(state.objects.get(assets[0].s3Key)).toEqual(source.bytes);
 });
+it('cleans up the losing canonical object when concurrent completions finalize different bytes', async () => {
+  const source = await uploaded();
+  const green = await sharp({ create: { width: 12, height: 16, channels: 3, background: 'green' } }).png().toBuffer();
+  const uploadedA = deferred(); const allowA = deferred(); const uploadedB = deferred();
+  // A finalizes the blue bytes, then pauses before its upsert while the staged
+  // object is overwritten; B finalizes the green bytes and waits for A's row.
+  vi.mocked(uploadToS3)
+    .mockImplementationOnce(async (key, bytes) => {
+      state.objects.set(key, Buffer.from(bytes));
+      state.objects.set(source.body.s3Key, green);
+      uploadedA.resolve(); await allowA.promise;
+    })
+    .mockImplementationOnce(async (key, bytes) => {
+      state.objects.set(key, Buffer.from(bytes));
+      uploadedB.resolve();
+      await vi.waitFor(async () => { expect(await db.asset.findUnique({ where: { id: source.id } })).not.toBeNull(); });
+    });
+  vi.mocked(deleteS3Object).mockImplementationOnce(async key => { state.objects.delete(key); });
+  const first = register(request(source.body));
+  await uploadedA.promise;
+  const second = register(request(source.body));
+  await uploadedB.promise;
+  allowA.resolve();
+  const responses = await Promise.all([first, second]);
+  expect(responses.map(response => response.status)).toEqual([201, 201]);
+  const assets = await Promise.all(responses.map(async response => (await response.json()).asset));
+  expect(assets[0].id).toBe(assets[1].id);
+  expect(assets[0].s3Key).toBe(assets[1].s3Key);
+  // The first accepted object stays immutable; only the loser is removed.
+  expect(state.objects.get(assets[0].s3Key)).toEqual(source.bytes);
+  expect(deleteS3Object).toHaveBeenCalledTimes(1);
+  const loserKey = vi.mocked(deleteS3Object).mock.calls[0][0];
+  expect(loserKey).toContain('/canonical/');
+  expect(loserKey).not.toBe(assets[0].s3Key);
+  expect(state.objects.has(loserKey)).toBe(false);
+  expect(state.objects.get(source.body.s3Key)).toEqual(green);
+  expect(await db.asset.count({ where: { userId: state.user!.id } })).toBe(1);
+});
 it('rejects corrupt/missing objects and foreign or canonical registration keys', async () => {
   const source = await uploaded();
   state.objects.set(source.body.s3Key, Buffer.from('not an image'));
@@ -134,6 +174,31 @@ it('mints only staging keys, regardless of the declared filename extension', asy
   const result = await response.json();
   expect(result.s3Key).toBe(`assets/${state.user!.id}/${result.assetId}.png`);
   expect(result.s3Key).not.toContain('/canonical/');
+});
+it('normalizes EXIF orientation for render decoders to match the finalized dimensions', async () => {
+  const id = randomUUID();
+  const s3Key = `assets/${state.user!.id}/${id}.jpg`;
+  const left = await sharp({ create: { width: 20, height: 20, channels: 3, background: 'red' } }).png().toBuffer();
+  const right = await sharp({ create: { width: 20, height: 20, channels: 3, background: 'blue' } }).png().toBuffer();
+  const landscape = await sharp({ create: { width: 40, height: 20, channels: 3, background: 'black' } })
+    .composite([{ input: left, left: 0, top: 0 }, { input: right, left: 20, top: 0 }]).png().toBuffer();
+  const jpeg = await sharp(landscape).jpeg().withMetadata({ orientation: 6 }).toBuffer();
+  state.objects.set(s3Key, jpeg);
+  const response = await register(request({ s3Key, originalFilename: 'photo.jpg', mimeType: 'image/jpeg', fileSize: 1, width: 1, height: 1 }));
+  expect(response.status).toBe(201);
+  const { asset } = await response.json();
+  expect(asset).toMatchObject({ width: 20, height: 40 });
+  // The canonical object keeps the original bytes; decoders normalize instead.
+  expect(state.objects.get(asset.s3Key)).toEqual(jpeg);
+  const buffers = await loadAssetBuffers({ assets: [{ id: asset.id, s3Key: asset.s3Key, mimeType: asset.mimeType, width: asset.width, height: asset.height }] } as RenderSnapshot);
+  const { data, info } = await sharp(buffers.get(asset.id)!.buffer).png().raw().toBuffer({ resolveWithObject: true });
+  expect(info.width).toBe(20);
+  expect(info.height).toBe(40);
+  const px = (x: number, y: number) => { const i = (y * info.width + x) * info.channels; return [data[i], data[i + 1], data[i + 2]]; };
+  expect(px(0, 0)[0]).toBeGreaterThan(200);
+  expect(px(0, 0)[2]).toBeLessThan(60);
+  expect(px(0, 39)[2]).toBeGreaterThan(200);
+  expect(px(0, 39)[0]).toBeLessThan(60);
 });
 
 const bookParams = (id: string) => ({ params: Promise.resolve({ id }) });
@@ -184,13 +249,50 @@ it.each(['scene', 'element', 'pin', 'render', 'ai-output'] as const)('fails clos
   if (source === 'scene') await db.submissionPage.update({ where: { submissionId_pageLabel: { submissionId: draft.id, pageLabel: 'FRONT_COVER' } }, data: { sceneJson: '{broken' } });
   if (source === 'element') await db.templateElement.create({ data: { templateId: draft.id, pageLabel: 'FRONT_COVER', order: 0, elementJson: '{broken' } });
   if (source === 'pin') await db.submission.update({ where: { id: draft.id }, data: { pinnedTemplate: { pages: [] } } });
-  if (source === 'render') await db.renderJob.create({ data: { submissionId: draft.id, status: 'FAILED', inputSnapshot: Prisma.DbNull } });
+  if (source === 'render') await db.renderJob.create({ data: { submissionId: draft.id, status: 'FAILED', inputSnapshot: { version: 2, pages: 'broken' } } });
   if (source === 'ai-output') await db.aiBookJob.create({ data: { userId: state.user!.id, concept: 'fixture', status: 'FAILED', stageOutput: ['uncertain'] } });
   const response = await remove(request(), params(asset.id));
   expect(response.status).toBe(409);
   expect((await response.json()).error).toContain('could not be verified');
   expect((await db.asset.findUniqueOrThrow({ where: { id: asset.id } })).deletedAt).toBeNull();
   expect(state.objects.has(asset.s3Key)).toBe(true);
+});
+
+it('keeps historical renders without a snapshot removable, while still checking their manifest', async () => {
+  const asset = await accepted(); const draft = await createDraft(state.user!.id);
+  const { jobId } = await enqueueRenderJob(draft.id, state.user!);
+  await db.renderJob.update({ where: { id: jobId }, data: { status: 'FAILED', inputSnapshot: Prisma.DbNull } });
+  expect((await remove(request(), params(asset.id))).status).toBe(200);
+  await db.asset.update({ where: { id: asset.id }, data: { deletedAt: null } });
+  await db.renderJob.update({ where: { id: jobId }, data: { artifactManifest: { retainedSource: asset.s3Key } } });
+  expect((await remove(request(), params(asset.id))).status).toBe(409);
+});
+
+it('scans retained snapshots without applying current qualification policy', async () => {
+  const asset = await accepted(); const draft = await createDraft(state.user!.id);
+  // A retained V2 snapshot whose font hashes and print profile are stale must
+  // not block removal of an asset it never referenced.
+  await db.renderJob.create({ data: { submissionId: draft.id, status: 'COMPLETED', inputSnapshot: {
+    version: 2, submissionId: draft.id, userId: state.user!.id,
+    pages: [{ pageLabel: 'FRONT_COVER', scene: createEmptyEditorScene() }],
+    assets: [], images: [], renderer: 'raster', mode: 'EDITOR',
+    typography: { version: 1, fonts: { 'lora-400-normal': ['0'.repeat(64)] } },
+    printProfile: 'retired-profile',
+  } } });
+  expect((await remove(request(), params(asset.id))).status).toBe(200);
+  await db.asset.update({ where: { id: asset.id }, data: { deletedAt: null } });
+  await db.renderJob.create({ data: { submissionId: draft.id, status: 'COMPLETED', inputSnapshot: {
+    version: 2, pages: [], images: [],
+    assets: [{ id: asset.id, s3Key: asset.s3Key, mimeType: 'image/png', width: 12, height: 16 }],
+  } } });
+  expect((await remove(request(), params(asset.id))).status).toBe(409);
+});
+
+it('does not treat saved text that equals an asset ID or key as an image use', async () => {
+  const asset = await accepted(); const draft = await createDraft(state.user!.id);
+  await savePage(draft.id, 'FRONT_COVER', state.user!, { ...createEmptyEditorScene(), elements: [textElement('text-1', asset.id)] }, 0);
+  await db.aiBookJob.create({ data: { userId: state.user!.id, concept: 'fixture', status: 'FAILED', stageOutput: { contentPlan: { title: asset.s3Key } } } });
+  expect((await remove(request(), params(asset.id))).status).toBe(200);
 });
 
 it('protects template artwork, frozen pins, and authorized reads after template edits and detachment', async () => {
@@ -209,8 +311,17 @@ it('protects template artwork, frozen pins, and authorized reads after template 
   await savePage(template.id, 'FRONT_COVER', admin, createEmptyEditorScene(), 1);
   await db.submission.update({ where: { id: template.id }, data: { status: 'DRAFT' } });
   expect((await image(request(), params(asset.id))).status).toBe(200);
+  // A soft-removed source stays readable through the frozen pin that retains
+  // it, even though the owner's library no longer lists it.
+  await db.asset.update({ where: { id: asset.id }, data: { deletedAt: new Date() } });
+  expect((await image(request(), params(asset.id))).status).toBe(200);
+  expect((await (await list()).json()).assets).toHaveLength(0);
+  await db.asset.update({ where: { id: asset.id }, data: { deletedAt: null } });
   const copy = await duplicateAsDraft(id, author);
   expect((await db.submission.findUniqueOrThrow({ where: { id: copy } })).pinnedTemplate).toEqual(frozen);
+  // Remove the duplicate so the post-detach read is authorized by the detached
+  // book's materialized scenes alone, not by another pinned draft.
+  expect((await deleteDraft(request(), bookParams(copy))).status).toBe(200);
   state.user = admin;
   expect((await remove(request(), params(asset.id))).status).toBe(409);
   state.user = author;
@@ -264,8 +375,21 @@ it('retains render snapshots and actually renders their source after mutable sce
   await processRenderJob(job);
   const stored = await db.renderJob.findUniqueOrThrow({ where: { id: job.id } });
   expect(stored.status).toBe('COMPLETED');
-  expect((await PDFDocument.load(state.objects.get(stored.pdfS3Key!)!)).getPageCount()).toBe(1);
-  expect((await PDFDocument.load(state.objects.get(stored.readingPdfS3Key!)!)).getPageCount()).toBe(8);
+  const printDoc = await PDFDocument.load(state.objects.get(stored.pdfS3Key!)!);
+  const readingDoc = await PDFDocument.load(state.objects.get(stored.readingPdfS3Key!)!);
+  expect(printDoc.getPageCount()).toBe(1);
+  expect(readingDoc.getPageCount()).toBe(8);
+  // Page counts alone cannot prove the frozen image survived the cleared
+  // scene: inspect the embedded image XObjects on the relevant pages.
+  const imageCount = (doc: PDFDocument, index: number) => {
+    const xObjects = doc.getPage(index).node.Resources()?.lookup(PDFName.of('XObject'), PDFDict);
+    return xObjects ? xObjects.entries().filter(([, ref]) => {
+      const stream = doc.context.lookup(ref);
+      return stream instanceof PDFRawStream && stream.dict.get(PDFName.of('Subtype')) === PDFName.of('Image');
+    }).length : 0;
+  };
+  expect(imageCount(printDoc, 0)).toBeGreaterThanOrEqual(8);
+  expect(imageCount(readingDoc, 0)).toBeGreaterThanOrEqual(1);
   expect((await remove(request(), params(asset.id))).status).toBe(409);
 }, 30000);
 
@@ -336,11 +460,11 @@ it.each(['save-first', 'remove-first'] as const)('serializes removal against sav
     } else await removeAssetFromLibrary(tx, asset.id, owner.id);
     ready.resolve(); await release.promise;
   }, { timeout: 10000 });
-  await ready.promise;
+  await Promise.race([ready.promise, first]);
   const second = order === 'save-first'
     ? remove(request(), params(asset.id)).then(response => response.status)
     : savePage(draft.id, 'FRONT_COVER', owner, imageScene(asset.id), 0).then(() => 200, error => error.status);
-  try { await expectFenceWaiter(); } finally { release.resolve(); }
+  try { await expectFenceWaiter(); } finally { release.resolve(); await Promise.allSettled([first, second]); }
   await first;
   expect(await second).toBe(order === 'save-first' ? 409 : 400);
   const row = await db.asset.findUniqueOrThrow({ where: { id: asset.id } });
@@ -357,9 +481,9 @@ it('holds the source fence throughout enqueue so retained input wins over remova
     ready.resolve(); await release.promise;
     return result;
   }, { timeout: 10000 });
-  await ready.promise;
+  await Promise.race([ready.promise, enqueue]);
   const removal = remove(request(), params(asset.id));
-  try { await expectFenceWaiter(); } finally { release.resolve(); }
+  try { await expectFenceWaiter(); } finally { release.resolve(); await Promise.allSettled([enqueue, removal]); }
   await enqueue;
   expect((await removal).status).toBe(409);
 });
@@ -399,10 +523,10 @@ it.each(['creation-first', 'deletion-first'] as const)('serializes template inst
     else { await requireNoTemplateDependents(tx, template.id); await tx.submission.delete({ where: { id: template.id } }); }
     ready.resolve(); await release.promise;
   }, { timeout: 10000 });
-  await ready.promise;
+  await Promise.race([ready.promise, first]);
   const second = order === 'creation-first'
     ? deleteTemplate(request(), bookParams(template.id)) : fromTemplate(request({ templateId: template.id }));
-  try { await expectFenceWaiter(); } finally { release.resolve(); }
+  try { await expectFenceWaiter(); } finally { release.resolve(); await Promise.allSettled([first, second]); }
   await first;
   expect((await second).status).toBe(order === 'creation-first' ? 409 : 404);
   expect(await db.submission.count({ where: { templateId: template.id } })).toBe(order === 'creation-first' ? 1 : 0);
