@@ -457,7 +457,11 @@ it('validates malformed JSON, missing orders, unavailable configuration and rate
   expect((await paymentHistory(new Request('http://localhost'), routeParams(randomUUID()))).status).toBe(404);
   expect((await paymentAction(actionRequest({ action: 'RECONCILE' }), routeParams(randomUUID()))).status).toBe(404);
   vi.stubEnv('STRIPE_SECRET_KEY', '');
-  expect((await paymentAction(actionRequest({ action: 'RECONCILE' }), routeParams(order.id))).status).toBe(503);
+  const unconfigured = await paymentAction(actionRequest({ action: 'RECONCILE' }), routeParams(order.id));
+  expect(unconfigured.status).toBe(503);
+  // Pre-flight rejection must tell the client nothing was attempted, so the
+  // error stays visible instead of being wiped by an unknown-outcome reload.
+  await expect(unconfigured.json()).resolves.toMatchObject({ attempted: false, error: expect.stringContaining('not configured') });
   vi.stubEnv('STRIPE_SECRET_KEY', 'sk_test_synthetic_local_only');
   authorization.limit.mockResolvedValueOnce({ allowed: false, retryAfterSeconds: 60 });
   expect((await paymentAction(actionRequest({ action: 'RECONCILE' }), routeParams(order.id))).status).toBe(429);

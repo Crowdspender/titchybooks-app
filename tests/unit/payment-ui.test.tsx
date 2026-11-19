@@ -313,6 +313,26 @@ it.each(["5xx response", "lost response"])(
     ).toBe(true);
   },
 );
+it("a 503 that reports no attempt keeps the error visible without an automatic reload", async () => {
+  post.mockResolvedValue(
+    Response.json(
+      { error: "Payment reconciliation is not configured.", attempted: false },
+      { status: 503 },
+    ),
+  );
+  await openHistory();
+  fireEvent.click(
+    screen.getByRole("button", { name: "Reconcile with Stripe" }),
+  );
+  // Nothing could have committed: the operator must see why the action was
+  // rejected, and history must not reload over the alert.
+  expect((await screen.findByRole("alert")).textContent).toContain(
+    "not configured",
+  );
+  expect(changed).not.toHaveBeenCalled();
+  expect(get).toHaveBeenCalledTimes(1);
+  expect(screen.queryByText(/hold released/)).toBeNull();
+});
 it("handles failed history load without empty-success or active financial controls", async () => {
   get.mockRejectedValue(new Error("offline"));
   render(
@@ -339,7 +359,9 @@ it("reconciliation sends only its action and reloads persisted history", async (
   );
   await waitFor(() => expect(changed).toHaveBeenCalledTimes(1));
   expect(post.mock.calls[0][0]).toEqual({ action: "RECONCILE" });
-  expect(get).toHaveBeenCalledTimes(2);
+  // The reload runs in an effect after onChanged; wait for it rather than
+  // racing the assertion against React's flush.
+  await waitFor(() => expect(get).toHaveBeenCalledTimes(2));
 });
 it.each(["PAID", "MANUAL_PAID", "PROCESSING"])(
   "a persisted %s pay response refreshes without another charge or unavailable-payment error",

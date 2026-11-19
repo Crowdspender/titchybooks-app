@@ -56,7 +56,9 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   if (!await prisma.order.findUnique({ where: { id }, select: { id: true } })) {
     return NextResponse.json({ error: 'Order not found' }, { status: 404, headers });
   }
-  if (!isStripeConfigured()) return NextResponse.json({ error: 'Payment reconciliation is not configured.' }, { status: 503, headers });
+  // Pre-flight rejection: no provider call was attempted, so the client must
+  // surface this error instead of treating it as an unknown committed outcome.
+  if (!isStripeConfigured()) return NextResponse.json({ error: 'Payment reconciliation is not configured.', attempted: false }, { status: 503, headers });
   const limit = await consumeRateLimit(`payment-review:admin:${operatorId}`, { limit: 30, windowMs: 60 * 60_000 });
   if (!limit.allowed) return tooManyRequests(limit, 'Too many reconciliation requests. Try again later.');
   try {

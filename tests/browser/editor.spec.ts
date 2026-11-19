@@ -14,6 +14,9 @@ async function openDraft(page: Page) {
   const draft = await createDraft(userId);
   await page.goto(`/create?submissionId=${draft.id}`);
   await expect(page.getByRole('textbox', { name: 'Book title' })).toBeVisible();
+  // Let the initial autosave settle so later navigations do not race an
+  // in-flight save of the freshly loaded draft.
+  await expect(page.getByRole('status').filter({ hasText: /^Saved$/ })).toBeVisible();
   return draft.id;
 }
 async function addText(page: Page, text: string) {
@@ -48,6 +51,10 @@ for (const status of [401, 403, 503, 404]) {
     const id = await openDraft(page);
     const recoveryKey = `titchybook-recovery:${userId}:${id}`;
     const recovery = JSON.stringify({ version: 1, parts: { title: { value: 'Retained resume work', revision: 0 } } });
+    // Unmount the source editor before seeding recovery: a live editor's
+    // clean-document autosave flush removes the recovery key and would wipe
+    // the injected copy at any moment, regardless of the visible save state.
+    await page.goto('/dashboard');
     await page.evaluate(({ recoveryKey, recovery }) => localStorage.setItem(recoveryKey, recovery), { recoveryKey, recovery });
     await page.route(`**/api/submissions/${id}`, route => route.request().method() === 'GET'
       ? route.fulfill({ status, contentType: 'application/json', body: '{"error":"Injected draft load failure"}' }) : route.continue());
@@ -658,8 +665,19 @@ test('rejected correction copies and resubmits pages while retaining the origina
   const copied = await db.submission.findUniqueOrThrow({ where: { id: copyId } });
   expect(copied).toMatchObject({ templateId: template.id, templateVersion: 1, pinnedTemplate: original.pinnedTemplate });
   const stage = (await page.locator('.konvajs-content').boundingBox())!;
-  await page.mouse.click(stage.x + stage.width * 0.15, stage.y + stage.height * 0.105);
-  await page.getByRole('textbox', { name: 'Element text', exact: true }).fill('Corrected text for review');
+  // Konva hit-testing is pixel-based: under load the stage can still be
+  // settling when the first click lands, so retry until the panel opens.
+  const railText = page.getByRole('textbox', { name: 'Element text', exact: true });
+  for (let attempt = 0; ; attempt++) {
+    await page.mouse.click(stage.x + stage.width * 0.15, stage.y + stage.height * 0.105);
+    try {
+      await railText.waitFor({ state: 'visible', timeout: 2000 });
+      break;
+    } catch {
+      if (attempt >= 4) throw new Error('Canvas text element never became selectable');
+    }
+  }
+  await railText.fill('Corrected text for review');
   await page.getByRole('button', { name: 'Submit For PDF', exact: true }).click();
   await expect(page).toHaveURL(/\/dashboard$/);
   const job = await db.renderJob.findFirstOrThrow({ where: { submissionId: copyId } });

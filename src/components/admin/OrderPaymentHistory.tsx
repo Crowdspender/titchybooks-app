@@ -104,7 +104,10 @@ export default function OrderPaymentHistory({ orderId, onClose, onChanged }: {
     setNotice("");
     setFresh(false);
     // A lost response or 5xx leaves the server outcome unknown; a 4xx is a
-    // definitive rejection that keeps the manual reload path.
+    // definitive rejection that keeps the manual reload path. A 5xx that
+    // explicitly reports no attempt (e.g. reconciliation not configured) is
+    // also definitive: nothing could have committed, so the error must stay
+    // visible instead of being wiped by an automatic reload.
     let outcomeUnknown = true;
     try {
       const response = await fetch(`/api/admin/orders/${orderId}/payment`, {
@@ -122,7 +125,7 @@ export default function OrderPaymentHistory({ orderId, onClose, onChanged }: {
         ),
       });
       const data = await response.json().catch(() => ({}));
-      outcomeUnknown = response.status >= 500;
+      outcomeUnknown = response.status >= 500 && data.attempted !== false;
       if (!response.ok) {
         throw new Error(
           data.error ||
