@@ -110,6 +110,56 @@ describe('document persistence', () => {
     expect(draft.dirty).toBe(false);
   });
 
+  it('retries healthy parts while a conflicted part stays fenced without another write', async () => {
+    let pageSevenAttempts = 0;
+    const transport = vi.fn<SaveTransport>(async part => {
+      if (part === 'title') throw new EditorRequestError(409, 'Newer version');
+      if (part === 'PAGE_7' && ++pageSevenAttempts === 1) throw new Error('offline');
+      return 1;
+    });
+    const { draft, state } = coordinator(transport);
+    draft.set('title', 'Stale local title');
+    draft.set('PAGE_7', JSON.stringify(sceneWithText('page seven')));
+    await expect(draft.flushAll()).rejects.toThrow();
+    expect(state).toHaveBeenLastCalledWith('conflict');
+    const titleWrites = transport.mock.calls.filter(call => call[0] === 'title').length;
+    // A manual retry must recover the transient page failure without ever
+    // re-sending the conflicted title over the newer server version.
+    await expect(draft.flushAll()).rejects.toThrow('Newer version');
+    expect(transport.mock.calls.filter(call => call[0] === 'title').length).toBe(titleWrites);
+    expect(draft.revision('PAGE_7')).toBe(1);
+    expect(draft.readRecovery()).toEqual({ title: { value: 'Stale local title', revision: 0 } });
+  });
+
+  it('keeps uncommitted inline text in recovery only until the session commits', async () => {
+    const transport = vi.fn<SaveTransport>().mockResolvedValue(1);
+    const { draft } = coordinator(transport);
+    const committed = JSON.stringify(sceneWithText('committed'));
+    draft.set('FRONT_COVER', committed);
+    await draft.flushAll();
+    expect(transport).toHaveBeenCalledTimes(1);
+    const inline = JSON.stringify(sceneWithText('uncommitted inline'));
+    draft.setInlineDraft('FRONT_COVER', inline);
+    expect(draft.dirty).toBe(true);
+    expect(draft.readRecovery()?.FRONT_COVER).toEqual({ value: inline, revision: 1 });
+    expect(draft.snapshot().FRONT_COVER.value).toBe(inline);
+    // Autosave/reconnect-style flushes must not publish the open edit session.
+    await draft.flushAll();
+    expect(transport).toHaveBeenCalledTimes(1);
+    // Escape discards the session: recovery clears, the committed scene stands.
+    draft.setInlineDraft('FRONT_COVER', null);
+    expect(draft.dirty).toBe(false);
+    expect(draft.readRecovery()).toBeNull();
+    expect(draft.snapshot().FRONT_COVER.value).toBe(committed);
+    await draft.flushAll();
+    expect(transport).toHaveBeenCalledTimes(1);
+    // Committing routes through the normal save path with the acknowledged revision.
+    draft.set('FRONT_COVER', inline);
+    await draft.flushAll();
+    expect(transport).toHaveBeenLastCalledWith('FRONT_COVER', inline, 1);
+    expect(draft.dirty).toBe(false);
+  });
+
   it('does not publish stale responses or erase recovery after disposal', async () => {
     const late = delayed<number>();
     const { draft, state } = coordinator(() => late.promise);

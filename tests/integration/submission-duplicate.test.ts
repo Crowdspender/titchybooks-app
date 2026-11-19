@@ -1,7 +1,8 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { db, createApprovedTemplateWithText, createUser, cleanupFixtures } from '../fixtures/database';
 import { createEmptyEditorScene } from '@/lib/editor/schema';
-import { createInstanceWithOverrides } from '@/lib/editor/submission-store';
+import { createInstanceWithOverrides, mergedPages, savePage } from '@/lib/editor/submission-store';
+import { textElement } from '../fixtures/scenes';
 import { prisma } from '@/lib/prisma';
 import { POST as duplicate } from '@/app/api/submissions/[id]/duplicate/route';
 
@@ -93,5 +94,28 @@ describe('POST /api/submissions/[id]/duplicate', () => {
 
     const response = await duplicate(request(), params(template.id));
     expect(response.status).toBe(400);
+  });
+
+  it('copies an instance whose live template text slots changed so stale overrides can be fixed', async () => {
+    const { template, id } = await approvedAiBook(session.user!.id);
+    // The admin replaces the cover text slot; the instance override now points
+    // at an element that no longer exists in the live template.
+    const admin = await createUser('ADMIN');
+    await savePage(template.id, 'FRONT_COVER', admin, {
+      ...createEmptyEditorScene(),
+      elements: [textElement('replacement-slot', 'A new cover slot')],
+    }, 0);
+    const source = await db.submission.findUniqueOrThrow({ where: { id } });
+    // The merged render rejects the stale override...
+    await expect(prisma.$transaction(tx => mergedPages(tx, source))).rejects.toMatchObject({ status: 400 });
+    // ...but opening a copy to repair it must not be blocked by that check.
+    const response = await duplicate(request(), params(id));
+    expect(response.status).toBe(201);
+    const copyId = (await response.json() as { submission: { id: string } }).submission.id;
+    const copyCover = await db.submissionPage.findUniqueOrThrow({
+      where: { submissionId_pageLabel: { submissionId: copyId, pageLabel: 'FRONT_COVER' } },
+    });
+    expect(JSON.parse(copyCover.sceneJson).templateTextOverrides).toEqual({ 'cover-title': 'The Lonely Lighthouse' });
+    expect((await db.submission.findUniqueOrThrow({ where: { id } })).status).toBe('APPROVED');
   });
 });

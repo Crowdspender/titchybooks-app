@@ -286,10 +286,21 @@ test('a stale tab cannot overwrite a newer title and retains its local edits', a
     expect(copy.parts.title.revision).toBe(0);
     const download = second.waitForEvent('download');
     await second.getByRole('button', { name: 'Download recovery JSON', exact: true }).click();
-    expect((await download).suggestedFilename()).toBe(`titchybook-${id}-recovery.json`);
+    const file = await download;
+    expect(file.suggestedFilename()).toBe(`titchybook-${id}-recovery.json`);
+    const stream = await file.createReadStream();
+    if (!stream) throw new Error('Download stream unavailable');
+    const chunks: Buffer[] = [];
+    for await (const chunk of stream) chunks.push(Buffer.from(chunk));
+    const downloaded = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    expect(downloaded.parts.title).toEqual({ value: 'Stale tab local title', revision: 0 });
     await second.getByRole('button', { name: 'Submit For PDF', exact: true }).click();
     await expect(second.getByRole('status').filter({ hasText: 'Save conflict' })).toBeVisible();
-    await expect(second.getByRole('button', { name: 'Retry saving', exact: true })).toBeDisabled();
+    // Retry stays enabled while conflicted: the per-part 409 fence keeps the
+    // stale title out of every write, so retrying can never overwrite the
+    // newer server title.
+    await second.getByRole('button', { name: 'Retry saving', exact: true }).dispatchEvent('click');
+    await expect(second.getByRole('status').filter({ hasText: 'Save conflict' })).toBeVisible();
     expect(await db.renderJob.count({ where: { submissionId: id } })).toBe(0);
     expect((await db.submission.findUniqueOrThrow({ where: { id } })).title).toBe('Newer server title');
   } finally { await second.close(); }

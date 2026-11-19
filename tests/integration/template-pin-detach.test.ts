@@ -8,6 +8,7 @@ import { prisma } from '@/lib/prisma';
 import { captureSnapshot } from '@/lib/pdf/snapshot';
 import { editorSceneSchema } from '@/lib/editor/schema';
 import { POST as detachFromTemplate } from '@/app/api/submissions/[id]/detach-from-template/route';
+import { GET as templateElements } from '@/app/api/templates/[id]/elements/route';
 
 const session = vi.hoisted(() => ({ user: null as null | { id: string; role: string } }));
 vi.mock('@/auth', () => ({ auth: async () => session.user ? { user: session.user } : null }));
@@ -214,5 +215,23 @@ describe('pinned template layer', () => {
     expect(merged.find((page) => page.pageLabel === 'FRONT_COVER')!
       .scene.elements.find((element) => element.id === COVER_SLOT))
       .toMatchObject({ type: 'text', text: GENERATED_TITLE });
+  });
+
+  it('stays readable for instance owners when the template is unpublished', async () => {
+    const { template } = await pinnedAiBook(session.user!.id);
+    // Unpublish the template: the instance editor must still load its locked
+    // layer because the owner's linked submission authorizes the read.
+    await db.submission.update({ where: { id: template.id }, data: { status: 'DRAFT' } });
+    const elements = (id: string) => templateElements(
+      new Request('http://localhost/test'),
+      { params: Promise.resolve({ id }) },
+    );
+    const owner = await elements(template.id);
+    expect(owner.status).toBe(200);
+    const body = await owner.json() as { templateElements: Array<{ elementJson: string }> };
+    expect(body.templateElements.map(row => JSON.parse(row.elementJson).id)).toContain(COVER_SLOT);
+    const stranger = await createUser();
+    session.user = stranger;
+    expect((await elements(template.id)).status).toBe(403);
   });
 });

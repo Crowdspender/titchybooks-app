@@ -14,13 +14,18 @@ const getSnapshot = () => draftPointerStorage.getItem(ACTIVE_DRAFT_STORAGE_KEY);
 
 export default function ContinueEditingButton() {
   const draftId = useSyncExternalStore(subscribe, getSnapshot, () => null);
+  if (!draftId) return null;
+  // Keyed per pointer activation: returning to a previous draft remounts the
+  // check, so its earlier result never shows while the new request is pending.
+  return <DraftCheck key={draftId} draftId={draftId} />;
+}
+
+function DraftCheck({ draftId }: { draftId: string }) {
   const [check, setCheck] = useState<
-    | { id: string; state: "valid" | "unavailable" | "error"; message: string }
-    | null
+    { state: "valid" | "unavailable" | "error"; message: string } | null
   >(null);
 
   useEffect(() => {
-    if (!draftId) return;
     const controller = new AbortController();
     fetch(`/api/submissions/${encodeURIComponent(draftId)}`, {
       signal: controller.signal,
@@ -42,7 +47,6 @@ export default function ContinueEditingButton() {
         }
         if (controller.signal.aborted) return;
         setCheck({
-          id: draftId,
           state: data.submission.status === "DRAFT" ? "valid" : "unavailable",
           message: data.submission.status === "DRAFT"
             ? ""
@@ -52,7 +56,6 @@ export default function ContinueEditingButton() {
       .catch((error) => {
         if (!controller.signal.aborted) {
           setCheck({
-            id: draftId,
             state: "error",
             message: error instanceof Error
               ? error.message
@@ -63,8 +66,7 @@ export default function ContinueEditingButton() {
     return () => controller.abort();
   }, [draftId]);
 
-  if (!draftId) return null;
-  const current = check?.id === draftId ? check : null;
+  const current = check;
 
   return (
     <div>

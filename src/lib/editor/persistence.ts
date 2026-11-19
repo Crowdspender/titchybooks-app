@@ -18,6 +18,9 @@ export type Recovery = Partial<DocumentSeed>;
 
 export class DraftPersistence {
   private parts = new Map<DocumentPart, Part>();
+  // Uncommitted inline canvas text lives only in local recovery; it must
+  // never reach a server save until the edit session commits.
+  private inline: { part: DocumentPart; value: string } | null = null;
   private disposed = false;
   private storageWarned = false;
   readonly recoveryKey: string;
@@ -29,15 +32,25 @@ export class DraftPersistence {
       this.parts.set(key, { ...seed[key], saved: seed[key].value });
     }
   }
-  get dirty() { return [...this.parts.values()].some(p => p.value !== p.saved || !!p.flight); }
+  get dirty() { return [...this.parts.values()].some(p => p.value !== p.saved || !!p.flight) || this.inlineDirty(); }
+  private inlineDirty() { return !!this.inline && this.inline.value !== this.parts.get(this.inline.part)!.value; }
   revision(part: DocumentPart) { return this.parts.get(part)!.revision; }
   snapshot(): DocumentSeed {
-    return Object.fromEntries([...this.parts].map(([key, part]) => [key, { value: part.value, revision: part.revision }])) as DocumentSeed;
+    return Object.fromEntries([...this.parts].map(([key, part]) => [key, {
+      value: this.inline?.part === key ? this.inline.value : part.value,
+      revision: part.revision,
+    }])) as DocumentSeed;
   }
   set(part: DocumentPart, value: string) {
     const entry = this.parts.get(part)!;
     if (this.disposed || entry.value === value) return;
     entry.value = value;
+    this.notify();
+  }
+  /** Retain (or discard) the active inline edit for recovery only. */
+  setInlineDraft(part: DocumentPart, value: string | null) {
+    if (this.disposed) return;
+    this.inline = value === null ? null : { part, value };
     this.notify();
   }
   private storageFailure() {
@@ -82,7 +95,8 @@ export class DraftPersistence {
       : entries.some(p => p.error) ? 'error' : entries.some(p => p.flight) ? 'saving' : this.dirty ? 'idle' : 'saved');
     const parts: Recovery = {};
     for (const [key, part] of this.parts) {
-      if (part.value !== part.saved || part.flight) parts[key] = { value: part.value, revision: part.revision };
+      const value = this.inline?.part === key ? this.inline.value : part.value;
+      if (value !== part.saved || part.flight) parts[key] = { value, revision: part.revision };
     }
     try {
       if (Object.keys(parts).length) this.storage?.setItem(this.recoveryKey, JSON.stringify({ version: 1, parts }));

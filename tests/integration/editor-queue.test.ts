@@ -113,7 +113,11 @@ describe('editor API and transactional submission', () => {
     ]);
     expect(results.map(r => r.status).sort()).toEqual([200, 409]);
     const reviewed = await db.submission.findUniqueOrThrow({ where: { id: draft.id } });
-    expect(reviewed.rejectionReason).toBe(reviewed.status === 'REJECTED' ? 'Please correct the cover text.' : null);
+    // The successful action determines the stored review: derive the winner
+    // from the response positions, never from the row under assertion.
+    const winner = results[0].status === 200 ? 'APPROVED' : 'REJECTED';
+    expect(reviewed.status).toBe(winner);
+    expect(reviewed.rejectionReason).toBe(winner === 'REJECTED' ? 'Please correct the cover text.' : null);
     expect((await moderate(request({ action: 'REJECT', rejectionReason: 'Replace original review evidence' }), params(draft.id))).status).toBe(409);
     expect(await db.submission.findUniqueOrThrow({ where: { id: draft.id } })).toEqual(reviewed);
     expect(reviewed.pdfS3Key).toBe('retained/master.pdf');
@@ -278,7 +282,11 @@ describe('durable worker', () => {
     expect(current.claimToken).not.toBe(old.claimToken);
     expect(await heartbeat(old)).toBe(false);
     expect(await failRender(old)).toBe(false);
-    expect(await publishRender(current, artifacts)).toBe(true);
+    // Publish a manifest naming the real submission/job, as processRenderJob
+    // would: the download route rejects a foreign manifest, so render-status
+    // must not advertise a link the transfer would 409.
+    const faithful: RenderArtifacts = { ...artifacts, artifactManifest: { ...artifacts.artifactManifest, submissionId: current.submissionId, renderJobId: current.id } };
+    expect(await publishRender(current, faithful)).toBe(true);
     expect(await publishRender(old, { ...artifacts, pdfS3Key: 'stale.pdf' })).toBe(false);
     const submission = await db.submission.findUniqueOrThrow({ where: { id: old.submissionId } });
     expect(submission.status).toBe('PENDING');

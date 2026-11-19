@@ -404,7 +404,11 @@ export async function duplicateAsDraft(id: string, actor: Actor): Promise<string
       orderBy: { order: 'asc' },
       select: { pageLabel: true, order: true, sceneJson: true },
     });
-    await validateSceneAssets(tx, (await mergedPages(tx, source)).map(page => page.scene), actor);
+    // Authorize exactly what the copy stores: its own page scenes. The template
+    // layer travels with templateId/pinnedTemplate and keeps its own access
+    // rules; re-merging it here would reject copies whose live template text
+    // changed, blocking the very reopen needed to fix stale text overrides.
+    await validateSceneAssets(tx, pages.map(page => editorSceneSchema.parse(JSON.parse(page.sceneJson))), actor);
     const baseTitle = source.title?.trim();
     const copy = await tx.submission.create({
       data: {

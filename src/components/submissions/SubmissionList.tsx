@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import RenderProgress from "./RenderProgress";
 import { toast } from "sonner";
@@ -24,23 +24,41 @@ export default function SubmissionList() {
   const [submissions, setSubmissions] = useState<Submission[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const loadInFlight = useRef(false);
+  const deletedIds = useRef(new Set<string>());
 
   useEffect(() => {
     fetchSubmissions();
   }, []);
 
   async function fetchSubmissions() {
+    // One list request in flight: a second retry cannot race an older
+    // snapshot over a newer one.
+    if (loadInFlight.current) return;
+    loadInFlight.current = true;
     try {
       const res = await fetch("/api/submissions", { cache: "no-store" });
-      const data = await res.json();
-      if (!res.ok || !Array.isArray(data.submissions)) {
+      // Non-OK statuses are handled before parsing: a 401 with an empty or
+      // non-JSON body must still surface the sign-in guidance.
+      if (!res.ok) {
         throw new Error(
           res.status === 401
             ? "Sign in again to load your library."
             : "Could not refresh submissions. Your books have not been changed.",
         );
       }
-      setSubmissions(data.submissions);
+      const data = await res.json();
+      if (!Array.isArray(data.submissions)) {
+        throw new Error(
+          "Could not refresh submissions. Your books have not been changed.",
+        );
+      }
+      // A snapshot taken before a deletion must not restore the deleted draft.
+      setSubmissions(
+        data.submissions.filter(
+          (sub: Submission) => !deletedIds.current.has(sub.id),
+        ),
+      );
       setLoadError(null);
     } catch (error) {
       setLoadError(
@@ -49,6 +67,7 @@ export default function SubmissionList() {
           : "Could not refresh submissions. Retry loading your library.",
       );
     } finally {
+      loadInFlight.current = false;
       setLoading(false);
     }
   }
@@ -72,6 +91,9 @@ export default function SubmissionList() {
         throw new Error(data.error || "Failed to delete submission");
       }
 
+      // Tombstone the deletion so any in-flight or later snapshot cannot
+      // restore the card.
+      deletedIds.current.add(submissionId);
       setSubmissions((current) =>
         current.filter((sub) => sub.id !== submissionId)
       );

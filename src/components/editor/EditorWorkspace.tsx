@@ -79,6 +79,10 @@ const UNDO_REDO_MAX_HISTORY = 50;
 // Strict Mode mounts, unmounts, and remounts components, causing useEffect to run twice.
 // This state persists across those cycles to ensure only one POST request is made.
 let pendingDraftCreation: Promise<string> | null = null;
+// The intent of the most recently started boot. A shared draft-creation POST
+// may only claim the resume pointer while its boot still owns the editor; a
+// canceled boot's late response must not overwrite a newer boot's pointer.
+let activeBootIntent: string | null = null;
 
 interface AssetRecord {
   id: string;
@@ -324,6 +328,9 @@ export default function EditorWorkspace({
   >(null);
   const [bootRetry, setBootRetry] = useState(0);
   const [startNewRequested, setStartNewRequested] = useState(false);
+  // Each explicit "Create a separate draft" click is a fresh intent; a plain
+  // "Retry loading draft" keeps the issued draft so retry never replaces it.
+  const [newDraftSeq, setNewDraftSeq] = useState(0);
   const createdDraftRef = useRef<{ intent: string; id: string } | null>(null);
   const [online, setOnline] = useState(true);
   const [submission, setSubmission] = useState<SubmissionRecord | null>(null);
@@ -393,10 +400,11 @@ export default function EditorWorkspace({
   const submissionIdRef = useRef<string | null>(null);
   const workspaceRef = useRef<HTMLDivElement | null>(null);
   const documentRef = useRef({ title, pagesByLabel });
-  const inlineDraftRef = useRef<{ label: PageLabel; sceneJson: string } | null>(
-    null,
-  );
   const [recoveryView, setRecoveryView] = useState<string | null>(null);
+  // Document signature captured when the recovery snapshot was reviewed; the
+  // displayed copy is hidden as soon as the draft moves past it.
+  const [recoveryBaseline, setRecoveryBaseline] = useState<string | null>(null);
+  const recoverySignature = [title, ...PAGE_LABELS.map((label) => pagesByLabel[label].sceneJson)].join("\u0000");
   useLayoutEffect(() => {
     documentRef.current = { title, pagesByLabel };
   }, [title, pagesByLabel]);
@@ -633,9 +641,7 @@ export default function EditorWorkspace({
     }
 
     async function createDraft(): Promise<string> {
-      const intent = `${submissionId ?? ""}:${
-        Boolean(forceNew)
-      }:${startNewRequested}`;
+      const intent = bootIntent();
       if (createdDraftRef.current?.intent === intent) {
         return createdDraftRef.current.id;
       }
@@ -669,11 +675,15 @@ export default function EditorWorkspace({
           };
 
           createdDraftRef.current = { intent, id: data.submission.id };
-          // Record the issued draft before loading it so retry never creates a replacement.
-          draftPointerStorage.setItem(
-            ACTIVE_DRAFT_STORAGE_KEY,
-            data.submission.id,
-          );
+          // Record the issued draft before loading it so retry never creates a
+          // replacement — but only while this boot still owns the editor; a
+          // canceled boot's late POST must not overwrite a newer pointer.
+          if (intent === activeBootIntent) {
+            draftPointerStorage.setItem(
+              ACTIVE_DRAFT_STORAGE_KEY,
+              data.submission.id,
+            );
+          }
           return data.submission.id;
         } finally {
           // Clear the pending promise so future "new" creations can proceed
@@ -960,10 +970,15 @@ export default function EditorWorkspace({
       setCanRedo(false);
     }
 
+    function bootIntent() {
+      return `${submissionId ?? ""}:${Boolean(forceNew)}:${startNewRequested}:${newDraftSeq}`;
+    }
+
     async function boot() {
       try {
         // Reset state when navigating between different submissions or to forceNew
         // This ensures stale data from the previous submission doesn't persist
+        activeBootIntent = bootIntent();
         setLoading(true);
         setBootError(null);
         setLoadingMessage("Preparing editor...");
@@ -992,8 +1007,10 @@ export default function EditorWorkspace({
         await loadAssets();
         if (cancelled) return;
 
-        // If forceNew is true, always create a new draft and ignore localStorage
-        if (forceNew || startNewRequested) {
+        // If forceNew is true, always create a new draft and ignore localStorage.
+        // An explicit submission URL outranks a lingering separate-draft request
+        // left over from an earlier boot error on this same mounted instance.
+        if (forceNew || (startNewRequested && !submissionId)) {
           const nextId = await createDraft();
           await loadSubmission(nextId);
         } // An explicit URL does not erase the prior pointer if loading fails.
@@ -1045,7 +1062,7 @@ export default function EditorWorkspace({
       persistenceRef.current?.dispose();
       persistenceRef.current = null;
     };
-  }, [forceNew, submissionId, bootRetry, startNewRequested]);
+  }, [forceNew, submissionId, bootRetry, startNewRequested, newDraftSeq]);
 
   useEffect(() => {
     const persistence = persistenceRef.current;
@@ -1100,12 +1117,9 @@ export default function EditorWorkspace({
     const persistence = persistenceRef.current;
     if (!submission || !persistence || persistence.id !== submission.id) return;
     for (const label of PAGE_LABELS) {
-      persistence.set(
-        label,
-        inlineDraftRef.current?.label === label
-          ? inlineDraftRef.current.sceneJson
-          : pagesByLabel[label].sceneJson,
-      );
+      // Only committed scene state is server-saveable; uncommitted inline
+      // text stays in the persistence layer's recovery-only overlay.
+      persistence.set(label, pagesByLabel[label].sceneJson);
     }
     const timeout = window.setTimeout(() => {
       void persistence.flushAll().catch((error) =>
@@ -1163,12 +1177,12 @@ export default function EditorWorkspace({
   }
 
   function retainInlineDraft(elementId: string, text: string | null) {
-    const source = activePage.scene;
+    const persistence = persistenceRef.current;
     if (text === null) {
-      inlineDraftRef.current = null;
-      persistenceRef.current?.set(activePageLabel, JSON.stringify(source));
+      persistence?.setInlineDraft(activePageLabel, null);
       return;
     }
+    const source = activePage.scene;
     const scene = isTemplateTextElement(elementId)
       ? {
         ...source,
@@ -1185,9 +1199,9 @@ export default function EditorWorkspace({
             : element
         ),
       };
-    const sceneJson = JSON.stringify(scene);
-    inlineDraftRef.current = { label: activePageLabel, sceneJson };
-    persistenceRef.current?.set(activePageLabel, sceneJson);
+    // Recovery-only: autosave, reconnect flushes and navigation saves must
+    // never publish an edit session the user has not committed (Escape discards).
+    persistence?.setInlineDraft(activePageLabel, JSON.stringify(scene));
   }
 
   const guardNavigation = useEffectEvent(async (proceed: () => void) => {
@@ -1204,6 +1218,18 @@ export default function EditorWorkspace({
       if (persistenceRef.current === persistence) proceed();
     } catch (error) {
       reportSaveError(error, persistence);
+      // A revision conflict can never be retried away. Offer an explicit exit
+      // that keeps the local recovery copy instead of trapping the tab (and
+      // sign-out) behind a save that will always fail.
+      if (
+        error instanceof EditorRequestError && error.status === 409 &&
+        persistenceRef.current === persistence &&
+        confirm(
+          "Saving is blocked by a newer version on the server. Leave anyway? Your local recovery copy is preserved.",
+        )
+      ) {
+        proceed();
+      }
     } finally {
       if (persistenceRef.current === persistence) {
         frozenRef.current = false;
@@ -1262,6 +1288,11 @@ export default function EditorWorkspace({
     };
   }, [router]);
 
+  function documentSignature() {
+    const current = documentRef.current;
+    return [current.title, ...PAGE_LABELS.map((label) => current.pagesByLabel[label].sceneJson)].join("\u0000");
+  }
+
   function reviewRecoveryCopy() {
     const persistence = syncDocument();
     setRecoveryView(
@@ -1275,12 +1306,27 @@ export default function EditorWorkspace({
         2,
       ),
     );
+    setRecoveryBaseline(documentSignature());
   }
 
   function downloadRecoveryCopy() {
     if (!recoveryView) return;
+    // Always download a fresh snapshot: the reviewed copy may predate later
+    // edits, and a stale file would silently lose the newest local changes.
+    const persistence = syncDocument();
+    const fresh = JSON.stringify(
+      {
+        version: 1,
+        submissionId: persistence.id,
+        parts: persistence.snapshot(),
+      },
+      null,
+      2,
+    );
+    setRecoveryView(fresh);
+    setRecoveryBaseline(documentSignature());
     const url = URL.createObjectURL(
-      new Blob([recoveryView], { type: "application/json" }),
+      new Blob([fresh], { type: "application/json" }),
     );
     const link = document.createElement("a");
     link.href = url;
@@ -2177,6 +2223,7 @@ export default function EditorWorkspace({
                 className="btn btn-outline"
                 onClick={() => {
                   setStartNewRequested(true);
+                  setNewDraftSeq((k) => k + 1);
                   setBootRetry((k) => k + 1);
                 }}
               >
@@ -2220,7 +2267,7 @@ export default function EditorWorkspace({
               <p>{saveError}</p>
               <button
                 className="btn btn-outline btn-sm mt-2"
-                disabled={saveState === "conflict" || !online}
+                disabled={!online}
                 onClick={() => {
                   const persistence = syncDocument();
                   void persistence.flushAll().catch((error) =>
@@ -2237,7 +2284,7 @@ export default function EditorWorkspace({
               >
                 Review recovery copy
               </button>
-              {recoveryView && (
+              {recoveryView && recoveryBaseline === recoverySignature && (
                 <div className="mt-3">
                   <p className="text-xs">
                     This is a local snapshot, not a server-save confirmation.
@@ -2646,7 +2693,6 @@ export default function EditorWorkspace({
                       }}
                       onTextDraft={retainInlineDraft}
                       onTextCommit={(elementId, text) => {
-                        inlineDraftRef.current = null;
                         // Inline canvas edits route exactly like the properties
                         // panel: template text becomes a per-instance override,
                         // other template elements stay fixed, user elements
