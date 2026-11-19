@@ -1,9 +1,10 @@
 ﻿import { NextResponse } from "next/server";
 import { z } from "zod";
 import { auth } from "@/auth";
-import { ACCEPTED_IMAGE_TYPES, MAX_FILE_SIZE } from "@/lib/constants";
+import { ACCEPTED_IMAGE_TYPES } from "@/lib/constants";
 import { prisma } from "@/lib/prisma";
-import { getPresignedDownloadUrl } from "@/lib/s3";
+import { finalizeImageUpload, ImageUploadError } from "@/lib/assets/upload";
+import { lockAssetReferences } from '@/lib/assets/references';
 
 export const dynamic = "force-dynamic";
 
@@ -12,9 +13,9 @@ const createAssetSchema = z.object({
   s3Key: z.string().min(1),
   originalFilename: z.string().min(1),
   mimeType: z.enum(ACCEPTED_IMAGE_TYPES),
-  fileSize: z.number().int().positive().max(MAX_FILE_SIZE),
-  width: z.number().int().positive().max(20000).optional(),
-  height: z.number().int().positive().max(20000).optional(),
+  fileSize: z.number().int().nonnegative().optional(),
+  width: z.number().int().positive().optional(),
+  height: z.number().int().positive().optional(),
 });
 
 export async function GET() {
@@ -24,7 +25,7 @@ export async function GET() {
   }
 
   const assets = await prisma.asset.findMany({
-    where: { userId: session.user.id },
+    where: { userId: session.user.id, deletedAt: null },
     orderBy: { createdAt: "desc" },
   });
 
@@ -37,7 +38,7 @@ export async function GET() {
     }))
   );
 
-  return NextResponse.json({ assets: assetsWithUrls });
+  return NextResponse.json({ assets: assetsWithUrls }, { headers: { 'Cache-Control': 'private, no-store', Vary: 'Cookie' } });
 }
 
 export async function POST(request: Request) {
@@ -57,32 +58,40 @@ export async function POST(request: Request) {
       );
     }
 
-    if (!parsed.data.s3Key.startsWith(`assets/${session.user.id}/`)) {
+    const prefix = `assets/${session.user.id}/`;
+    const uploadId = parsed.data.s3Key.startsWith(prefix)
+      ? /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.(jpe?g|png|webp)$/i.exec(parsed.data.s3Key.slice(prefix.length))?.[1]
+      : undefined;
+    if (!uploadId) {
       return NextResponse.json(
         { error: "Invalid asset storage key" },
         { status: 400 }
       );
     }
 
-    const asset = await prisma.asset.create({
-      data: {
-        userId: session.user.id,
-        s3Key: parsed.data.s3Key,
-        originalFilename: parsed.data.originalFilename,
-        mimeType: parsed.data.mimeType,
-        fileSize: parsed.data.fileSize,
-        width: parsed.data.width,
-        height: parsed.data.height,
-      },
-    });
-
-    const downloadUrl = await getPresignedDownloadUrl(asset.s3Key);
+    // A retry returns the first accepted source; it never re-reads a mutable PUT key.
+    let asset = await prisma.asset.findUnique({ where: { id: uploadId } }) ??
+      await prisma.asset.findUnique({ where: { s3Key: parsed.data.s3Key } });
+    if (!asset) {
+      const verified = await finalizeImageUpload(parsed.data.s3Key, `${prefix}canonical`);
+      asset = await prisma.$transaction(async tx => {
+        await lockAssetReferences(tx);
+        return tx.asset.upsert({
+          where: { id: uploadId }, update: {},
+          create: { id: uploadId, userId: session.user.id!, originalFilename: parsed.data.originalFilename, ...verified },
+        });
+      });
+    }
+    if (asset.userId !== session.user.id) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    if (asset.deletedAt) return NextResponse.json({ error: 'This image was removed from the library.' }, { status: 409 });
+    const downloadUrl = `/api/assets/${asset.id}/image`;
 
     return NextResponse.json(
       { asset: { ...asset, downloadUrl } },
-      { status: 201 }
+      { status: 201, headers: { 'Cache-Control': 'private, no-store', Vary: 'Cookie' } }
     );
-  } catch {
+  } catch (error) {
+    if (error instanceof ImageUploadError) return NextResponse.json({ error: error.message }, { status: 400 });
     return NextResponse.json(
       { error: "Internal server error" },
       { status: 500 }

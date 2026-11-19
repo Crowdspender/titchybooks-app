@@ -6,6 +6,7 @@ import { editorElementSchema, editorSceneSchema, type EditorScene } from './sche
 import { PAGE_LABELS, type PageLabel } from '@/lib/constants';
 import { resolveSceneDesign, validateSceneDesign, isProtectedDesign } from './design';
 import { parsePinnedTemplate, type PinnedTemplate } from '@/lib/ai/template-contract';
+import { AssetReferenceError, assertActiveAssetIds, lockAssetReferences, validatePinnedAssetReferences } from '@/lib/assets/references';
 
 export type Actor = { id: string; role: string };
 export type Transaction = Prisma.TransactionClient;
@@ -15,6 +16,9 @@ export class SubmissionError extends Error {
   }
 }
 export function errorResponse(error: unknown) {
+  if (error instanceof AssetReferenceError) {
+    return Response.json({ error: error.message }, { status: error.status });
+  }
   if (error instanceof SubmissionError) {
     return Response.json({ error: error.message, ...error.details }, { status: error.status });
   }
@@ -34,6 +38,8 @@ export function errorResponse(error: unknown) {
 
 // All scene and lifecycle writers take this lock before reading mutable state.
 export async function lockSubmission(tx: Transaction, id: string, actor?: Actor) {
+  // Always take the source fence before row locks, including nested template locks.
+  await lockAssetReferences(tx);
   await tx.$queryRaw`SELECT "id" FROM "Submission" WHERE "id" = ${id} FOR UPDATE`;
   const submission = await tx.submission.findUnique({ where: { id } });
   if (!submission) throw new SubmissionError(404, 'Submission not found');
@@ -60,18 +66,44 @@ export async function canAccessAssetViaTemplate(tx: Transaction, assetId: string
     ] } },
     select: { elementJson: true },
   });
-  return usages.some(({ elementJson }) => {
+  const currentAccess = usages.some(({ elementJson }) => {
     try {
       const parsed = editorElementSchema.safeParse(JSON.parse(elementJson));
       return parsed.success && parsed.data.type === 'image' && parsed.data.assetId === assetId;
     } catch { return false; }
   });
+  if (currentAccess) return true;
+  // Match the template-elements endpoint's pre-split-storage fallback.
+  const legacyTemplates = await tx.submission.findMany({
+    where: { isTemplate: true, templateElements: { none: {} }, OR: [
+      { status: 'APPROVED' }, { instances: { some: { userId } } },
+    ] },
+    select: { pages: { select: { sceneJson: true } } },
+  });
+  if (legacyTemplates.some(template => template.pages.some(page => {
+    try {
+      const parsed = editorSceneSchema.safeParse(JSON.parse(page.sceneJson));
+      return parsed.success && parsed.data.elements.some(element => element.type === 'image' && element.assetId === assetId);
+    } catch { return false; }
+  }))) return true;
+  // Frozen template sources remain authorized after the live layer changes.
+  const books = await tx.submission.findMany({ where: { userId }, select: { pinnedTemplate: true, pages: { select: { sceneJson: true } } } });
+  return books.some(book => {
+    if (parsePinnedTemplate(book.pinnedTemplate)?.pages.some(page =>
+      page.elements.some(element => element.type === 'image' && element.assetId === assetId))) return true;
+    // Detachment materializes an authorized template image into owned scenes.
+    return book.pages.some(page => {
+      try {
+        const parsed = editorSceneSchema.safeParse(JSON.parse(page.sceneJson));
+        return parsed.success && parsed.data.elements.some(element => element.type === 'image' && element.assetId === assetId);
+      } catch { return false; }
+    });
+  });
 }
 
 export async function validateSceneAssets(tx: Transaction, scenes: EditorScene[], actor: Actor) {
   const ids = [...new Set(scenes.flatMap(scene => scene.elements.flatMap(el => el.type === 'image' ? [el.assetId] : [])))];
-  const assets = await tx.asset.findMany({ where: { id: { in: ids } } });
-  if (assets.length !== ids.length) throw new SubmissionError(400, 'An image is missing. Replace it before saving.');
+  const assets = await assertActiveAssetIds(tx, ids);
   for (const asset of assets) {
     if (asset.userId !== actor.id && actor.role !== 'ADMIN' &&
         !await canAccessAssetViaTemplate(tx, asset.id, actor.id)) {
@@ -243,6 +275,8 @@ export async function createInstanceWithOverrides(
     if (!template.isTemplate || (!pinned && template.status !== 'APPROVED')) {
       throw new SubmissionError(404, 'Template not found or not published');
     }
+    if (pinned) await validatePinnedAssetReferences(tx, { pinnedTemplate: pinned });
+    else await validateSceneAssets(tx, (await mergedPages(tx, template)).map(page => page.scene), actor);
     const templatePages = await tx.submissionPage.findMany({ where: { submissionId: templateId }, orderBy: { order: 'asc' } });
     if (templatePages.length !== 8 || PAGE_LABELS.some(label => !templatePages.some(page => page.pageLabel === label))) {
       throw new SubmissionError(400, 'Template is missing pages');
@@ -370,6 +404,7 @@ export async function duplicateAsDraft(id: string, actor: Actor): Promise<string
       orderBy: { order: 'asc' },
       select: { pageLabel: true, order: true, sceneJson: true },
     });
+    await validateSceneAssets(tx, (await mergedPages(tx, source)).map(page => page.scene), actor);
     const baseTitle = source.title?.trim();
     const copy = await tx.submission.create({
       data: {

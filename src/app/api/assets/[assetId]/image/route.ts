@@ -2,10 +2,11 @@
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { canAccessAssetViaTemplate as templateAssetAccess } from "@/lib/editor/submission-store";
-import { s3Client } from "@/lib/s3";
-import { GetObjectCommand } from "@aws-sdk/client-s3";
+import { downloadFromS3 } from "@/lib/s3";
+import { MAX_FILE_SIZE } from "@/lib/constants";
 
 export const dynamic = "force-dynamic";
+const privateHeaders = { 'Cache-Control': 'private, no-store', Vary: 'Cookie', 'X-Content-Type-Options': 'nosniff', 'Cross-Origin-Resource-Policy': 'same-origin' };
 
 
 // Authorization ladder (any of the following grants access):
@@ -29,7 +30,7 @@ export async function GET(
 ) {
   const session = await auth();
   if (!session?.user?.id) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401, headers: privateHeaders });
   }
 
   const { assetId } = await params;
@@ -39,7 +40,7 @@ export async function GET(
   });
 
   if (!asset) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
+    return NextResponse.json({ error: "Not found" }, { status: 404, headers: privateHeaders });
   }
 
   const isOwner = asset.userId === session.user.id;
@@ -51,36 +52,23 @@ export async function GET(
       session.user.id,
     );
     if (!allowedViaTemplate) {
-      return NextResponse.json({ error: "Not found" }, { status: 404 });
+      return NextResponse.json({ error: "Not found" }, { status: 404, headers: privateHeaders });
     }
   }
 
   try {
     // Fetch from S3
-    const command = new GetObjectCommand({
-      Bucket: process.env.S3_BUCKET_NAME!,
-      Key: asset.s3Key,
-    });
+    const buffer = await downloadFromS3(asset.s3Key, { maxBytes: MAX_FILE_SIZE });
 
-    const response = await s3Client.send(command);
-    const stream = response.Body as NodeJS.ReadableStream;
-    const chunks: Buffer[] = [];
-
-    for await (const chunk of stream) {
-      chunks.push(Buffer.from(chunk));
-    }
-
-    const buffer = Buffer.concat(chunks);
-
-    return new NextResponse(buffer, {
+    return new NextResponse(new Uint8Array(buffer), {
       headers: {
+        ...privateHeaders,
         "Content-Type": asset.mimeType || "image/jpeg",
-        "Cache-Control": "public, max-age=3600",
-        "Access-Control-Allow-Origin": "*",
+        "Content-Length": String(buffer.length),
       },
     });
   } catch (error) {
     console.error("Error serving asset:", error);
-    return NextResponse.json({ error: "Failed to load asset" }, { status: 500 });
+    return NextResponse.json({ error: "Failed to load asset" }, { status: 500, headers: privateHeaders });
   }
 }

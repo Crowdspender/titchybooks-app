@@ -1,6 +1,6 @@
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NextRequest } from 'next/server';
-import { db, cleanupFixtures } from '../fixtures/database';
+import { db, cleanupFixtures, trackPaymentEvent } from '../fixtures/database';
 import { createPendingOrderWithUser } from '../fixtures/orders';
 import {
   WEBHOOK_SECRET,
@@ -8,15 +8,16 @@ import {
   signatureFor,
   signedEventRequest,
   signedRequest,
+  installSyntheticWebhookProvider,
 } from '../fixtures/stripe-events';
 import { POST as webhook } from '@/app/api/stripe/webhook/route';
 
 beforeAll(() => {
-  // getStripeClient() needs *a* key; no network calls happen because the
-  // handler only uses webhooks.constructEvent (pure crypto).
+  // Real cryptographic signatures with synthetic canonical provider reads.
   vi.stubEnv('STRIPE_SECRET_KEY', 'sk_test_integration_only');
   vi.stubEnv('STRIPE_WEBHOOK_SECRET', WEBHOOK_SECRET);
 });
+beforeEach(installSyntheticWebhookProvider);
 afterEach(cleanupFixtures);
 
 /** Awaiting payment, carrying the session id the webhook will be told about. */
@@ -74,14 +75,16 @@ describe('Stripe checkout webhook -> order PAID transition', () => {
     const still = await db.order.findUniqueOrThrow({ where: { id: order.id } });
     expect(still.status).toBe('PENDING_PAYMENT');
     expect(still.paidAt).toBeNull();
+    expect(await db.paymentEvent.count({ where: { orderId: order.id } })).toBe(0);
   });
 
-  it('ignores events for orders that do not exist', async () => {
-    const res = await webhook(
-      signedEventRequest(completedEvent('nonexistent-order-id', 'cs_test_orphan')),
-    );
-    // Acknowledged so Stripe stops retrying an event we can never apply.
+  it('retains unmatched events for orders that do not exist', async () => {
+    const event = completedEvent('nonexistent-order-id', 'cs_test_orphan');
+    const res = await webhook(signedEventRequest(event));
     expect(res.status).toBe(200);
+    const record = await db.paymentEvent.findUniqueOrThrow({ where: { providerEventId: event.id } });
+    trackPaymentEvent(record.id);
+    expect(record).toMatchObject({ status: 'UNMATCHED', orderId: null });
   });
 
   it('does not transition on unpaid completion or unknown sessions', async () => {

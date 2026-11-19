@@ -4,6 +4,7 @@ import {
   type Currency,
   type CurrencyRates,
 } from "./pricing/currency";
+import { assertChargeAmount } from "./pricing/charge";
 
 /**
  * Stripe Checkout integration. Cards never touch our servers: we create a
@@ -12,6 +13,7 @@ import {
  */
 
 let client: Stripe | null = null;
+let clientKey: string | null = null;
 
 export function isStripeConfigured(): boolean {
   return Boolean(process.env.STRIPE_SECRET_KEY);
@@ -22,8 +24,9 @@ export function getStripeClient(): Stripe {
   if (!key) {
     throw new Error("STRIPE_SECRET_KEY is not configured");
   }
-  if (!client) {
+  if (!client || clientKey !== key) {
     client = new Stripe(key, { typescript: true });
+    clientKey = key;
   }
   return client;
 }
@@ -65,10 +68,12 @@ export function toStripeAmount(
 export interface CheckoutSessionInput {
   orderId: string;
   submissionTitle: string;
-  amountHuf: number;
+  amountMinor: number;
   currency: Currency;
-  rates?: Partial<CurrencyRates> | null;
+  idempotencyKey: string;
   customerEmail?: string | null;
+  attemptId?: string;
+  providerRequest?: Stripe.Checkout.SessionCreateParams;
 }
 
 export interface CheckoutSessionResult {
@@ -76,27 +81,43 @@ export interface CheckoutSessionResult {
   sessionId: string;
 }
 
-export async function createCheckoutSession(
-  input: CheckoutSessionInput,
-): Promise<CheckoutSessionResult> {
-  const stripe = getStripeClient();
-  // NEXTAUTH_URL is the canonical public origin (set in every environment);
-  // relative redirects would be rejected by Stripe.
-  const appUrl = process.env.NEXTAUTH_URL ?? "http://localhost:3000";
+export class CheckoutSessionUnavailable extends Error {
+  constructor(readonly sessionId: string) { super("Issued Checkout session needs review"); }
+}
 
-  const session = await stripe.checkout.sessions.create({
+export function stripeLivemode(): boolean {
+  const mode = /^(sk|rk)_(live|test)_/.exec(process.env.STRIPE_SECRET_KEY ?? "")?.[2];
+  if (!mode) throw new Error("Provider account mode needs review");
+  return mode === "live";
+}
+
+/** Own-account identity, fetched without any financial mutation. */
+export async function retrieveStripeAccountContext() {
+  const livemode = stripeLivemode();
+  const account = await getStripeClient().accounts.retrieve(null);
+  if (!account.id?.startsWith("acct_")) throw new Error("Provider account needs review");
+  return { accountId: account.id, livemode };
+}
+
+/** Freeze this entire request before issuance, including redirects and email,
+ * so changing application/configuration details cannot alter an ambiguous retry.
+ */
+export function buildCheckoutRequest(input: CheckoutSessionInput): Stripe.Checkout.SessionCreateParams {
+  assertChargeAmount(input.amountMinor, input.currency);
+  const appUrl = process.env.NEXTAUTH_URL ?? "http://localhost:3000";
+  const metadata = { orderId: input.orderId, ...(input.attemptId ? { attemptId: input.attemptId } : {}) };
+  return {
     mode: "payment",
     client_reference_id: input.orderId,
     customer_email: input.customerEmail ?? undefined,
-    // The webhook matches this id against Order.stripeSessionId, so events
-    // for sessions we never issued are ignored.
-    metadata: { orderId: input.orderId },
+    metadata,
+    payment_intent_data: { metadata },
     line_items: [
       {
         quantity: 1,
         price_data: {
           currency: input.currency.toLowerCase(),
-          unit_amount: toStripeAmount(input.amountHuf, input.currency, input.rates),
+          unit_amount: input.amountMinor,
           product_data: {
             name: "TitchyBook printed book",
             description: input.submissionTitle,
@@ -106,10 +127,30 @@ export async function createCheckoutSession(
     ],
     success_url: `${appUrl}/dashboard/orders/${input.orderId}?checkout=success`,
     cancel_url: `${appUrl}/dashboard/orders/${input.orderId}?checkout=canceled`,
-  });
+  };
+}
 
-  if (!session.url || !session.id) {
-    throw new Error("Stripe did not return a checkout session URL");
-  }
+export async function createCheckoutSession(input: CheckoutSessionInput): Promise<CheckoutSessionResult> {
+  assertChargeAmount(input.amountMinor, input.currency);
+  const session = await getStripeClient().checkout.sessions.create(
+    input.providerRequest ?? buildCheckoutRequest(input), { idempotencyKey: input.idempotencyKey },
+  );
+  if (!session.id) throw new Error("Stripe did not return a checkout session ID");
+  if (!session.url) throw new CheckoutSessionUnavailable(session.id);
   return { url: session.url, sessionId: session.id };
+}
+
+/** Canonical provider proof for legacy amounts/open-session recovery, never current FX. */
+export async function retrieveOrderCheckoutSession(sessionId: string, orderId: string, currency: Currency) {
+  const session = await getStripeClient().checkout.sessions.retrieve(sessionId);
+  const keyMode = /^(sk|rk)_(live|test)_/.exec(process.env.STRIPE_SECRET_KEY ?? "")?.[2];
+  if (!keyMode || session.id !== sessionId || session.mode !== "payment" || session.livemode !== (keyMode === "live") ||
+      session.client_reference_id !== orderId || session.metadata?.orderId !== orderId ||
+      session.currency !== currency.toLowerCase() || session.amount_total === null ||
+      session.amount_subtotal !== session.amount_total || session.automatic_tax?.enabled ||
+      session.total_details?.amount_discount !== 0 || session.total_details?.amount_tax !== 0 ||
+      session.total_details?.amount_shipping !== 0) throw new Error("Provider session needs review");
+  try { assertChargeAmount(session.amount_total, currency); }
+  catch { throw new Error("Provider session needs review"); }
+  return session;
 }

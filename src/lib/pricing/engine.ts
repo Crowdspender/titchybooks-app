@@ -55,13 +55,17 @@ export interface DiscountInput {
 export interface CalculateOrderOptions {
   discount?: DiscountInput;
   vaultAddOn?: boolean;
+  packagingWeightGrams?: number;
+  shippedExtraCopies?: number;
+  maxWeightGrams?: number;
 }
 
 export function calculateWeight(
   quantity: number,
-  cfg: ResolvedPricingConfig
+  cfg: ResolvedPricingConfig,
+  options: CalculateOrderOptions = {}
 ): number {
-  return quantity * cfg.weightPerBookGrams;
+  return (quantity + (options.shippedExtraCopies ?? 0)) * cfg.weightPerBookGrams + (options.packagingWeightGrams ?? 0);
 }
 
 /**
@@ -183,7 +187,7 @@ export function calculateOrder(
   cfg: ResolvedPricingConfig,
   options: CalculateOrderOptions = {}
 ): CalculatedOrder {
-  const weightGrams = calculateWeight(quantity, cfg);
+  const weightGrams = calculateWeight(quantity, cfg, options);
   const shippingBand = getShippingBand(zone, weightGrams, cfg);
   if (shippingBand === -1) {
     throw shippingLimitError(zone, weightGrams, cfg);
@@ -225,11 +229,13 @@ export function calculateOrder(
 export function bandCeilingQuantity(
   zone: Zone,
   bandIndex: number,
-  cfg: ResolvedPricingConfig
+  cfg: ResolvedPricingConfig,
+  options: CalculateOrderOptions = {}
 ): number {
   const band = cfg.shippingTable[zone]?.[bandIndex];
   if (!band) return 0;
-  return Math.floor(band.maxWeightGrams / cfg.weightPerBookGrams);
+  const cap = Math.min(band.maxWeightGrams, options.maxWeightGrams ?? Infinity);
+  return Math.max(0, Math.floor((cap - (options.packagingWeightGrams ?? 0)) / cfg.weightPerBookGrams) - (options.shippedExtraCopies ?? 0));
 }
 
 export interface OptimalSuggestion {
@@ -247,11 +253,12 @@ export interface OptimalSuggestion {
 export function suggestOptimalQuantity(
   zone: Zone,
   quantity: number,
-  cfg: ResolvedPricingConfig
+  cfg: ResolvedPricingConfig,
+  options: CalculateOrderOptions = {}
 ): OptimalSuggestion | null {
   let current: CalculatedOrder;
   try {
-    current = calculateOrder(zone, quantity, cfg);
+    current = calculateOrder(zone, quantity, cfg, options);
   } catch {
     return null;
   }
@@ -263,7 +270,7 @@ export function suggestOptimalQuantity(
   const candidates = new Set<number>();
   const ladder = cfg.shippingTable[zone] ?? [];
   for (let band = 0; band < ladder.length; band += 1) {
-    const q = bandCeilingQuantity(zone, band, cfg);
+    const q = bandCeilingQuantity(zone, band, cfg, options);
     if (q > quantity) candidates.add(q);
   }
   for (const tier of cfg.priceTiers) {
@@ -274,7 +281,8 @@ export function suggestOptimalQuantity(
   for (const q of candidates) {
     if (q === quantity) continue;
     try {
-      const candidate = calculateOrder(zone, q, cfg);
+      const candidate = calculateOrder(zone, q, cfg, options);
+      if (candidate.weightGrams > (options.maxWeightGrams ?? Infinity)) continue;
       if (
         candidate.costPerBookHuf < (best?.costPerBookHuf ?? Infinity) &&
         candidate.costPerBookHuf < current.costPerBookHuf
@@ -312,13 +320,14 @@ const NEAR_BREAK_WINDOW = 5;
 export function buildUxMessages(
   zone: Zone,
   quantity: number,
-  cfg: ResolvedPricingConfig
+  cfg: ResolvedPricingConfig,
+  options: CalculateOrderOptions = {}
 ): UxMessage[] {
   const messages: UxMessage[] = [];
 
   let current: CalculatedOrder;
   try {
-    current = calculateOrder(zone, quantity, cfg);
+    current = calculateOrder(zone, quantity, cfg, options);
   } catch (error) {
     messages.push({
       level: "warning",
@@ -342,7 +351,7 @@ export function buildUxMessages(
   for (const breakQty of PRICE_BREAK_QUANTITIES) {
     if (breakQty > quantity && breakQty - quantity <= NEAR_BREAK_WINDOW) {
       try {
-        const better = calculateOrder(zone, breakQty, cfg);
+        const better = calculateOrder(zone, breakQty, cfg, options);
         if (better.costPerBookHuf < current.costPerBookHuf) {
           messages.push({
             level: "info",
@@ -356,7 +365,7 @@ export function buildUxMessages(
     }
   }
 
-  const suggestion = suggestOptimalQuantity(zone, quantity, cfg);
+  const suggestion = suggestOptimalQuantity(zone, quantity, cfg, options);
   if (suggestion && suggestion.savingsPct >= 5) {
     messages.push({
       level: "tip",

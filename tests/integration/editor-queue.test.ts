@@ -9,6 +9,8 @@ import { claimRenderJob, enqueueRenderJob, failRender, heartbeat, processRenderJ
 import { parseRenderSnapshot } from '@/lib/pdf/snapshot';
 import type { RenderArtifacts } from '@/lib/pdf/render-output';
 import { prisma } from '@/lib/prisma';
+import { uploadToS3 } from '@/lib/s3';
+import { PRINT_SHEET_FILENAME, READING_PDF_FILENAME, parseArtifactManifest, verifyArtifact } from '@/lib/pdf/artifacts';
 import { POST as create } from '@/app/api/submissions/route';
 import { GET as load, PATCH as title } from '@/app/api/submissions/[id]/route';
 import { PUT as page } from '@/app/api/submissions/[id]/pages/[pageLabel]/route';
@@ -21,14 +23,22 @@ import { DELETE as deleteTemplate } from '@/app/api/admin/templates/[id]/route';
 
 const session = vi.hoisted(() => ({ user: null as null | { id: string; role: string } }));
 vi.mock('@/auth', () => ({ auth: async () => session.user ? { user: session.user } : null }));
-vi.mock('@/lib/s3', () => ({
+vi.mock('@/lib/s3', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/s3')>('@/lib/s3');
+  const { default: sharp } = await import('sharp');
+  const image = await sharp({ create: { width: 8, height: 8, channels: 3, background: '#ffffff' } }).png().toBuffer();
+  return {
+  ...actual,
+  downloadFromS3: vi.fn(async () => image),
+  uploadToS3: vi.fn(async () => {}),
   getPresignedDownloadUrl: vi.fn(async () => 'https://storage.example.invalid/test.pdf'),
   // POST /api/submissions HEAD-verifies every uploaded key before accepting
   // it; tests default to a small, present object (individual cases override).
   headS3Object: vi.fn(async () => ({ size: 1024, contentType: 'image/png' })),
   buildRenderAttemptPrefix: (user: string, submission: string, job: string, attempt: number, token: string) =>
     `renders/${user}/${submission}/${job}/${attempt}-${token}`,
-}));
+  };
+});
 vi.mock('@/lib/email', () => ({ sendWelcomeEmail: vi.fn(), sendPasswordResetEmail: vi.fn() }));
 const request = (body?: unknown) => new Request('http://localhost/test', {
   method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body ?? {}),
@@ -66,6 +76,7 @@ const artifacts: RenderArtifacts = {
 beforeEach(async () => {
   expect(await db.renderJob.count({ where: { status: { in: ['QUEUED', 'PROCESSING'] } } })).toBe(0);
   session.user = await createUser();
+  vi.mocked(uploadToS3).mockImplementation(async () => {});
   vi.stubGlobal('fetch', vi.fn(() => { throw new Error('External HTTP is forbidden in integration tests'); }));
 });
 afterEach(async () => { await cleanupFixtures(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
@@ -84,6 +95,40 @@ async function due(id: string) {
 }
 
 describe('editor API and transactional submission', () => {
+  it.each([undefined, '', '   ', 'short', 'x'.repeat(1001)])('requires bounded correction guidance before rejection (%s)', async rejectionReason => {
+    const draft = await createDraft(session.user!.id);
+    await db.submission.update({ where: { id: draft.id }, data: { status: 'PENDING', pdfS3Key: 'retained/master.pdf' } });
+    session.user = await createUser('ADMIN');
+    expect((await moderate(request({ action: 'REJECT', rejectionReason }), params(draft.id))).status).toBe(400);
+    expect((await db.submission.findUniqueOrThrow({ where: { id: draft.id } })).status).toBe('PENDING');
+  });
+
+  it('serializes conflicting approval/rejection and preserves review/artifact evidence on replay', async () => {
+    const draft = await createDraft(session.user!.id);
+    await db.submission.update({ where: { id: draft.id }, data: { status: 'PENDING', pdfS3Key: 'retained/master.pdf', readingPdfS3Key: 'retained/reading.pdf' } });
+    session.user = await createUser('ADMIN');
+    const results = await Promise.all([
+      moderate(request({ action: 'APPROVE' }), params(draft.id)),
+      moderate(request({ action: 'REJECT', rejectionReason: '  Please correct the cover text.  ' }), params(draft.id)),
+    ]);
+    expect(results.map(r => r.status).sort()).toEqual([200, 409]);
+    const reviewed = await db.submission.findUniqueOrThrow({ where: { id: draft.id } });
+    expect(reviewed.rejectionReason).toBe(reviewed.status === 'REJECTED' ? 'Please correct the cover text.' : null);
+    expect((await moderate(request({ action: 'REJECT', rejectionReason: 'Replace original review evidence' }), params(draft.id))).status).toBe(409);
+    expect(await db.submission.findUniqueOrThrow({ where: { id: draft.id } })).toEqual(reviewed);
+    expect(reviewed.pdfS3Key).toBe('retained/master.pdf');
+    expect(reviewed.readingPdfS3Key).toBe('retained/reading.pdf');
+  });
+
+  it('rejects a downgraded administrator despite the stale ADMIN session claim', async () => {
+    const draft = await createDraft(session.user!.id);
+    await db.submission.update({ where: { id: draft.id }, data: { status: 'PENDING', pdfS3Key: 'retained/master.pdf' } });
+    session.user = await createUser('ADMIN');
+    await db.user.update({ where: { id: session.user.id }, data: { role: 'USER' } });
+    expect((await moderate(request({ action: 'APPROVE' }), params(draft.id))).status).toBe(403);
+    expect((await db.submission.findUniqueOrThrow({ where: { id: draft.id } })).status).toBe('PENDING');
+  });
+
   it('creates eight pages, saves unique content, reloads, and freezes on submit', async () => {
     const created = await create(request({ mode: 'EDITOR', title: 'Eight pages' }));
     expect(created.status).toBe(201);
@@ -242,7 +287,65 @@ describe('durable worker', () => {
     expect(visible).toMatchObject({ submissionStatus: 'PENDING', jobStatus: 'COMPLETED', pdfUrl: null });
     session.user = await createUser('ADMIN');
     expect((await moderate(request({ action: 'APPROVE' }), params(submission.id))).status).toBe(200);
-    expect((await (await status(request(), params(submission.id))).json()).pdfUrl).toContain('example.invalid');
+    expect((await (await status(request(), params(submission.id))).json()).pdfUrl).toBe(`/api/submissions/${submission.id}/downloads?kind=print`);
+  });
+
+  it.each([READING_PDF_FILENAME, PRINT_SHEET_FILENAME])('never publishes when %s upload fails, then retries under a new fence', async failedFilename => {
+    const { draft } = await queued();
+    const uploaded = new Map<string, Buffer>();
+    vi.mocked(uploadToS3).mockImplementation(async (key, bytes) => {
+      if (key.endsWith(failedFilename)) throw new Error('Injected storage failure');
+      uploaded.set(key, Buffer.from(bytes));
+    });
+    const first = (await claimRenderJob())!;
+    await processRenderJob(first);
+    const incomplete = await db.submission.findUniqueOrThrow({ where: { id: draft.id }, include: { pages: true } });
+    expect(incomplete).toMatchObject({ status: 'PROCESSING', pdfS3Key: null, readingPdfS3Key: null, artifactManifest: null });
+    expect(incomplete.pages.every(page => page.previewS3Key === null)).toBe(true);
+    expect((await db.renderJob.findUniqueOrThrow({ where: { id: first.id } })).status).toBe('QUEUED');
+    expect((await (await status(request(), params(draft.id))).json()).ready).toBe(false);
+    if (failedFilename === PRINT_SHEET_FILENAME) expect([...uploaded.keys()].some(key => key.endsWith(READING_PDF_FILENAME))).toBe(true);
+    vi.mocked(uploadToS3).mockImplementation(async (key, bytes) => { uploaded.set(key, Buffer.from(bytes)); });
+    await due(first.id);
+    const second = (await claimRenderJob())!;
+    expect(second.claimToken).not.toBe(first.claimToken);
+    expect(second.inputSnapshot).toEqual(first.inputSnapshot);
+    await processRenderJob(second);
+    const completed = await db.submission.findUniqueOrThrow({ where: { id: draft.id }, include: { pages: true } });
+    expect(completed.status).toBe('PENDING');
+    expect(completed.pdfS3Key).toContain(`/2-${second.claimToken}/`);
+    expect(completed.readingPdfS3Key).toContain(`/2-${second.claimToken}/`);
+    expect(completed.pages.every(page => page.previewS3Key?.includes(`/2-${second.claimToken}/`))).toBe(true);
+    const published = parseArtifactManifest(completed.artifactManifest)!;
+    expect(published.submissionId).toBe(draft.id);
+    expect(published.renderJobId).toBe(second.id);
+    expect(await verifyArtifact('print', published.print, uploaded.get(completed.pdfS3Key!)!)).toEqual([]);
+    expect(await verifyArtifact('reading', published.reading, uploaded.get(completed.readingPdfS3Key!)!)).toEqual([]);
+    expect(await failRender(first)).toBe(false);
+    expect(await publishRender(first, artifacts)).toBe(false);
+    expect((await db.submission.findUniqueOrThrow({ where: { id: draft.id } })).pdfS3Key).toBe(completed.pdfS3Key);
+  }, 60000);
+
+  it.each(['pdfS3Key', 'readingPdfS3Key'])('rejects incomplete publication with missing %s', async key => {
+    const { draft } = await queued();
+    const job = (await claimRenderJob())!;
+    await expect(publishRender(job, { ...artifacts, [key]: '' })).rejects.toThrow('incomplete artifact set');
+    expect((await db.renderJob.findUniqueOrThrow({ where: { id: job.id } })).status).toBe('PROCESSING');
+    expect((await db.submission.findUniqueOrThrow({ where: { id: draft.id } })).pdfS3Key).toBeNull();
+  });
+
+  it('preserves low-DPI blocking, explicit force, and the retained source snapshot', async () => {
+    const draft = await createDraft(session.user!.id);
+    const asset = await db.asset.create({ data: { userId: session.user!.id, s3Key: `assets/${session.user!.id}/low.png`, mimeType: 'image/png', originalFilename: 'low.png', fileSize: 100, width: 8, height: 8 } });
+    const scene = createEmptyEditorScene();
+    scene.elements.push(imageElement(asset.id));
+    await savePage(draft.id, 'FRONT_COVER', session.user!, scene, 0);
+    await expect(enqueueRenderJob(draft.id, session.user!)).rejects.toMatchObject({ status: 422 });
+    expect(await db.renderJob.count({ where: { submissionId: draft.id } })).toBe(0);
+    const forced = await enqueueRenderJob(draft.id, session.user!, { force: true });
+    expect(forced.dpiWarnings).toEqual([expect.objectContaining({ severity: 'error' })]);
+    const frozen = parseRenderSnapshot((await db.renderJob.findUniqueOrThrow({ where: { id: forced.jobId } })).inputSnapshot);
+    expect(frozen.assets).toEqual([expect.objectContaining({ id: asset.id, s3Key: asset.s3Key, width: 8, height: 8 })]);
   });
 
   it('delays retries, exhausts three attempts, and opens a deduplicated new cycle', async () => {
@@ -328,6 +431,7 @@ describe('durable worker', () => {
     expect(input.mode).toBe('LEGACY_UPLOAD');
     expect(input.renderer).toBe('raster');
     expect(input.images).toHaveLength(8);
+    expect(input.images.every(image => image.s3Key.startsWith(`uploads/${session.user!.id}/canonical/`))).toBe(true);
     expect((await create(request({ images: images.map(image => ({ ...image, s3Key: 'uploads/other/key' })) }))).status).toBe(403);
     await expect(saveTitle(job.submissionId, session.user!, 'changed', 0)).rejects.toMatchObject({ status: 409 });
   });

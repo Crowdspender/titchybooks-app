@@ -1,6 +1,7 @@
 import { createRoot } from "react-dom/client";
 import { Toaster } from "sonner";
 import EditorWorkspace from "@/components/editor/EditorWorkspace";
+import SubmissionList from "@/components/submissions/SubmissionList";
 import {
     elementSeeds,
     pageSeeds,
@@ -16,6 +17,7 @@ import { layoutDesignText } from "@/lib/editor/design-text-layout";
 import { DEFAULT_RESOLVED_CONFIG } from "@/lib/pricing/constants";
 import "@/app/globals.css";
 
+const pdfCase = new URLSearchParams(location.search).get("pdfCase");
 const recipe = SEED_RECIPES[0];
 const elements = elementSeeds(recipe).map((row) => ({
     ...row,
@@ -65,7 +67,7 @@ const controls = {
             const scene = resolveSceneDesign(
                 editorSceneSchema.parse(JSON.parse(page.sceneJson)),
                 elements.filter((row) => row.pageLabel === page.pageLabel).map(
-                    (row) => row.element
+                    (row) => row.element,
                 ),
             );
             return {
@@ -106,6 +108,23 @@ window.fetch = async (input, init) => {
     if (!url.pathname.startsWith("/api/")) return nativeFetch(input, init);
     const json = (value: unknown, status = 200) =>
         Response.json(value, { status });
+    if (pdfCase && url.pathname === "/api/submissions") {
+        return json({
+            submissions: [{
+                id: `download-fixture-${pdfCase}`,
+                title: "Controlled PDF download",
+                mode: "EDITOR",
+                status: "APPROVED",
+                pdfS3Key: "fixture-only",
+                readingPdfS3Key: pdfCase === "legacy"
+                    ? null
+                    : "fixture-reading",
+                rejectionReason: null,
+                createdAt: "2026-01-01T00:00:00Z",
+            }],
+        });
+    }
+    // Native PDF links are served by the controlled HTTP fixture, not this fetch mock.
     if (url.pathname === "/api/assets") return json({ assets: [] });
     if (url.pathname.includes("/api/pricing")) {
         return json({
@@ -136,7 +155,7 @@ window.fetch = async (input, init) => {
             resolveSceneDesign(
                 editorSceneSchema.parse(body.scene),
                 elements.filter((row) => row.pageLabel === page.pageLabel).map(
-                    (row) => row.element
+                    (row) => row.element,
                 ),
             );
         } catch (error) {
@@ -166,7 +185,13 @@ createRoot(document.getElementById("root")!).render(
         <div className="border-b bg-amber-50 px-6 py-2 text-xs">
             LOCAL FIXTURE · No database, accounts, or external services
         </div>
-        <EditorWorkspace submissionId="fixture" />
+        {pdfCase
+            ? (
+                <div className="p-6">
+                    <SubmissionList />
+                </div>
+            )
+            : <EditorWorkspace submissionId="fixture" />}
         <Toaster />
     </>,
 );

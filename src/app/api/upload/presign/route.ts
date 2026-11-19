@@ -51,16 +51,13 @@ export async function GET(request: NextRequest) {
   // the key namespace is the session user's id (never a client-supplied one),
   // and POST /api/submissions re-verifies the uploads/<userId>/ prefix; these
   // checks stop malformed/garbage segments from ever reaching S3.
-  if (!SUBMISSION_ID_PATTERN.test(submissionId)) {
+  if (!SUBMISSION_ID_PATTERN.test(submissionId) || submissionId === 'canonical') {
     return NextResponse.json({ error: "Invalid upload session id" }, { status: 400 });
   }
   if (!(PAGE_LABELS as readonly string[]).includes(pageLabel)) {
     return NextResponse.json({ error: "Invalid page label" }, { status: 400 });
   }
-  const ext = (filename.split(".").pop() || "jpg").toLowerCase();
-  if (!/^[a-z0-9]{1,5}$/.test(ext)) {
-    return NextResponse.json({ error: "Invalid file extension" }, { status: 400 });
-  }
+  const ext = contentType === 'image/jpeg' ? 'jpg' : contentType === 'image/png' ? 'png' : 'webp';
 
   // NOTE: ContentType is part of the signature, so S3 enforces the declared
   // image type on the PUT. Object size cannot be constrained by a presigned
@@ -72,5 +69,5 @@ export async function GET(request: NextRequest) {
   const s3Key = buildUploadKey(session.user.id, submissionId, pageLabel, ext, randomUUID());
   const uploadUrl = await getPresignedUploadUrl(s3Key, contentType);
 
-  return NextResponse.json({ uploadUrl, s3Key });
+  return NextResponse.json({ uploadUrl, s3Key }, { headers: { 'Cache-Control': 'private, no-store', Vary: 'Cookie' } });
 }

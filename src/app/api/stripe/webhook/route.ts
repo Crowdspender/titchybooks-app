@@ -1,24 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 import type Stripe from "stripe";
-import { prisma } from "@/lib/prisma";
 import { getStripeClient } from "@/lib/stripe";
-import {
-  createVaultEntryForOrder,
-  transitionOrderToPaid,
-} from "@/lib/orders/lifecycle";
-import { recordPaymentAlert } from "@/lib/orders/payment-alerts";
+import { processSignedPaymentEvent } from "@/lib/orders/payment-events";
 
 export const dynamic = "force-dynamic";
 
 /**
- * Stripe webhook for Checkout sessions. Authenticity comes solely from the
+ * Stripe webhook for Checkout, payments, refunds, and disputes. Authenticity comes solely from the
  * signature (constructed against STRIPE_WEBHOOK_SECRET) - no session cookie
  * or bearer token is involved, and the same-origin proxy pre-check lets
  * this through because Stripe sends no Origin header.
  *
- * Idempotency: Stripe retries events, and duplicate deliveries must be
- * harmless. transitionOrderToPaid is a conditional update (exactly one
- * winner) and the vault entry creation dedupes by orderId.
+ * Signed deliveries are durably minimized before canonical provider reads.
+ * Amount/context/reference checks and settlement share one revision-fenced
+ * transaction; payment history never overwrites physical fulfillment.
  */
 export async function POST(request: NextRequest) {
   const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
@@ -45,128 +40,18 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    switch (event.type) {
-      case "checkout.session.completed": {
-        const session = event.data.object as Stripe.Checkout.Session;
-        await handleCompletedSession(session);
-        break;
-      }
-      case "checkout.session.expired": {
-        const session = event.data.object as Stripe.Checkout.Session;
-        console.info(
-          JSON.stringify({
-            event: "checkout-session-expired",
-            orderId: session.metadata?.orderId,
-            sessionId: session.id,
-          }),
-        );
-        break;
-      }
-      default:
-        // Unhandled event types are acknowledged, not retried forever.
-        break;
-    }
-  } catch (err) {
+    await processSignedPaymentEvent(event);
+  } catch {
     // Non-2xx makes Stripe retry the delivery with backoff.
     console.error(
       JSON.stringify({
         event: "stripe-webhook-error",
         eventId: event.id,
-        error: err instanceof Error ? err.message : String(err),
+        outcome: "canonical-reconciliation-failed",
       }),
     );
     return NextResponse.json({ error: "Processing failed" }, { status: 500 });
   }
 
   return NextResponse.json({ received: true });
-}
-
-async function handleCompletedSession(session: Stripe.Checkout.Session) {
-  const orderId = session.metadata?.orderId ?? session.client_reference_id;
-  if (!orderId) {
-    console.warn(JSON.stringify({ event: "stripe-webhook-no-order", sessionId: session.id }));
-    return;
-  }
-  if (session.payment_status !== "paid") {
-    console.warn(
-      JSON.stringify({
-        event: "stripe-webhook-unpaid-completion",
-        orderId,
-        paymentStatus: session.payment_status,
-      }),
-    );
-    // The buyer reached a completion without paying, so the order stays as it
-    // is and an operator decides whether to chase it. orderId is a foreign key
-    // and this branch runs before the order is loaded, so attach the alert only
-    // when there is a row to attach it to.
-    const known = await prisma.order.findUnique({
-      where: { id: orderId },
-      select: { id: true },
-    });
-    await recordPaymentAlert({
-      kind: "unpaid-completion",
-      orderId: known?.id ?? null,
-      subject: session.id,
-      message: `Checkout completed without payment (${session.payment_status}); the order was left unchanged.`,
-      context: {
-        sessionId: session.id,
-        paymentStatus: session.payment_status,
-        referencedOrderId: orderId,
-      },
-    });
-    return;
-  }
-
-  const order = await prisma.order.findUnique({
-    where: { id: orderId },
-    select: { id: true, status: true, stripeSessionId: true },
-  });
-  if (!order) {
-    // Signed by our secret, so this can only be an event for an order that
-    // was cancelled and deleted, or a metadata mix-up. Do not create anything.
-    console.warn(
-      JSON.stringify({ event: "stripe-webhook-unknown-order", orderId, sessionId: session.id }),
-    );
-    return;
-  }
-  if (order.stripeSessionId !== session.id) {
-    // A newer session was issued for the same order but the buyer completed
-    // this older one - the payment is real (signature-verified), so proceed
-    // and surface it for reconciliation.
-    console.warn(
-      JSON.stringify({
-        event: "stripe-webhook-stale-session",
-        orderId,
-        sessionId: session.id,
-        storedSessionId: order.stripeSessionId,
-      }),
-    );
-    await recordPaymentAlert({
-      kind: "stale-session",
-      orderId: order.id,
-      subject: session.id,
-      message: "Paid on a superseded Checkout session; the order was still marked PAID.",
-      context: {
-        sessionId: session.id,
-        storedSessionId: order.stripeSessionId,
-      },
-    });
-  }
-
-  await prisma.$transaction(async (tx) => {
-    const result = await transitionOrderToPaid(tx, order.id);
-    // Also runs for "already-paid" as a vault-recovery path (e.g. an admin
-    // marked the order paid but the vault entry creation failed).
-    if (result.ok || result.reason === "already-paid") {
-      await createVaultEntryForOrder(tx, order.id);
-    }
-    console.info(
-      JSON.stringify({
-        event: "order-paid-via-webhook",
-        orderId: order.id,
-        sessionId: session.id,
-        transition: result.ok ? "applied" : (result.reason ?? "skipped"),
-      }),
-    );
-  });
 }

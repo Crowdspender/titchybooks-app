@@ -115,7 +115,10 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
     },
     async session({ session, token }) {
       session.user.id = token.id;
-      session.user.role = token.role;
+      // JWT roles are identity hints, not current authority. All auth() consumers,
+      // including the proxy and privileged resource routes, receive the current role.
+      const currentUser = await prisma.user.findUnique({ where: { id: token.id }, select: { role: true } });
+      session.user.role = currentUser?.role ?? "USER";
       return session;
     },
   },

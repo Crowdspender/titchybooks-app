@@ -29,7 +29,9 @@ export default function ForgotPasswordForm() {
 
             setSubmitted(true);
             setLoading(false);
-            toast.success("Password reset link sent! Check your email.");
+            toast.success(
+                "Reset request received. Check your email for next steps.",
+            );
         } catch {
             toast.error("Something went wrong. Please try again.");
             setLoading(false);
@@ -65,8 +67,10 @@ export default function ForgotPasswordForm() {
                         className="text-sm"
                         style={{ color: "var(--color-text-muted)" }}
                     >
-                        We&apos;ve sent a password reset link to{" "}
-                        <strong>{email}</strong>
+                        If an account exists for <strong>{email}</strong>{" "}
+                        and email delivery is available, you&apos;ll receive a
+                        password reset link. This response does not confirm
+                        delivery.
                     </p>
                 </div>
 
@@ -136,7 +140,7 @@ export default function ForgotPasswordForm() {
                                     strokeDashoffset="10"
                                 />
                             </svg>
-                            Sending reset link...
+                            Requesting reset link...
                         </span>
                     )
                     : (

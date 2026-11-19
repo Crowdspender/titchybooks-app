@@ -38,13 +38,14 @@ export default async function MyVaultPage() {
           className="mt-1.5 text-sm max-w-xl"
           style={{ color: "var(--color-text-muted)" }}
         >
-          Physical copies stored with us. Books are private by default —
+          Records for paid Vault add-ons. Payment and the recorded status do not
+          confirm physical receipt of copies. Books are private by default —
           choosing &ldquo;Make public&rdquo; lists the title and author name in
           the{" "}
           <Link href="/vault" className="underline">
             public directory
-          </Link>
-          , and you can undo that at any time.
+          </Link>{" "}
+          if the entry is active. You can remove that consent at any time.
         </p>
       </div>
 
@@ -75,7 +76,7 @@ export default async function MyVaultPage() {
                     style={{ color: "var(--color-text-muted)" }}
                   >
                     {entry.authorName} · {entry.quantity} copies ·{" "}
-                    {entry.status}
+                    Record status: {entry.status}
                   </p>
                 </div>
                 <VaultConsentToggle

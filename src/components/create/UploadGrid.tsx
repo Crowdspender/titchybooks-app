@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import ImageUploader from "./ImageUploader";
@@ -37,6 +37,8 @@ export default function UploadGrid() {
     new Map(),
   );
   const [submitting, setSubmitting] = useState(false);
+  const submitLock = useRef(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
   const handleUploaded = useCallback(
     (pageLabel: PageLabel, s3Key: string, file: File) => {
@@ -57,8 +59,10 @@ export default function UploadGrid() {
   const allUploaded = uploads.size === 8;
 
   async function handleSubmit() {
-    if (!allUploaded) return;
+    if (!allUploaded || submitLock.current) return;
+    submitLock.current = true;
     setSubmitting(true);
+    setSubmitError(null);
 
     try {
       const images = PAGE_LABELS.map((label, idx) => {
@@ -83,11 +87,14 @@ export default function UploadGrid() {
         throw new Error(data.error || "Submission failed");
       }
 
-      toast.success("Titchybooks submitted! PDF is being generated.");
+      toast.success("Images submitted. PDF generation is queued.");
       router.push("/dashboard");
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Submission failed");
+      const message = err instanceof Error ? err.message : "Submission failed";
+      setSubmitError(message);
+      toast.error(message);
     } finally {
+      submitLock.current = false;
       setSubmitting(false);
     }
   }
@@ -117,8 +124,14 @@ export default function UploadGrid() {
         {uploads.size} of 8 images uploaded
       </div>
 
+      {submitError && (
+        <p role="alert">
+          {submitError}. Your selected images remain available to retry.
+        </p>
+      )}
       <div className="flex justify-center">
         <button
+          type="button"
           onClick={handleSubmit}
           disabled={!allUploaded || submitting}
           className="px-6 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"

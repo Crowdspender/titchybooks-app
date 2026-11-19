@@ -52,6 +52,7 @@ interface EditorCanvasProps {
   /** Commit an inline (double-click) text edit; the caller routes template
    * text to overrides and user text to the scene. */
   onTextCommit?: (elementId: string, text: string) => void;
+  onTextDraft?: (elementId: string, text: string | null) => void;
 }
 
 const CANVAS_MAX_WIDTH_PX = 420;
@@ -945,11 +946,13 @@ function CanvasTextEditor({
   scale,
   onCommit,
   onCancel,
+  onDraft,
 }: {
   element: Extract<EditorElement, { type: "text" }>;
   scale: number;
   onCommit: (text: string) => void;
   onCancel: () => void;
+  onDraft?: (text: string) => void;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   // Guard against a blur commit firing after an explicit commit/cancel.
@@ -979,6 +982,7 @@ function CanvasTextEditor({
       onBlur={(event) => commit(event.currentTarget)}
       onInput={(event) => {
         const node = event.currentTarget;
+        onDraft?.(node.value);
         node.style.height = "auto";
         node.style.height = `${node.scrollHeight}px`;
       }}
@@ -1039,6 +1043,7 @@ export default function EditorCanvas({
   onSwipeLeft,
   onSwipeRight,
   onTextCommit,
+  onTextDraft,
 }: EditorCanvasProps) {
   const stageRef = useRef<Konva.Stage | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -1191,6 +1196,7 @@ export default function EditorCanvas({
   function finishTextEdit(text: string | null) {
     const element = editingElement;
     setEditingTextId(null);
+    if (element) onTextDraft?.(element.id, null);
     if (!element || text === null || text === element.text) return;
     onTextCommit?.(element.id, text);
   }
@@ -1467,6 +1473,7 @@ export default function EditorCanvas({
               scale={scale}
               onCommit={(text) => finishTextEdit(text)}
               onCancel={() => finishTextEdit(null)}
+              onDraft={(text) => onTextDraft?.(editingElement.id, text)}
             />
           )
           : null}

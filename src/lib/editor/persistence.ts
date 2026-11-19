@@ -2,7 +2,15 @@ import { PAGE_LABELS, type PageLabel } from '@/lib/constants';
 import { editorSceneSchema } from './schema';
 
 export type DocumentPart = 'title' | PageLabel;
-export type SaveState = 'idle' | 'saving' | 'saved' | 'error';
+export type SaveState = 'idle' | 'saving' | 'saved' | 'error' | 'conflict';
+
+export class EditorRequestError extends Error {
+  constructor(readonly status: number, message: string) { super(message); }
+}
+
+export class DraftLoadError extends EditorRequestError {
+  get unavailable() { return this.status === 404 || this.status === 409; }
+}
 export type DocumentSeed = Record<DocumentPart, { value: string; revision: number }>;
 export type SaveTransport = (part: DocumentPart, value: string, revision: number) => Promise<number>;
 type Part = { value: string; saved: string; revision: number; flight?: Promise<void>; error?: Error };
@@ -23,6 +31,9 @@ export class DraftPersistence {
   }
   get dirty() { return [...this.parts.values()].some(p => p.value !== p.saved || !!p.flight); }
   revision(part: DocumentPart) { return this.parts.get(part)!.revision; }
+  snapshot(): DocumentSeed {
+    return Object.fromEntries([...this.parts].map(([key, part]) => [key, { value: part.value, revision: part.revision }])) as DocumentSeed;
+  }
   set(part: DocumentPart, value: string) {
     const entry = this.parts.get(part)!;
     if (this.disposed || entry.value === value) return;
@@ -67,7 +78,8 @@ export class DraftPersistence {
   private notify() {
     if (this.disposed) return;
     const entries = [...this.parts.values()];
-    this.onState(entries.some(p => p.error) ? 'error' : entries.some(p => p.flight) ? 'saving' : this.dirty ? 'idle' : 'saved');
+    this.onState(entries.some(p => p.error instanceof EditorRequestError && p.error.status === 409) ? 'conflict'
+      : entries.some(p => p.error) ? 'error' : entries.some(p => p.flight) ? 'saving' : this.dirty ? 'idle' : 'saved');
     const parts: Recovery = {};
     for (const [key, part] of this.parts) {
       if (part.value !== part.saved || part.flight) parts[key] = { value: part.value, revision: part.revision };
@@ -81,6 +93,8 @@ export class DraftPersistence {
     if (this.disposed) return Promise.reject(new Error('Draft changed; save canceled'));
     const entry = this.parts.get(part)!;
     if (entry.flight) return entry.flight;
+    // A revision conflict needs an explicit reload/recovery decision, not another stale write.
+    if (entry.error instanceof EditorRequestError && entry.error.status === 409) return Promise.reject(entry.error);
     entry.error = undefined;
     if (entry.saved === entry.value) { this.notify(); return Promise.resolve(); }
     const run = async () => {

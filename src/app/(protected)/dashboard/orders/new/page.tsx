@@ -32,9 +32,7 @@ export default async function NewOrderPage({
     });
 
     if (!submission) notFound();
-    if (
-        submission.userId !== session.user.id && session.user.role !== "ADMIN"
-    ) {
+    if (submission.userId !== session.user.id) {
         redirect("/dashboard");
     }
 
@@ -72,8 +70,9 @@ export default async function NewOrderPage({
                         color: "#92400E",
                     }}
                 >
-                    This Titchybook isn&apos;t approved yet — you can preview
-                    pricing, but ordering will unlock once an admin approves it.
+                    This Titchybook isn&apos;t approved yet. A matching quote
+                    and ordering will unlock after approval and a print-ready
+                    PDF.
                 </p>
             )}
 

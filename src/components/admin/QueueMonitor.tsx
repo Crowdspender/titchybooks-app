@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 interface DrainRun {
     id: string;
@@ -108,6 +108,14 @@ export default function QueueMonitor() {
     const [error, setError] = useState<string | null>(null);
     const [loading, setLoading] = useState(true);
     const [refreshKey, setRefreshKey] = useState(0);
+    const inFlight = useRef(true);
+    const refresh = useCallback(() => {
+        if (inFlight.current) return;
+        inFlight.current = true;
+        setLoading(true);
+        setError(null);
+        setRefreshKey((key) => key + 1);
+    }, []);
 
     useEffect(() => {
         let cancelled = false;
@@ -129,7 +137,10 @@ export default function QueueMonitor() {
                     );
                 }
             } finally {
-                if (!cancelled) setLoading(false);
+                if (!cancelled) {
+                    inFlight.current = false;
+                    setLoading(false);
+                }
             }
         }
         load();
@@ -139,12 +150,9 @@ export default function QueueMonitor() {
     }, [refreshKey]);
 
     useEffect(() => {
-        const timer = setInterval(
-            () => setRefreshKey((key) => key + 1),
-            REFRESH_MS,
-        );
+        const timer = setInterval(refresh, REFRESH_MS);
         return () => clearInterval(timer);
-    }, []);
+    }, [refresh]);
 
     return (
         <div className="page-container py-10">
@@ -166,16 +174,28 @@ export default function QueueMonitor() {
                     </p>
                 </div>
                 <button
-                    onClick={() => setRefreshKey((key) => key + 1)}
+                    onClick={refresh}
+                    disabled={loading}
                     className="btn btn-ghost btn-sm"
                 >
-                    Refresh
+                    {loading ? "Refreshing…" : "Refresh"}
                 </button>
             </div>
 
+            {loading && data && (
+                <p role="status" className="text-sm mb-4">
+                    Refreshing queue status. The last checked results remain
+                    below.
+                </p>
+            )}
             {loading && !data
                 ? (
-                    <div className="space-y-3">
+                    <div
+                        className="space-y-3"
+                        role="status"
+                        aria-label="Loading queue status"
+                    >
+                        <span className="sr-only">Loading queue status…</span>
                         {[1, 2].map((i) => (
                             <div
                                 key={i}
@@ -197,11 +217,13 @@ export default function QueueMonitor() {
                 ? (
                     <div
                         className="card p-6 text-sm"
+                        role="alert"
                         style={{ background: "#FEE2E2", color: "#991B1B" }}
                     >
-                        {error}
+                        Queue status unavailable: {error}
                         <button
-                            onClick={() => setRefreshKey((key) => key + 1)}
+                            onClick={refresh}
+                            disabled={loading}
                             className="btn btn-ghost btn-sm ml-3"
                         >
                             Retry
@@ -620,7 +642,14 @@ function Section({
                 )
                 : (
                     <div className="card overflow-hidden">
-                        <div className="overflow-x-auto">{children}</div>
+                        <div
+                            className="overflow-x-auto"
+                            role="region"
+                            aria-label={title}
+                            tabIndex={0}
+                        >
+                            {children}
+                        </div>
                     </div>
                 )}
         </div>

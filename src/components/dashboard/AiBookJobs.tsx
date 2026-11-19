@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import OpenInEditorButton from "@/components/submissions/OpenInEditorButton";
+import PdfDownloads from "@/components/submissions/PdfDownloads";
 
 interface AiJobItem {
     id: string;
@@ -139,25 +140,16 @@ export default function AiBookJobs() {
                                     View progress
                                 </Link>
                             )}
-                            {job.artifacts.printSheet &&
-                                job.artifacts.approved && (
-                                <a
-                                    href={`/api/ai/books/${job.id}/downloads?kind=print`}
+                            {job.artifacts.approved && job.submissionId && (
+                                <PdfDownloads
+                                    submissionId={job.submissionId}
+                                    basePath={`/api/ai/books/${
+                                        encodeURIComponent(job.id)
+                                    }/downloads`}
+                                    printAvailable={job.artifacts.printSheet}
+                                    readingAvailable={job.artifacts.readingPdf}
                                     className="btn btn-outline btn-sm text-xs"
-                                    download
-                                >
-                                    Print sheet
-                                </a>
-                            )}
-                            {job.artifacts.readingPdf &&
-                                job.artifacts.approved && (
-                                <a
-                                    href={`/api/ai/books/${job.id}/downloads?kind=reading`}
-                                    className="btn btn-outline btn-sm text-xs"
-                                    download
-                                >
-                                    Reading PDF
-                                </a>
+                                />
                             )}
                             {job.phase.terminal && job.submissionId && (
                                 job.artifacts.approved

@@ -9,6 +9,20 @@ export default function Header() {
   const { data: session } = useSession();
   const [mobileOpen, setMobileOpen] = useState(false);
 
+  function requestSignOut() {
+    const proceed = () => {
+      void signOut({ callbackUrl: "/" });
+    };
+    if (
+      window.dispatchEvent(
+        new CustomEvent("titchybook-before-leave", {
+          cancelable: true,
+          detail: { proceed },
+        }),
+      )
+    ) proceed();
+  }
+
   return (
     <header
       className="sticky top-0 z-50 border-b"
@@ -64,7 +78,7 @@ export default function Header() {
                   {session.user.email?.split("@")[0]}
                 </span>
                 <button
-                  onClick={() => signOut({ callbackUrl: "/" })}
+                  onClick={requestSignOut}
                   className="btn btn-ghost btn-sm"
                   style={{ color: "var(--color-text-muted)" }}
                 >
@@ -204,7 +218,7 @@ export default function Header() {
                     {session.user.email}
                   </div>
                   <button
-                    onClick={() => signOut({ callbackUrl: "/" })}
+                    onClick={requestSignOut}
                     className="btn btn-ghost btn-sm justify-start"
                   >
                     Sign out

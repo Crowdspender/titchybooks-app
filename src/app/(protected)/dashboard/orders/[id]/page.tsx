@@ -4,7 +4,11 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { isStripeConfigured } from "@/lib/stripe";
 import PayNowButton from "@/components/orders/PayNowButton";
+import PaymentStatus, {
+    paymentMessage,
+} from "@/components/orders/PaymentStatus";
 import { type Zone, ZONE_LABELS } from "@/lib/pricing/constants";
+import { formatCharge, isCurrency } from "@/lib/pricing/currency";
 
 export default async function OrderDetailPage({
     params,
@@ -28,36 +32,41 @@ export default async function OrderDetailPage({
     });
 
     if (!order) notFound();
-    if (order.userId !== session.user.id && session.user.role !== "ADMIN") {
-        redirect("/dashboard/orders");
+    if (order.userId !== session.user.id) {
+        const currentRole = session.user.role === "ADMIN"
+            ? (await prisma.user.findUnique({
+                where: { id: session.user.id },
+                select: { role: true },
+            }))?.role
+            : null;
+        if (currentRole !== "ADMIN") redirect("/dashboard/orders");
     }
 
     const fmt = (v: number) => `${v.toLocaleString("en-US")} HUF`;
+    const charge =
+        order.expectedMinorAmount !== null && isCurrency(order.currency)
+            ? formatCharge(order.expectedMinorAmount, order.currency)
+            : null;
+    const snapshot = order.quoteSnapshot as {
+        terms?: { version?: string; text?: string };
+        shipping?: { destination?: { service?: string } };
+    } | null;
 
-    // Banner for the return trip from Stripe Checkout. The webhook usually
-    // lands before the browser redirect, but treat "still pending" as a
-    // timing gap rather than a failure.
-    let banner: { text: string; color: string; bg: string } | null = null;
-    if (checkout === "success") {
-        banner = order.status === "PAID"
-            ? {
-                text: "Payment received. Your order is confirmed.",
-                color: "#166534",
-                bg: "#DCFCE7",
-            }
-            : {
-                text:
-                    "Payment completed - confirmation is on its way, refresh in a few seconds.",
-                color: "#92400E",
-                bg: "var(--color-accent-light)",
-            };
-    } else if (checkout === "canceled") {
-        banner = {
-            text: "Checkout was canceled. You can retry payment below.",
-            color: "#991B1B",
-            bg: "#FEE2E2",
-        };
-    }
+    // A return URL is not payment evidence; persisted reconciliation is authoritative.
+    const canPay = order.status === "PENDING_PAYMENT" && !order.paymentHold &&
+        (order.paymentState === null ||
+            ["UNPAID", "FAILED"].includes(order.paymentState));
+    const banner = checkout === "success" || checkout === "canceled"
+        ? {
+            text: `${
+                checkout === "success"
+                    ? "Returned from checkout."
+                    : "Checkout was closed. Closing checkout is not a refund."
+            } ${paymentMessage(order.paymentState, order.paymentHold)}`,
+            color: "var(--color-text)",
+            bg: "var(--color-accent-light)",
+        }
+        : null;
 
     return (
         <div className="page-container py-10">
@@ -82,8 +91,7 @@ export default async function OrderDetailPage({
                     </h1>
                 </div>
                 <div className="flex items-center gap-3">
-                    {order.status === "PENDING_PAYMENT" &&
-                        isStripeConfigured() && (
+                    {canPay && isStripeConfigured() && (
                         <PayNowButton orderId={order.id} />
                     )}
                     <Link
@@ -123,6 +131,34 @@ export default async function OrderDetailPage({
                     />
                 </DetailCard>
 
+                <DetailCard title="Payment">
+                    <PaymentStatus
+                        state={order.paymentState}
+                        hold={order.paymentHold}
+                        summary={order.paymentSummary}
+                    />
+                    <p
+                        className="text-xs"
+                        style={{ color: "var(--color-text-muted)" }}
+                    >
+                        Payment status is separate from printing, delivery, and
+                        physical Vault receipt.
+                    </p>
+                    <form method="get">
+                        <button className="btn btn-ghost btn-sm">
+                            Refresh payment status
+                        </button>
+                    </form>
+                    {(order.paymentHold || order.paymentState === "REVIEW") && (
+                        <Link
+                            href="/contact?topic=other"
+                            className="btn btn-ghost btn-sm"
+                        >
+                            Request payment review
+                        </Link>
+                    )}
+                </DetailCard>
+
                 <DetailCard title="Pricing">
                     <DetailRow
                         label="Price per copy"
@@ -142,6 +178,12 @@ export default async function OrderDetailPage({
                         label="Shipping"
                         value={fmt(order.shippingCostHuf)}
                     />
+                    {order.vaultFeeHuf > 0 && (
+                        <DetailRow
+                            label="Vault storage (2 copies)"
+                            value={fmt(order.vaultFeeHuf)}
+                        />
+                    )}
                     {order.discountHuf > 0 && (
                         <DetailRow
                             label="Discount"
@@ -153,10 +195,77 @@ export default async function OrderDetailPage({
                         style={{ background: "var(--color-border)" }}
                     />
                     <DetailRow
-                        label="Total"
+                        label="HUF total"
                         value={fmt(order.totalHuf)}
                         emphasis
                     />
+                    {charge
+                        ? (
+                            <>
+                                <DetailRow
+                                    label={order.quoteAcceptedAt
+                                        ? "Accepted charge"
+                                        : "Recovered original charge"}
+                                    value={charge}
+                                    emphasis
+                                />
+                                <p
+                                    className="text-xs"
+                                    style={{ color: "var(--color-text-muted)" }}
+                                >
+                                    Payment retries retain this exact charge;
+                                    current exchange rates do not reprice it.
+                                </p>
+                                <DetailRow
+                                    label="Original FX (per HUF)"
+                                    value={order.fxRate?.toString() ??
+                                        "Unknown — not reconstructed"}
+                                />
+                                {order.quoteAcceptedAt && (
+                                    <DetailRow
+                                        label="Quote accepted"
+                                        value={order.quoteAcceptedAt
+                                            .toLocaleString()}
+                                    />
+                                )}
+                                {order.pricingConfigVersion !== null && (
+                                    <DetailRow
+                                        label="Tariff version"
+                                        value={String(
+                                            order.pricingConfigVersion,
+                                        )}
+                                    />
+                                )}
+                            </>
+                        )
+                        : (
+                            <p
+                                className="text-xs"
+                                style={{ color: "var(--color-text-muted)" }}
+                            >
+                                Legacy order: the original charge is not yet
+                                proven. No amount is inferred from current
+                                exchange rates; contact us before retrying
+                                payment.
+                            </p>
+                        )}
+                    {typeof snapshot?.shipping?.destination?.service ===
+                            "string" && (
+                        <DetailRow
+                            label="Accepted service"
+                            value={snapshot.shipping.destination.service}
+                        />
+                    )}
+                    {typeof snapshot?.terms?.text === "string" && (
+                        <details className="text-xs pt-2">
+                            <summary className="cursor-pointer">
+                                Accepted terms ({snapshot.terms.version})
+                            </summary>
+                            <p className="mt-2 whitespace-pre-wrap break-words">
+                                {snapshot.terms.text}
+                            </p>
+                        </details>
+                    )}
                 </DetailCard>
 
                 <DetailCard title="Shipping address" className="md:col-span-2">

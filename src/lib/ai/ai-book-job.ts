@@ -7,6 +7,7 @@ import {
 } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { isAIConfigured } from "./client";
+import { lockAssetReferences, validatePinnedAssetReferences } from '@/lib/assets/references';
 
 // Re-export the database enums so callers keep importing the pipeline's state
 // machine from this module while Prisma remains the single source of truth.
@@ -91,6 +92,7 @@ export async function enqueueAiBookJob(
       async (tx) => {
         // Serializes cap enforcement and insertion per user. Lock ordering is
         // always user -> AiBookJob, matching the claim/fence paths.
+        await lockAssetReferences(tx);
         await tx.$executeRaw`SELECT "id" FROM "User" WHERE "id" = ${userId} FOR UPDATE`;
 
         const existing = await tx.aiBookJob.findUnique({
@@ -120,6 +122,11 @@ export async function enqueueAiBookJob(
           );
         }
 
+        // Idempotent replays above remain available after a template is unpublished.
+        if (templateId) {
+          const template = await tx.submission.findUnique({ where: { id: templateId } });
+          if (!template?.isTemplate || template.status !== 'APPROVED') throw new AiBookError(404, 'Template not found or not published');
+        }
         const job = await tx.aiBookJob.create({
           data: {
             userId,
@@ -209,6 +216,8 @@ export async function fenceAiBookJob(
   job: ClaimedAiBookJob,
   tx: Prisma.TransactionClient,
 ): Promise<boolean> {
+  // Keep source fence -> job -> submission ordering for composition callbacks.
+  await lockAssetReferences(tx);
   const rows = await tx.$queryRaw<{ id: string }[]>`
     SELECT "id" FROM "AiBookJob" WHERE "id" = ${job.id} AND "claimToken" = ${job.claimToken}
     AND "status" = 'PROCESSING' AND "leaseExpiresAt" > clock_timestamp() FOR UPDATE`;
@@ -257,6 +266,7 @@ export async function advanceStage(
     if (!(await fenceAiBookJob(job, tx))) return false;
     const extraData = extra ? await extra(tx) : undefined;
     const merged = await mergeStageOutput(tx, job.id, outputPatch);
+    await validatePinnedAssetReferences(tx, merged);
     await tx.aiBookJob.update({
       where: { id: job.id },
       data: {
@@ -331,6 +341,7 @@ export async function continueAiBook(
         } as Prisma.InputJsonValue)
       : undefined;
 
+    await validatePinnedAssetReferences(tx, merged);
     if (options.repair && current.repairCount >= current.maxRepairs) {
       // Keep the final rejection, not the previous attempt's diagnostics. Leave
       // the lease and counters intact so the caller can fence its terminal fail.
@@ -374,6 +385,7 @@ export async function completeAiBook(
     return await prisma.$transaction(async (tx) => {
       if (!(await fenceAiBookJob(job, tx))) return false;
       const merged = await mergeStageOutput(tx, job.id, outputPatch);
+      await validatePinnedAssetReferences(tx, merged);
       if (extra) await extra(tx);
       await tx.aiBookJob.update({
         where: { id: job.id },

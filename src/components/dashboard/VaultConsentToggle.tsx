@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useId, useRef, useState } from "react";
 import { toast } from "sonner";
 
 /**
@@ -17,9 +17,15 @@ export default function VaultConsentToggle({
 }) {
   const router = useRouter();
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const errorId = useId();
+  const inFlight = useRef(false);
 
   async function toggle() {
+    if (inFlight.current) return;
+    inFlight.current = true;
     setSaving(true);
+    setError(null);
     try {
       const res = await fetch(`/api/vault/${entryId}/consent`, {
         method: "PATCH",
@@ -33,28 +39,39 @@ export default function VaultConsentToggle({
       router.refresh();
       toast.success(
         consent
-          ? "Removed from the public vault directory."
-          : "Added to the public vault directory.",
+          ? "Public listing consent removed."
+          : "Public listing consent granted.",
       );
     } catch (err) {
-      toast.error(
-        err instanceof Error ? err.message : "Could not update visibility",
-      );
+      const message = err instanceof Error
+        ? err.message
+        : "Could not update visibility";
+      setError(message);
+      toast.error(message);
     } finally {
+      inFlight.current = false;
       setSaving(false);
     }
   }
 
   return (
-    <button
-      onClick={toggle}
-      disabled={saving}
-      className={`btn btn-sm ${
-        consent ? "btn-primary" : "btn-outline"
-      } disabled:opacity-50`}
-      aria-pressed={consent}
-    >
-      {saving ? "Saving..." : consent ? "Public ✓" : "Make public"}
-    </button>
+    <div>
+      <button
+        onClick={toggle}
+        disabled={saving}
+        className={`btn btn-sm ${
+          consent ? "btn-primary" : "btn-outline"
+        } disabled:opacity-50`}
+        aria-pressed={consent}
+        aria-describedby={error ? errorId : undefined}
+      >
+        {saving ? "Saving..." : consent ? "Consent granted ✓" : "Make public"}
+      </button>
+      {error && (
+        <p id={errorId} role="alert" className="text-sm mt-2">
+          {error} Please retry.
+        </p>
+      )}
+    </div>
   );
 }

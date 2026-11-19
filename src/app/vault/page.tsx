@@ -107,9 +107,9 @@ export default async function VaultDirectoryPage({
           className="mt-2 text-sm max-w-xl"
           style={{ color: "var(--color-text-muted)" }}
         >
-          A permanent archive of Titchybooks entrusted to our long-term paper
-          storage service. Each entry below represents a physical work preserved
-          indefinitely in the vault.
+          Owner-consented records for the Titchybook paper archive service.
+          Buying the Vault add-on does not make a book public. A directory
+          listing is not confirmation that physical copies have been received.
         </p>
       </div>
 
@@ -139,13 +139,14 @@ export default async function VaultDirectoryPage({
               className="font-medium mb-1"
               style={{ color: "var(--color-text)" }}
             >
-              The vault is empty
+              No public Vault entries yet
             </p>
             <p
               className="text-sm"
               style={{ color: "var(--color-text-muted)" }}
             >
-              No books have been archived yet. Be the first to add yours.
+              Vault records are private unless their owners separately choose
+              public listing.
             </p>
           </div>
         )
@@ -208,13 +209,13 @@ export default async function VaultDirectoryPage({
                             color: "#065F46",
                           }}
                         >
-                          Stored
+                          Archive record
                         </span>
                         <span
                           className="text-[11px]"
                           style={{ color: "var(--color-text-subtle)" }}
                         >
-                          {new Date(entry.storedAt).toLocaleDateString(
+                          Recorded {new Date(entry.storedAt).toLocaleDateString(
                             "en-US",
                             {
                               year: "numeric",

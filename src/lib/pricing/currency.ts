@@ -88,6 +88,12 @@ export function formatMoney(
   }).format(value);
 }
 
+/** Display an already accepted charge without applying today's FX again. */
+export function formatCharge(amountMinor: number, currency: Currency): string {
+  return `${(amountMinor / 100).toLocaleString("en-US", { minimumFractionDigits: currency === "HUF" ? 0 : 2,
+    maximumFractionDigits: 2 })} ${currency}`;
+}
+
 export function isCurrency(value: unknown): value is Currency {
   return (
     typeof value === "string" &&

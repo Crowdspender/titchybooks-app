@@ -1,14 +1,13 @@
 ﻿import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
-import { SubmissionStatus } from "@/lib/constants";
 import { consumeRateLimit, tooManyRequests } from "@/lib/rate-limit";
-import { createCheckoutSession, isStripeConfigured } from "@/lib/stripe";
-import { isCurrency, type Currency } from "@/lib/pricing/currency";
-import { loadPricingConfig } from "@/lib/pricing/config";
-import { calculateOrder } from "@/lib/pricing/engine";
+import { isStripeConfigured } from "@/lib/stripe";
+import { preparePaymentAttempt, issuePaymentAttempt, PaymentReviewRequired } from "@/lib/orders/payment-attempts";
 import { createOrderInputSchema } from "@/lib/pricing/schema";
-import { DEFAULT_CURRENCY } from "@/lib/pricing/currency";
+import { acceptOrderQuote, findOrderReplay, OrderEligibilityError, OrderRequestConflict } from "@/lib/orders/accepted-quote";
+import { ManualQuoteRequired } from "@/lib/pricing/destination";
+import { OfferReviewRequired } from "@/lib/pricing/offer";
 
 export const dynamic = "force-dynamic";
 
@@ -36,16 +35,6 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  // Durable per-user cap on order creation (pricing recompute is DB+CPU work,
-  // and orders become fulfillment instructions - they must not be spammable).
-  const rl = await consumeRateLimit(`order:user:${session.user.id}`, {
-    limit: 10,
-    windowMs: 60 * 60_000,
-  });
-  if (!rl.allowed) {
-    return tooManyRequests(rl, "Too many order attempts - please try again later.");
-  }
-
   let body: unknown;
   try {
     body = await request.json();
@@ -61,90 +50,28 @@ export async function POST(request: Request) {
     );
   }
 
-  const { submissionId, zone, quantity, currency, shippingAddress, vaultAddOn } = parsed.data;
-  const selectedCurrency = currency ?? DEFAULT_CURRENCY;
-  const wantsVault = vaultAddOn ?? false;
-
-  const submission = await prisma.submission.findUnique({
-    where: { id: submissionId },
-    select: {
-      id: true,
-      userId: true,
-      status: true,
-      pdfS3Key: true,
-      title: true,
-    },
-  });
-
-  if (!submission) {
-    return NextResponse.json({ error: "Submission not found" }, { status: 404 });
-  }
-  if (submission.userId !== session.user.id) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  }
-  if (submission.status !== SubmissionStatus.APPROVED) {
-    return NextResponse.json(
-      { error: "Only approved Titchybooks can be ordered" },
-      { status: 400 }
-    );
-  }
-  if (!submission.pdfS3Key) {
-    return NextResponse.json(
-      { error: "PDF is not yet ready for this Titchybook" },
-      { status: 400 }
-    );
-  }
-
-  const cfg = await loadPricingConfig();
-
-  if (!cfg.enabledZones.includes(zone)) {
-    return NextResponse.json(
-      { error: `Shipping to ${zone} is currently disabled` },
-      { status: 400 }
-    );
-  }
-
-  let calc;
+  let accepted;
   try {
-    calc = calculateOrder(zone, quantity, cfg, { vaultAddOn: wantsVault });
+    const replay = await findOrderReplay(session.user.id, parsed.data);
+    if (replay) return NextResponse.json({ order: replay, checkoutUrl: null, replayed: true },
+      { headers: { "Cache-Control": "private, no-store" } });
+    const rl = await consumeRateLimit(`order:user:${session.user.id}`, { limit: 10, windowMs: 60 * 60_000 });
+    if (!rl.allowed) return tooManyRequests(rl, "Too many order attempts - please try again later.");
+    accepted = await acceptOrderQuote(session.user.id, parsed.data);
   } catch (error) {
-    return NextResponse.json(
-      {
-        error:
-          error instanceof Error ? error.message : "Calculation failed",
-      },
-      { status: 400 }
-    );
+    if (error instanceof OrderEligibilityError || error instanceof OrderRequestConflict) {
+      return NextResponse.json({ error: error.message }, { status: error.status });
+    }
+    if (error instanceof ManualQuoteRequired || error instanceof OfferReviewRequired) {
+      return NextResponse.json({ error: error.message, code: error.code, contactUrl: "/contact?topic=unlisted_region" },
+        { status: error instanceof ManualQuoteRequired ? 422 : 409 });
+    }
+    // A response/commit failure is ambiguous: keep the same request key on retry.
+    return NextResponse.json({ error: "Order outcome is uncertain. Retry the same request or check your orders before starting another." }, { status: 503 });
   }
-
-  const order = await prisma.order.create({
-    data: {
-      userId: session.user.id,
-      submissionId: submission.id,
-      quantity: calc.quantity,
-      zone: calc.zone,
-      weightGrams: calc.weightGrams,
-      shippingBand: calc.shippingBand,
-      vaultAddOn: wantsVault,
-      vaultFeeHuf: calc.vaultFeeHuf,
-      unitPriceHuf: calc.unitPriceHuf,
-      printCostHuf: calc.printCostHuf,
-      handlingCostHuf: calc.handlingCostHuf,
-      shippingCostHuf: calc.shippingCostHuf,
-      discountHuf: calc.discountHuf,
-      totalHuf: calc.totalHuf,
-      currency: selectedCurrency,
-      status: "PENDING_PAYMENT",
-      pricingConfigVersion: cfg.version,
-      recipientName: shippingAddress.recipientName,
-      line1: shippingAddress.line1,
-      line2: shippingAddress.line2,
-      city: shippingAddress.city,
-      postalCode: shippingAddress.postalCode,
-      countryCode: shippingAddress.countryCode,
-      phone: shippingAddress.phone,
-    },
-  });
+  const { order, created, title } = accepted;
+  if (!created) return NextResponse.json({ order, checkoutUrl: null, replayed: true },
+    { headers: { "Cache-Control": "private, no-store" } });
 
   // Mint a Stripe Checkout session when configured. A Stripe failure must
   // not lose the order: it stays PENDING_PAYMENT and can be paid later via
@@ -153,33 +80,18 @@ export async function POST(request: Request) {
   let paymentError: string | undefined;
   if (isStripeConfigured()) {
     try {
-      const chargeCurrency: Currency = isCurrency(selectedCurrency)
-        ? selectedCurrency
-        : "HUF";
-      const { url, sessionId } = await createCheckoutSession({
-        orderId: order.id,
-        submissionTitle: submission.title ?? "TitchyBook",
-        amountHuf: order.totalHuf,
-        currency: chargeCurrency,
-        rates: cfg.currencyRates,
-        customerEmail: session.user.email ?? null,
-      });
-      await prisma.order.update({
-        where: { id: order.id },
-        data: { stripeSessionId: sessionId },
-      });
-      checkoutUrl = url;
-    } catch (err) {
-      paymentError =
-        err instanceof Error ? err.message : "Payment session creation failed";
-      console.error(
-        JSON.stringify({ event: "checkout-session-failed", orderId: order.id, error: paymentError }),
-      );
+      const attempt = await preparePaymentAttempt(order.id, title, session.user.email);
+      const issued = await issuePaymentAttempt(attempt.id);
+      checkoutUrl = issued.url;
+    } catch (error) {
+      paymentError = error instanceof PaymentReviewRequired ? error.message
+        : "Payment page unavailable. Your accepted charge and payment attempt are retained; check the order page before retrying.";
+      console.error(JSON.stringify({ event: "checkout-session-failed", orderId: order.id }));
     }
   }
 
   return NextResponse.json(
-    { order, checkoutUrl, ...(paymentError ? { paymentError } : {}) },
-    { status: 201 },
+    { order: await prisma.order.findUniqueOrThrow({ where: { id: order.id } }), checkoutUrl, ...(paymentError ? { paymentError } : {}) },
+    { status: 201, headers: { "Cache-Control": "private, no-store" } },
   );
 }

@@ -2,6 +2,8 @@ import { Prisma, type PrismaClient } from "@prisma/client";
 import { PAGE_LABELS, type PageLabel } from "../src/lib/constants";
 import { preflightTemplateRows, summarizePreflight } from "../src/lib/ai/template-preflight";
 import { SEED_RECIPES, backgroundFor, elementSeeds, pageSeeds } from "./seed-recipes";
+import { assertActiveAssetIds, lockAssetReferences } from '../src/lib/assets/references';
+import { editorElementSchema } from '../src/lib/editor/schema';
 
 /**
  * Seed the three complete text-first starter recipes.
@@ -23,6 +25,9 @@ export async function seedTemplates(prisma: PrismaClient, adminId: string): Prom
     // stale APPROVED status over new rows. Preflight runs inside it, before
     // the publication status flips.
     await prisma.$transaction(async (tx) => {
+      await lockAssetReferences(tx);
+      const parsed = elements.map(row => editorElementSchema.parse(JSON.parse(row.elementJson)));
+      await assertActiveAssetIds(tx, parsed.flatMap(element => element.type === 'image' ? [element.assetId] : []));
       const existing = await tx.submission.findUnique({
         where: { managedKey: recipe.key },
         select: { id: true },

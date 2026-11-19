@@ -8,9 +8,8 @@ import {
   PAGE_LABELS,
   SubmissionMode,
   SubmissionStatus,
-  MAX_FILE_SIZE,
 } from "@/lib/constants";
-import { headS3Object } from "@/lib/s3";
+import { finalizeImageUpload, ImageUploadError } from "@/lib/assets/upload";
 import { consumeRateLimit, tooManyRequests } from "@/lib/rate-limit";
 import { createEmptySubmissionPageSeeds } from "@/lib/editor/validation";
 
@@ -134,20 +133,15 @@ export async function POST(request: Request) {
     // Verify the uploaded objects server-side: presigned PUTs are open to the
     // client for their validity window, so confirm each key exists, is
     // non-empty, and stays within MAX_FILE_SIZE before accepting them.
-    const uploads = await Promise.all(images.map((img) => headS3Object(img.s3Key)));
-    for (const [i, head] of uploads.entries()) {
-      const pageLabel = images[i].pageLabel;
-      if (!head) {
-        return NextResponse.json(
-          { error: `The upload for ${pageLabel} is missing. Please upload it again.` },
-          { status: 400 }
-        );
-      }
-      if (head.size === 0 || head.size > MAX_FILE_SIZE) {
-        return NextResponse.json(
-          { error: `The upload for ${pageLabel} must be between 1 byte and ${MAX_FILE_SIZE / (1024 * 1024)} MB.` },
-          { status: 400 }
-        );
+    // Decode one page at a time to bound peak memory across an eight-page upload.
+    const verifiedImages: typeof images = [];
+    for (const image of images) {
+      try {
+        const verified = await finalizeImageUpload(image.s3Key, `uploads/${session.user.id}/canonical`);
+        verifiedImages.push({ ...image, s3Key: verified.s3Key, mimeType: verified.mimeType });
+      } catch (error) {
+        if (error instanceof ImageUploadError) throw new SubmissionError(400, `${image.pageLabel}: ${error.message}`);
+        throw error;
       }
     }
 
@@ -158,7 +152,7 @@ export async function POST(request: Request) {
         userId: actor.id,
         status: SubmissionStatus.DRAFT,
         images: {
-          create: images.map((img) => ({
+          create: verifiedImages.map((img) => ({
             pageLabel: img.pageLabel,
             s3Key: img.s3Key,
             order: img.order,

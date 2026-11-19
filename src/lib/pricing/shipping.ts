@@ -71,6 +71,27 @@ export function normaliseShippingTable(
   return table;
 }
 
+/** Validate before adapting; checkout must not silently drop malformed prices. */
+export function strictShippingTable(raw: unknown, legacyWeightBands: unknown): Record<Zone, ShippingBand[]> {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("Invalid shipping configuration");
+  const source = raw as Record<string, unknown>;
+  if (Object.keys(source).some(key => !(ZONES as readonly string[]).includes(key))) throw new Error("Unknown shipping zone");
+  const caps = Array.isArray(legacyWeightBands) ? legacyWeightBands : [];
+  const validCaps = caps.length > 0 && caps.every((cap, i) => Number.isSafeInteger(cap) && cap > 0 && (i === 0 || cap > caps[i - 1]));
+  for (const row of Object.values(source)) {
+    if (!Array.isArray(row) || row.length > 64) throw new Error("Invalid shipping ladder");
+    if (row.length === 0) continue;
+    if (row.every(isShippingBand)) {
+      if (!row.every((band, i) => Number.isSafeInteger(band.maxWeightGrams) && Number.isSafeInteger(band.priceHuf) &&
+          (i === 0 || band.maxWeightGrams > row[i - 1].maxWeightGrams))) throw new Error("Invalid shipping bands");
+    } else if (!validCaps || row.length !== caps.length ||
+        !row.every(price => price === null || (Number.isSafeInteger(price) && price >= 0))) {
+      throw new Error("Invalid legacy shipping prices");
+    }
+  }
+  return normaliseShippingTable(raw, legacyWeightBands);
+}
+
 export function cloneShippingTable(
   table: Record<Zone, ShippingBand[]>
 ): Record<Zone, ShippingBand[]> {

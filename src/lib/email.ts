@@ -42,9 +42,8 @@ export async function sendPasswordResetEmail({
   }
 
   try {
-    console.log(`📧 Attempting to send password reset email to ${to} from ${EMAIL_FROM}`);
     
-    const { data, error } = await resend.emails.send({
+    const { error } = await resend.emails.send({
       from: `Titchybooks <${EMAIL_FROM}>`,
       to,
       subject: "Reset your password",
@@ -58,7 +57,7 @@ export async function sendPasswordResetEmail({
             Click the button below to reset your password. This link will expire in 1 hour.
           </p>
           <div style="margin: 30px 0;">
-            <a href="${resetUrl}" 
+            <a href="${escapeHtml(resetUrl)}"
                style="background-color: #4F46E5; 
                       color: white; 
                       padding: 12px 24px; 
@@ -75,20 +74,17 @@ export async function sendPasswordResetEmail({
           <hr style="border: none; border-top: 1px solid #eee; margin: 30px 0;" />
           <p style="color: #999; font-size: 12px;">
             If the button doesn't work, copy and paste this link into your browser:<br />
-            <a href="${resetUrl}" style="color: #4F46E5; word-break: break-all;">${resetUrl}</a>
+            <a href="${escapeHtml(resetUrl)}" style="color: #4F46E5; word-break: break-all;">${escapeHtml(resetUrl)}</a>
           </p>
         </div>
       `,
     });
 
     if (error) return false;
-    console.log(`✅ Password reset email sent to ${to}`, data?.id);
+    console.info("password-reset-email-sent");
     return true;
-  } catch (error) {
-    console.error("❌ Failed to send password reset email:", error);
-    if (error instanceof Error) {
-      console.error("Error details:", error.message);
-    }
+  } catch {
+    console.warn("password-reset-email-unavailable");
     return false;
   }
 }
@@ -109,20 +105,19 @@ export async function sendWelcomeEmail({
   }
 
   try {
-    console.log(`📧 Attempting to send welcome email to ${to} from ${EMAIL_FROM}`);
     
-    const { data, error } = await resend.emails.send({
+    const { error } = await resend.emails.send({
       from: `Titchybooks <${EMAIL_FROM}>`,
       to,
       subject: "Welcome to Titchybooks!",
       html: `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-          <h2 style="color: #333;">Welcome to Titchybooks, ${name}! 🎉</h2>
+          <h2 style="color: #333;">Welcome to Titchybooks, ${escapeHtml(name)}! 🎉</h2>
           <p style="color: #666; font-size: 16px;">
             Your account has been successfully created. You're now ready to start creating beautiful booklets!
           </p>
           <div style="margin: 30px 0;">
-            <a href="${process.env.NEXTAUTH_URL || "http://localhost:3000"}/login" 
+            <a href="${escapeHtml(process.env.NEXTAUTH_URL || "http://localhost:3000")}/login"
                style="background-color: #4F46E5; 
                       color: white; 
                       padding: 12px 24px; 
@@ -151,13 +146,10 @@ export async function sendWelcomeEmail({
     });
 
     if (error) return false;
-    console.log(`✅ Welcome email sent to ${to}`, data?.id);
+    console.info("welcome-email-sent");
     return true;
-  } catch (error) {
-    console.error("❌ Failed to send welcome email:", error);
-    if (error instanceof Error) {
-      console.error("Error details:", error.message);
-    }
+  } catch {
+    console.warn("welcome-email-unavailable");
     return false;
   }
 }
@@ -250,7 +242,7 @@ ${escapeHtml(message)}
   `;
 
   try {
-    const { data, error } = await resend.emails.send({
+    const { error } = await resend.emails.send({
       from: `Titchybooks <${EMAIL_FROM}>`,
       to: inbox,
       replyTo: email,
@@ -260,16 +252,13 @@ ${escapeHtml(message)}
     });
 
     if (error) {
-      console.error("❌ Contact email rejected:", error);
+      console.warn("contact-email-rejected");
       return false;
     }
-    console.log(`✅ Contact email sent to ${inbox}`, data?.id);
+    console.info("contact-email-sent");
     return true;
-  } catch (error) {
-    console.error("❌ Failed to send contact email:", error);
-    if (error instanceof Error) {
-      console.error("Error details:", error.message);
-    }
+  } catch {
+    console.warn("contact-email-unavailable");
     return false;
   }
 }

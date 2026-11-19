@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { MAX_ORDER_QUANTITY, ORDER_STATUSES, ZONES } from "./constants";
-import { SUPPORTED_CURRENCIES } from "./currency";
+import { DEFAULT_CURRENCY, SUPPORTED_CURRENCIES } from "./currency";
+import { countryCodeSchema, normalizePostcode } from "./country";
 
 const zoneEnum = z.enum(ZONES);
 const currencyEnum = z.enum(SUPPORTED_CURRENCIES);
@@ -82,39 +83,61 @@ export const pricingConfigInputSchema = z
 
 export type PricingConfigInput = z.infer<typeof pricingConfigInputSchema>;
 
-export const calculateOrderInputSchema = z.object({
-  submissionId: z.string().min(1).optional(),
-  zone: zoneEnum,
-  quantity: z.number().int().min(1).max(MAX_ORDER_QUANTITY),
-  currency: currencyEnum.optional(),
-  vaultAddOn: z.boolean().optional(),
-});
-
 export const shippingAddressSchema = z.object({
   recipientName: z.string().trim().min(1).max(120),
   line1: z.string().trim().min(1).max(200),
-  line2: z.string().trim().max(200).optional(),
+  line2: z.string().trim().max(200).default(""),
   city: z.string().trim().min(1).max(120),
-  postalCode: z.string().trim().min(1).max(20),
-  countryCode: z.string().trim().length(2).toUpperCase(),
-  phone: z.string().trim().max(40).optional(),
-});
+  postalCode: z.string().trim().min(1).max(20).transform(normalizePostcode)
+    .pipe(z.string().regex(/^[A-Z0-9]{1,20}$/, "Enter a valid postal code")),
+  countryCode: countryCodeSchema,
+  phone: z.string().trim().max(40).default(""),
+}).strict();
 
 export type ShippingAddressInput = z.infer<typeof shippingAddressSchema>;
 
-export const createOrderInputSchema = z.object({
-  submissionId: z.string().min(1),
-  zone: zoneEnum,
+export const calculateOrderInputSchema = z.object({
+  submissionId: z.string().min(1).max(120),
+  // Compatibility assertion only: the destination resolver selects the tariff.
+  zone: zoneEnum.optional(),
   quantity: z.number().int().min(1).max(MAX_ORDER_QUANTITY),
-  currency: currencyEnum.optional(),
+  currency: currencyEnum.default(DEFAULT_CURRENCY),
   shippingAddress: shippingAddressSchema,
-  vaultAddOn: z.boolean().optional(),
+  vaultAddOn: z.boolean().default(false),
+}).strict();
+
+export type QuoteInputs = z.infer<typeof calculateOrderInputSchema>;
+
+export const createOrderInputSchema = calculateOrderInputSchema.extend({
+  offerToken: z.string().min(1).max(80000),
+  requestKey: z.string().uuid(),
+  acceptTerms: z.literal(true, { message: "Accept the displayed charge and terms before ordering" }),
 });
+
+export const manualSettlementSchema = z.object({
+  method: z.enum(["BANK_TRANSFER", "CASH", "OTHER"]),
+  reference: z.string().trim().min(1, "Payment evidence is required").max(500),
+  confirmed: z.literal(true, { message: "Confirm that you verified the manual payment" }),
+}).strict();
 
 export const adminUpdateOrderSchema = z.object({
   status: z.enum(ORDER_STATUSES).optional(),
   notes: z.string().trim().max(2000).nullable().optional(),
+  expectedUpdatedAt: z.string().datetime().optional(),
+  manualSettlement: manualSettlementSchema.optional(),
+}).strict().superRefine((input, ctx) => {
+  if (input.status === "PAID" && !input.manualSettlement) {
+    ctx.addIssue({ code: "custom", path: ["manualSettlement"], message: "Manual settlement requires payment evidence and confirmation" });
+  }
+  if (input.manualSettlement && input.status !== "PAID") {
+    ctx.addIssue({ code: "custom", path: ["manualSettlement"], message: "Payment evidence is only accepted when marking PAID" });
+  }
+  if (input.notes !== undefined && !input.expectedUpdatedAt) {
+    ctx.addIssue({ code: "custom", path: ["expectedUpdatedAt"], message: "Reload the order before editing notes" });
+  }
 });
+
+export type AdminUpdateOrderInput = z.infer<typeof adminUpdateOrderSchema>;
 
 export const adminListOrdersQuerySchema = z.object({
   status: z.enum(ORDER_STATUSES).optional(),

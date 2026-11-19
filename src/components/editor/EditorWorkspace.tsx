@@ -2,12 +2,23 @@
 
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
-import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
+import {
+  useEffect,
+  useEffectEvent,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { flushSync } from "react-dom";
 import {
   browserStorage,
   type DocumentSeed,
+  DraftLoadError,
   DraftPersistence,
   draftPointerStorage,
+  EditorRequestError,
+  type SaveState,
 } from "@/lib/editor/persistence";
 import { redoHistory, undoHistory } from "@/lib/editor/history";
 import { toast } from "sonner";
@@ -308,6 +319,13 @@ export default function EditorWorkspace({
   const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [loadingMessage, setLoadingMessage] = useState("Preparing editor...");
+  const [bootError, setBootError] = useState<
+    { message: string; unavailable: boolean; signIn: boolean } | null
+  >(null);
+  const [bootRetry, setBootRetry] = useState(0);
+  const [startNewRequested, setStartNewRequested] = useState(false);
+  const createdDraftRef = useRef<{ intent: string; id: string } | null>(null);
+  const [online, setOnline] = useState(true);
   const [submission, setSubmission] = useState<SubmissionRecord | null>(null);
   const [pagesByLabel, setPagesByLabel] = useState<
     Record<PageLabel, PageRecord>
@@ -320,11 +338,7 @@ export default function EditorWorkspace({
   const [selectedElementId, setSelectedElementId] = useState<string | null>(
     null,
   );
-  const [saveState, setSaveState] = useState<
-    "idle" | "saving" | "saved" | "error"
-  >(
-    "idle",
-  );
+  const [saveState, setSaveState] = useState<SaveState>("idle");
   const [title, setTitle] = useState("");
   const [assets, setAssets] = useState<AssetRecord[]>([]);
   const [assetUploading, setAssetUploading] = useState(false);
@@ -377,6 +391,15 @@ export default function EditorWorkspace({
   const frozenRef = useRef(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const submissionIdRef = useRef<string | null>(null);
+  const workspaceRef = useRef<HTMLDivElement | null>(null);
+  const documentRef = useRef({ title, pagesByLabel });
+  const inlineDraftRef = useRef<{ label: PageLabel; sceneJson: string } | null>(
+    null,
+  );
+  const [recoveryView, setRecoveryView] = useState<string | null>(null);
+  useLayoutEffect(() => {
+    documentRef.current = { title, pagesByLabel };
+  }, [title, pagesByLabel]);
 
   const activePage = pagesByLabel[activePageLabel];
   const readingIndex = PAGE_READING_ORDER.indexOf(activePageLabel);
@@ -402,6 +425,32 @@ export default function EditorWorkspace({
     () => templateElements[activePageLabel] ?? [],
     [templateElements, activePageLabel],
   );
+  // Saved/pinned sources need not be present in this user's library.
+  const renderAssets = useMemo(() => {
+    const map = new Map(assets.map((asset) => [asset.id, asset]));
+    for (const label of PAGE_LABELS) {
+      for (
+        const element of [
+          ...pagesByLabel[label].scene.elements,
+          ...templateElements[label],
+        ]
+      ) {
+        if (element.type === "image" && !map.has(element.assetId)) {
+          const url = `/api/assets/${element.assetId}/image`;
+          map.set(element.assetId, {
+            id: element.assetId,
+            originalFilename: "Retained source",
+            mimeType: "image/jpeg",
+            width: null,
+            height: null,
+            downloadUrl: url,
+            previewUrl: url,
+          });
+        }
+      }
+    }
+    return [...map.values()];
+  }, [assets, pagesByLabel, templateElements]);
   const designGesture = useRef({ active: false, recorded: false });
   const [fontRetry, setFontRetry] = useState(0);
   const [fontLoad, setFontLoad] = useState({ key: "", error: "" });
@@ -584,6 +633,12 @@ export default function EditorWorkspace({
     }
 
     async function createDraft(): Promise<string> {
+      const intent = `${submissionId ?? ""}:${
+        Boolean(forceNew)
+      }:${startNewRequested}`;
+      if (createdDraftRef.current?.intent === intent) {
+        return createdDraftRef.current.id;
+      }
       // If a draft creation is already in progress (from Strict Mode's first effect run),
       // return the same promise to avoid making a duplicate POST request.
       if (pendingDraftCreation) {
@@ -613,6 +668,12 @@ export default function EditorWorkspace({
             submission: { id: string };
           };
 
+          createdDraftRef.current = { intent, id: data.submission.id };
+          // Record the issued draft before loading it so retry never creates a replacement.
+          draftPointerStorage.setItem(
+            ACTIVE_DRAFT_STORAGE_KEY,
+            data.submission.id,
+          );
           return data.submission.id;
         } finally {
           // Clear the pending promise so future "new" creations can proceed
@@ -625,9 +686,18 @@ export default function EditorWorkspace({
 
     async function loadSubmission(submissionId: string) {
       setLoadingMessage("Loading your draft...");
-      const response = await fetch(`/api/submissions/${submissionId}`);
+      const response = await fetch(`/api/submissions/${submissionId}`, {
+        cache: "no-store",
+      });
       if (!response.ok) {
-        throw new Error("Could not load editor draft");
+        throw new DraftLoadError(
+          response.status,
+          response.status === 404
+            ? "This draft was not found. Your resume pointer and local recovery have been retained."
+            : response.status === 401 || response.status === 403
+            ? "Sign in with the draft owner's account, then retry. Your resume pointer and local recovery have been retained."
+            : `Your draft could not be loaded (HTTP ${response.status}). Check your connection and retry; no replacement draft was created.`,
+        );
       }
 
       const data = (await response.json()) as {
@@ -643,7 +713,10 @@ export default function EditorWorkspace({
       // Prevent loading a non-draft submission as an active draft
       // This prevents submitted/deleted submissions from being reused
       if (nextSubmission.status !== "DRAFT" && !nextSubmission.isTemplate) {
-        throw new Error("Submission is no longer in draft status");
+        throw new DraftLoadError(
+          409,
+          "This book is no longer editable as a draft. The original submission and local recovery are unchanged; use your dashboard to review it or create a separate draft.",
+        );
       }
 
       let nextPages = normalizePages(nextSubmission.pages);
@@ -679,11 +752,16 @@ export default function EditorWorkspace({
         }
       }
 
-      if (effectiveTemplateId) {
+      if (effectiveTemplateId && (!pinned || nextSubmission.isTemplate)) {
         try {
           const templateResponse = await fetch(
             `/api/templates/${effectiveTemplateId}/elements`,
           );
+          if (!templateResponse.ok) {
+            throw new Error(
+              `The protected template could not be loaded (HTTP ${templateResponse.status}). Retry before editing this book.`,
+            );
+          }
           if (templateResponse.ok) {
             const templateData = (await templateResponse.json()) as {
               templateElements: Array<
@@ -766,12 +844,13 @@ export default function EditorWorkspace({
               nextTemplateElements = elementsByPage as TemplateElementsByPage;
             }
           }
-        } catch {
-          // Template may have been deleted or unreachable – fallback to
-          // empty template layer so the editor still opens.
-          console.warn(
-            `Could not load template elements for template ${effectiveTemplateId}`,
-          );
+        } catch (error) {
+          // Never expose an incomplete template as an editable replacement.
+          throw error instanceof Error
+            ? error
+            : new Error(
+              "The protected template is unavailable. Reconnect and retry.",
+            );
         }
       }
 
@@ -808,7 +887,10 @@ export default function EditorWorkspace({
           );
           const result = await response.json();
           if (!response.ok) {
-            throw new Error(result.error || "Could not save your changes");
+            throw new EditorRequestError(
+              response.status,
+              result.error || "Could not save your changes",
+            );
           }
           return part === "title"
             ? result.submission.revision
@@ -883,6 +965,7 @@ export default function EditorWorkspace({
         // Reset state when navigating between different submissions or to forceNew
         // This ensures stale data from the previous submission doesn't persist
         setLoading(true);
+        setBootError(null);
         setLoadingMessage("Preparing editor...");
         setSubmission(null);
         setPagesByLabel(normalizePages([]));
@@ -910,41 +993,35 @@ export default function EditorWorkspace({
         if (cancelled) return;
 
         // If forceNew is true, always create a new draft and ignore localStorage
-        if (forceNew) {
-          draftPointerStorage.removeItem(ACTIVE_DRAFT_STORAGE_KEY);
+        if (forceNew || startNewRequested) {
           const nextId = await createDraft();
           await loadSubmission(nextId);
-        } // If submissionId is provided via URL, use it and clear localStorage
+        } // An explicit URL does not erase the prior pointer if loading fails.
         else if (submissionId) {
-          draftPointerStorage.removeItem(ACTIVE_DRAFT_STORAGE_KEY);
           await loadSubmission(submissionId);
         } else {
           const storedSubmissionId = draftPointerStorage.getItem(
             ACTIVE_DRAFT_STORAGE_KEY,
           );
           if (storedSubmissionId) {
-            try {
-              await loadSubmission(storedSubmissionId);
-            } catch (error) {
-              const message = error instanceof Error ? error.message : "";
-              if (message.includes("no longer in draft status")) {
-                toast.info(
-                  "Previous draft was submitted. Creating a new draft...",
-                );
-              }
-              draftPointerStorage.removeItem(ACTIVE_DRAFT_STORAGE_KEY);
-              const nextId = await createDraft();
-              await loadSubmission(nextId);
-            }
+            await loadSubmission(storedSubmissionId);
           } else {
             const nextId = await createDraft();
             await loadSubmission(nextId);
           }
         }
       } catch (error) {
-        toast.error(
-          error instanceof Error ? error.message : "Failed to start editor",
-        );
+        if (!cancelled) {
+          const message = error instanceof Error
+            ? error.message
+            : "The editor could not start. Reconnect and retry; your recovery is unchanged.";
+          setBootError({
+            message,
+            unavailable: error instanceof DraftLoadError && error.unavailable,
+            signIn: error instanceof DraftLoadError &&
+              (error.status === 401 || error.status === 403),
+          });
+        }
       } finally {
         if (!cancelled) {
           setLoading(false);
@@ -968,7 +1045,7 @@ export default function EditorWorkspace({
       persistenceRef.current?.dispose();
       persistenceRef.current = null;
     };
-  }, [forceNew, submissionId]);
+  }, [forceNew, submissionId, bootRetry, startNewRequested]);
 
   useEffect(() => {
     const persistence = persistenceRef.current;
@@ -984,7 +1061,11 @@ export default function EditorWorkspace({
 
   function reportSaveError(error: unknown, origin?: DraftPersistence) {
     if (origin && persistenceRef.current !== origin) return;
-    const message = error instanceof Error ? error.message : "Save failed";
+    const message = error instanceof EditorRequestError && error.status === 409
+      ? `${error.message} Your local edits are retained. Copy your changes before reloading; automatic overwrite is blocked.`
+      : error instanceof Error
+      ? error.message
+      : "Save failed. Keep this tab open and retry.";
     setSaveError(message);
     toast.error(message);
   }
@@ -1013,13 +1094,18 @@ export default function EditorWorkspace({
   useEffect(() => {
     const timeout = setTimeout(() => refreshThumbnails(), 500);
     return () => clearTimeout(timeout);
-  }, [pagesByLabel, assets, resolvedPages, fontLoad]);
+  }, [pagesByLabel, renderAssets, resolvedPages, fontLoad]);
 
   useEffect(() => {
     const persistence = persistenceRef.current;
     if (!submission || !persistence || persistence.id !== submission.id) return;
     for (const label of PAGE_LABELS) {
-      persistence.set(label, pagesByLabel[label].sceneJson);
+      persistence.set(
+        label,
+        inlineDraftRef.current?.label === label
+          ? inlineDraftRef.current.sceneJson
+          : pagesByLabel[label].sceneJson,
+      );
     }
     const timeout = window.setTimeout(() => {
       void persistence.flushAll().catch((error) =>
@@ -1036,7 +1122,10 @@ export default function EditorWorkspace({
         event.returnValue = "";
       }
     };
+    setOnline(navigator.onLine);
+    const offline = () => setOnline(false);
     const reconnect = () => {
+      setOnline(true);
       const persistence = persistenceRef.current;
       void persistence?.flushAll().catch((error) =>
         reportSaveError(error, persistence)
@@ -1044,9 +1133,11 @@ export default function EditorWorkspace({
     };
     window.addEventListener("beforeunload", beforeUnload);
     window.addEventListener("online", reconnect);
+    window.addEventListener("offline", offline);
     return () => {
       window.removeEventListener("beforeunload", beforeUnload);
       window.removeEventListener("online", reconnect);
+      window.removeEventListener("offline", offline);
     };
   }, []);
 
@@ -1055,11 +1146,147 @@ export default function EditorWorkspace({
     if (!persistence || persistence.id !== submission?.id) {
       throw new Error("Draft is not ready");
     }
-    persistence.set("title", title);
+    commitActiveInline();
+    const current = documentRef.current;
+    persistence.set("title", current.title);
     for (const label of PAGE_LABELS) {
-      persistence.set(label, pagesByLabel[label].sceneJson);
+      persistence.set(label, current.pagesByLabel[label].sceneJson);
     }
     return persistence;
+  }
+
+  function commitActiveInline() {
+    const textarea = workspaceRef.current?.querySelector<HTMLTextAreaElement>(
+      'textarea[aria-label="Edit text on page"]',
+    );
+    if (textarea) flushSync(() => textarea.blur());
+  }
+
+  function retainInlineDraft(elementId: string, text: string | null) {
+    const source = activePage.scene;
+    if (text === null) {
+      inlineDraftRef.current = null;
+      persistenceRef.current?.set(activePageLabel, JSON.stringify(source));
+      return;
+    }
+    const scene = isTemplateTextElement(elementId)
+      ? {
+        ...source,
+        templateTextOverrides: {
+          ...source.templateTextOverrides,
+          [elementId]: text,
+        },
+      }
+      : {
+        ...source,
+        elements: source.elements.map((element) =>
+          element.id === elementId && element.type === "text" && !element.locked
+            ? { ...element, text }
+            : element
+        ),
+      };
+    const sceneJson = JSON.stringify(scene);
+    inlineDraftRef.current = { label: activePageLabel, sceneJson };
+    persistenceRef.current?.set(activePageLabel, sceneJson);
+  }
+
+  const guardNavigation = useEffectEvent(async (proceed: () => void) => {
+    if (!submission || !persistenceRef.current) {
+      proceed();
+      return;
+    }
+    if (frozenRef.current) return;
+    const persistence = syncDocument();
+    frozenRef.current = true;
+    setNavigating(true);
+    try {
+      await persistence.flushAll();
+      if (persistenceRef.current === persistence) proceed();
+    } catch (error) {
+      reportSaveError(error, persistence);
+    } finally {
+      if (persistenceRef.current === persistence) {
+        frozenRef.current = false;
+        setNavigating(false);
+      }
+    }
+  });
+  const captureInlinePointer = useEffectEvent((event: PointerEvent) => {
+    if (
+      event.target instanceof Element &&
+      !event.target.closest('textarea[aria-label="Edit text on page"]')
+    ) commitActiveInline();
+  });
+  useEffect(() => {
+    const pointer = (event: PointerEvent) => captureInlinePointer(event);
+    const click = (event: MouseEvent) => {
+      if (
+        event.defaultPrevented || event.button !== 0 || event.ctrlKey ||
+        event.metaKey || event.shiftKey || event.altKey
+      ) return;
+      const link = event.target instanceof Element
+        ? event.target.closest("a")
+        : null;
+      if (!link || link.target === "_blank" || link.hasAttribute("download")) {
+        return;
+      }
+      const target = new URL(link.href, window.location.href);
+      if (
+        !["http:", "https:"].includes(target.protocol) ||
+        target.href === window.location.href ||
+        (target.pathname === window.location.pathname &&
+          target.search === window.location.search && target.hash)
+      ) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      void guardNavigation(() => {
+        if (target.origin === window.location.origin) {
+          router.push(target.pathname + target.search + target.hash);
+        } else window.location.assign(target.href);
+      });
+    };
+    const leave = (event: Event) => {
+      const proceed = (event as CustomEvent<{ proceed?: () => void }>).detail
+        ?.proceed;
+      if (!proceed) return;
+      event.preventDefault();
+      void guardNavigation(proceed);
+    };
+    document.addEventListener("pointerdown", pointer, true);
+    document.addEventListener("click", click, true);
+    window.addEventListener("titchybook-before-leave", leave);
+    return () => {
+      document.removeEventListener("pointerdown", pointer, true);
+      document.removeEventListener("click", click, true);
+      window.removeEventListener("titchybook-before-leave", leave);
+    };
+  }, [router]);
+
+  function reviewRecoveryCopy() {
+    const persistence = syncDocument();
+    setRecoveryView(
+      JSON.stringify(
+        {
+          version: 1,
+          submissionId: persistence.id,
+          parts: persistence.snapshot(),
+        },
+        null,
+        2,
+      ),
+    );
+  }
+
+  function downloadRecoveryCopy() {
+    if (!recoveryView) return;
+    const url = URL.createObjectURL(
+      new Blob([recoveryView], { type: "application/json" }),
+    );
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `titchybook-${submission?.id}-recovery.json`;
+    link.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
   function applyBookDesign(
@@ -1127,6 +1354,7 @@ export default function EditorWorkspace({
     }
     const sceneJson = JSON.stringify(normalizedScene);
 
+    persistenceRef.current?.set(activePageLabel, sceneJson);
     // Push current state to history before updating
     pushHistory();
 
@@ -1227,7 +1455,7 @@ export default function EditorWorkspace({
   function generatePageThumbnail(pageLabel: PageLabel): string | null {
     const resolved = resolvedPages[pageLabel];
     if (resolved.error) return null;
-    return renderPageThumbnail(resolved.scene, assets, 120);
+    return renderPageThumbnail(resolved.scene, renderAssets, 120);
   }
 
   function updateThumbnails() {
@@ -1593,7 +1821,24 @@ export default function EditorWorkspace({
   }
 
   async function handleAssetDelete(assetId: string, filename: string) {
-    if (!confirm(`Delete "${filename}" from your asset library?`)) {
+    if (
+      PAGE_LABELS.some((label) =>
+        [...pagesByLabel[label].scene.elements, ...templateElements[label]]
+          .some((element) =>
+            element.type === "image" && element.assetId === assetId
+          )
+      )
+    ) {
+      toast.error(
+        "This image is used in the current book, including unsaved pages. Remove its uses before removing it from the library.",
+      );
+      return;
+    }
+    if (
+      !confirm(
+        `Remove "${filename}" from your asset library? Source bytes will be retained.`,
+      )
+    ) {
       return;
     }
 
@@ -1603,7 +1848,8 @@ export default function EditorWorkspace({
       });
 
       if (!response.ok) {
-        throw new Error("Could not delete asset");
+        const result = await response.json().catch(() => ({}));
+        throw new Error(result.error || "Could not remove asset");
       }
 
       // Revoke any blob URLs to prevent memory leaks
@@ -1613,7 +1859,7 @@ export default function EditorWorkspace({
       }
 
       setAssets((current) => current.filter((a) => a.id !== assetId));
-      toast.success("Asset deleted");
+      toast.success("Image removed from the library. Source bytes retained.");
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Asset deletion failed",
@@ -1768,11 +2014,14 @@ export default function EditorWorkspace({
             setSubmitting(false);
             return await handleSubmit(true);
           }
-          setSaveState("idle");
+          setSaveState("saved");
           return;
         }
 
-        throw new Error(data.error || "Could not submit Titchybooks");
+        throw new EditorRequestError(
+          response.status,
+          data.error || "Could not submit Titchybooks",
+        );
       }
 
       const result = (await response.json()) as {
@@ -1791,7 +2040,7 @@ export default function EditorWorkspace({
         );
       } else {
         toast.success(
-          "Titchybooks submitted. PDF generation is now processing.",
+          "Titchybooks submitted. PDF generation is queued.",
         );
       }
 
@@ -1800,7 +2049,11 @@ export default function EditorWorkspace({
       router.refresh();
     } catch (error) {
       if (persistenceRef.current === persistence) {
-        setSaveState("error");
+        setSaveState(
+          error instanceof EditorRequestError && error.status === 409
+            ? "conflict"
+            : "error",
+        );
         reportSaveError(error, persistence);
       }
     } finally {
@@ -1866,7 +2119,11 @@ export default function EditorWorkspace({
   if (loading) {
     return (
       <div className="flex min-h-[calc(100vh-3.5rem)] items-center justify-center px-4 py-8">
-        <div className="card px-8 py-10 text-center">
+        <div
+          className="card px-8 py-10 text-center"
+          role="status"
+          aria-live="polite"
+        >
           <p className="section-label">
             Titchybooks Studio
           </p>
@@ -1878,9 +2135,65 @@ export default function EditorWorkspace({
     );
   }
 
+  if (bootError || !submission) {
+    return (
+      <div className="page-container py-10">
+        <div className="card p-6" role="alert">
+          <h1 className="text-xl font-semibold">
+            {bootError?.unavailable
+              ? "Draft unavailable"
+              : "Draft loading paused"}
+          </h1>
+          <p className="mt-3">
+            {bootError?.message ||
+              "Your draft is not ready. Retry to resume safely."}
+          </p>
+          {!online && (
+            <p className="mt-2">You are offline. Reconnect, then retry.</p>
+          )}
+          <div className="flex flex-wrap gap-3 mt-4">
+            <button
+              className="btn btn-primary"
+              onClick={() => setBootRetry((k) => k + 1)}
+            >
+              Retry loading draft
+            </button>
+            {bootError?.signIn && (
+              <a
+                className="btn btn-outline"
+                href={`/login?callbackUrl=${
+                  encodeURIComponent(
+                    typeof window === "undefined"
+                      ? "/create"
+                      : window.location.pathname + window.location.search,
+                  )
+                }`}
+              >
+                Sign in again
+              </a>
+            )}
+            {bootError?.unavailable && (
+              <button
+                className="btn btn-outline"
+                onClick={() => {
+                  setStartNewRequested(true);
+                  setBootRetry((k) => k + 1);
+                }}
+              >
+                Create a separate draft
+              </button>
+            )}
+            <a className="btn btn-ghost" href="/dashboard">Back to dashboard</a>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div
       className="min-h-[calc(100vh-3.5rem)] px-4 py-6"
+      ref={workspaceRef}
       inert={submitting || navigating}
       aria-busy={submitting || navigating}
       style={{
@@ -1907,6 +2220,7 @@ export default function EditorWorkspace({
               <p>{saveError}</p>
               <button
                 className="btn btn-outline btn-sm mt-2"
+                disabled={saveState === "conflict" || !online}
                 onClick={() => {
                   const persistence = syncDocument();
                   void persistence.flushAll().catch((error) =>
@@ -1916,6 +2230,49 @@ export default function EditorWorkspace({
               >
                 Retry saving
               </button>
+              <button
+                type="button"
+                className="btn btn-outline btn-sm mt-2"
+                onClick={reviewRecoveryCopy}
+              >
+                Review recovery copy
+              </button>
+              {recoveryView && (
+                <div className="mt-3">
+                  <p className="text-xs">
+                    This is a local snapshot, not a server-save confirmation.
+                    Copy or download it before reloading; downloading does not
+                    confirm a file was saved.
+                  </p>
+                  <textarea
+                    aria-label="Local recovery JSON"
+                    readOnly
+                    value={recoveryView}
+                    className="w-full mt-2"
+                    rows={4}
+                  />
+                  <button
+                    type="button"
+                    className="btn btn-outline btn-sm"
+                    onClick={downloadRecoveryCopy}
+                  >
+                    Download recovery JSON
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-outline btn-sm"
+                    onClick={() => {
+                      if (
+                        confirm(
+                          "Keep a copy of your changes before reloading. The server draft may differ; you will be asked whether to restore local recovery. Reload now?",
+                        )
+                      ) window.location.reload();
+                    }}
+                  >
+                    Reload server draft
+                  </button>
+                </div>
+              )}
             </div>
           )}
           {/* Template instance banner */}
@@ -1993,7 +2350,10 @@ export default function EditorWorkspace({
                     if (!frozenRef.current) pushHistory();
                   }}
                   onChange={(event) => {
-                    if (!frozenRef.current) setTitle(event.target.value);
+                    if (!frozenRef.current) {
+                      persistenceRef.current?.set("title", event.target.value);
+                      setTitle(event.target.value);
+                    }
                   }}
                   maxLength={120}
                   aria-label="Book title"
@@ -2031,13 +2391,19 @@ export default function EditorWorkspace({
                       : "var(--color-text-muted)",
                   }}
                 >
-                  {saveState === "saving"
+                  {!online
+                    ? saveState === "saved"
+                      ? "Offline — saved on server"
+                      : "Offline — unsaved changes"
+                    : saveState === "conflict"
+                    ? "Save conflict"
+                    : saveState === "saving"
                     ? "Saving..."
                     : saveState === "saved"
                     ? "Saved"
                     : saveState === "error"
                     ? "Save failed"
-                    : "Ready"}
+                    : "Unsaved changes"}
                 </span>
                 <button
                   type="button"
@@ -2141,7 +2507,10 @@ export default function EditorWorkspace({
                 </button>
                 <button
                   type="button"
-                  onClick={() => setPreviewOpen(true)}
+                  onClick={() => {
+                    commitActiveInline();
+                    setPreviewOpen(true);
+                  }}
                   className="btn btn-outline btn-sm"
                 >
                   Preview booklet
@@ -2249,7 +2618,7 @@ export default function EditorWorkspace({
                         ...activeResolvedScene,
                         elements: mergedElements,
                       }}
-                      assets={assets}
+                      assets={renderAssets}
                       selectedElementId={selectedElementId}
                       onSelectElement={(elementId) => {
                         // Allow selecting template TEXT elements so users can edit
@@ -2275,7 +2644,9 @@ export default function EditorWorkspace({
                           applyCanvasGeometry(activePage.scene, next),
                         );
                       }}
+                      onTextDraft={retainInlineDraft}
                       onTextCommit={(elementId, text) => {
+                        inlineDraftRef.current = null;
                         // Inline canvas edits route exactly like the properties
                         // panel: template text becomes a per-instance override,
                         // other template elements stay fixed, user elements
@@ -2374,10 +2745,12 @@ export default function EditorWorkspace({
                 selectedElement={selectedElement}
                 onApply={applyBookDesign}
                 onGestureStart={() => {
-                  if (!designGesture.current.active) {designGesture.current = {
+                  if (!designGesture.current.active) {
+                    designGesture.current = {
                       active: true,
                       recorded: false,
-                    };}
+                    };
+                  }
                 }}
                 onGestureEnd={() => {
                   designGesture.current = { active: false, recorded: false };
@@ -2561,7 +2934,7 @@ export default function EditorWorkspace({
                               )}
                             className="absolute right-2 top-2 rounded-full p-1.5 text-white opacity-0 shadow-sm transition group-hover:opacity-100"
                             style={{ background: "var(--color-error)" }}
-                            title="Delete asset"
+                            title="Remove asset from library"
                           >
                             <svg
                               className="h-3.5 w-3.5"
@@ -2602,7 +2975,7 @@ export default function EditorWorkspace({
         open={previewOpen}
         title={title}
         pages={resolvedPages}
-        assets={assets}
+        assets={renderAssets}
         onClose={() => setPreviewOpen(false)}
         onJumpToPage={handlePreviewJump}
       />

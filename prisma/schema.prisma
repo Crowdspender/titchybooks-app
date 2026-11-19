@@ -38,6 +38,39 @@ enum OrderStatus {
   CANCELLED
 }
 
+enum OrderPaymentState {
+  UNPAID
+  PROCESSING
+  PAID
+  MANUAL_PAID
+  PARTIALLY_REFUNDED
+  REFUNDED
+  DISPUTED
+  DISPUTE_LOST
+  REVIEW
+  FAILED
+}
+
+enum PaymentAttemptStatus {
+  PREPARED
+  AMBIGUOUS
+  OPEN
+  PROCESSING
+  SUCCEEDED
+  FAILED
+  EXPIRED
+  REVIEW
+}
+
+enum PaymentEventStatus {
+  RECEIVED
+  PROCESSED
+  REVIEW
+  UNMATCHED
+  IGNORED
+  FAILED
+}
+
 enum VaultEntryStatus {
   STORED
   WITHDRAWN
@@ -182,6 +215,7 @@ model Asset {
   width            Int?
   height           Int?
   fileSize         Int
+  deletedAt        DateTime?
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
@@ -212,6 +246,14 @@ model Order {
   totalHuf        Int
   currency        String @default("HUF")
 
+  // Immutable accepted offer; legacy unknown facts remain null.
+  quoteSnapshot       Json?
+  expectedMinorAmount Int?
+  fxRate              Decimal? @db.Decimal(24, 18)
+  quoteAcceptedAt     DateTime?
+  requestKey          String?
+  requestDigest       String?
+
   status               OrderStatus @default(PENDING_PAYMENT)
   pricingConfigVersion Int
 
@@ -219,6 +261,15 @@ model Order {
   // session id matches the one stored here, so spoofed references fail.
   stripeSessionId String?   @unique
   paidAt          DateTime?
+  // Server-recorded operator, time, method, and evidence; null for legacy/Stripe settlement.
+  manualSettlement Json?
+
+  // Canonical payment projection, separate from physical fulfillment.
+  // Null state/summary preserve unknown legacy facts; no inferred payment backfill.
+  paymentState    OrderPaymentState?
+  paymentSummary  Json?
+  paymentHold     Boolean @default(false)
+  paymentRevision Int     @default(0)
 
   // Shipping address snapshot
   recipientName String
@@ -237,12 +288,70 @@ model Order {
   notes        String?
   vaultEntries VaultEntry[]
   paymentAlerts PaymentAlert[]
+  paymentAttempts PaymentAttempt[]
+  paymentEvents PaymentEvent[]
   createdAt    DateTime     @default(now())
   updatedAt    DateTime     @updatedAt
 
   @@index([userId])
   @@index([submissionId])
   @@index([status])
+  @@unique([userId, requestKey])
+}
+
+// Durable issuance record: committed before any Checkout provider request.
+// Frozen request parameters permit recovery of the same idempotent request.
+model PaymentAttempt {
+  id                  String @id @default(cuid())
+  orderId             String
+  order               Order @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  sequence            Int
+  idempotencyKey      String @unique
+  expectedMinorAmount Int
+  currency            String
+  livemode            Boolean
+  providerAccountId   String?
+  providerRequest     Json
+  status              PaymentAttemptStatus @default(PREPARED)
+  sessionId           String? @unique
+  paymentIntentId     String? @unique
+  requestStartedAt    DateTime?
+  providerSnapshot    Json?
+  failureCode         String?
+  events              PaymentEvent[]
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@unique([orderId, sequence])
+  @@index([orderId, status])
+}
+
+// Signed deliveries and operator reconciliation/review outcomes, without card,
+// customer, address, email, or full provider payload storage. Orphans are retained.
+model PaymentEvent {
+  id                 String @id @default(cuid())
+  providerEventId    String @unique
+  source             String
+  type               String
+  orderId            String?
+  order              Order? @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  attemptId          String?
+  attempt            PaymentAttempt? @relation(fields: [attemptId], references: [id], onDelete: SetNull)
+  providerAccountId  String?
+  livemode           Boolean?
+  objectId           String?
+  providerCreatedAt  DateTime?
+  data               Json
+  dataDigest         String
+  status             PaymentEventStatus @default(RECEIVED)
+  outcome            String?
+  processedAt        DateTime?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@index([orderId, createdAt])
+  @@index([attemptId])
+  @@index([status, createdAt])
 }
 
 model TemplateElement {
@@ -277,7 +386,7 @@ model PricingConfig {
 
 model VaultEntry {
   id            String           @id @default(cuid())
-  orderId       String
+  orderId       String           @unique
   order         Order            @relation(fields: [orderId], references: [id])
   submissionId  String
   submission    Submission       @relation(fields: [submissionId], references: [id])

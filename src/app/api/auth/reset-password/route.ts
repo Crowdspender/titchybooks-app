@@ -37,14 +37,13 @@ export async function POST(request: Request) {
     // Hash the incoming token to compare with stored hashed token
     const hashedToken = createHash('sha256').update(token).digest('hex');
 
-    // Find user with valid reset token
+    // Locate the account only; redemption below rechecks token and expiry atomically.
     const user = await prisma.user.findFirst({
       where: {
         passwordResetToken: hashedToken,
-        passwordResetExpires: {
-          gt: new Date(),
-        },
+        passwordResetExpires: { gt: new Date() },
       },
+      select: { id: true },
     });
 
     if (!user) {
@@ -54,10 +53,11 @@ export async function POST(request: Request) {
       );
     }
 
-    // Hash new password and update user
+    // Hash outside the database operation, then admit only one valid redemption.
+    // Concurrent reuse, expiry during hashing, and a newly issued token all fail closed.
     const passwordHash = await hash(password, 12);
-    await prisma.user.update({
-      where: { id: user.id },
+    const redeemed = await prisma.user.updateMany({
+      where: { id: user.id, passwordResetToken: hashedToken, passwordResetExpires: { gt: new Date() } },
       data: {
         passwordHash,
         passwordResetToken: null,
@@ -65,6 +65,9 @@ export async function POST(request: Request) {
       },
     });
 
+    if (redeemed.count !== 1) {
+      return NextResponse.json({ error: "Invalid or expired reset token" }, { status: 400 });
+    }
     return NextResponse.json({ success: true });
   } catch {
     return NextResponse.json(

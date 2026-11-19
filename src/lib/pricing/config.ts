@@ -22,6 +22,7 @@ import {
   cloneShippingTable,
   configuredWeightCaps,
   normaliseShippingTable,
+  strictShippingTable,
 } from "./shipping";
 import {
   pricingConfigInputSchema,
@@ -123,6 +124,26 @@ export async function loadPricingConfig(): Promise<ResolvedPricingConfig> {
       };
   cache = { value, loadedAt: Date.now() };
   return value;
+}
+
+/** Uncached, fail-closed reader for new commercial offers; never substitutes defaults. */
+export async function loadCheckoutPricingConfig(): Promise<ResolvedPricingConfig> {
+  const row = await prisma.pricingConfig.findUnique({ where: { id: PRICING_CONFIG_ID } });
+  if (!row || !Number.isSafeInteger(row.version) || row.version < 1) throw new Error("Pricing needs review before online ordering");
+  try {
+    const shippingTable = strictShippingTable(JSON.parse(row.shippingTable), JSON.parse(row.weightBands));
+    const input = pricingConfigInputSchema.parse({
+      weightPerBookGrams: row.weightPerBookGrams,
+      handlingFixedHuf: row.handlingFixedHuf,
+      handlingPercent: row.handlingPercent,
+      enabledZones: JSON.parse(row.enabledZones), shippingTable,
+      priceTiers: JSON.parse(row.priceTiers), currencyRates: JSON.parse(row.currencyRates),
+      vaultFeeHuf: row.vaultFeeHuf,
+    });
+    return { ...input, version: row.version };
+  } catch {
+    throw new Error("Pricing needs review before online ordering");
+  }
 }
 
 export async function savePricingConfig(

@@ -5,6 +5,9 @@ import Link from "next/link";
 import RenderProgress from "./RenderProgress";
 import { toast } from "sonner";
 import StatusBadge from "./StatusBadge";
+import PdfDownloads from "./PdfDownloads";
+import OpenInEditorButton from "./OpenInEditorButton";
+import { draftPointerStorage } from "@/lib/editor/persistence";
 
 interface Submission {
   id: string;
@@ -12,6 +15,7 @@ interface Submission {
   mode: string;
   status: string;
   pdfS3Key: string | null;
+  readingPdfS3Key: string | null;
   rejectionReason: string | null;
   createdAt: string;
 }
@@ -19,6 +23,7 @@ interface Submission {
 export default function SubmissionList() {
   const [submissions, setSubmissions] = useState<Submission[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
     fetchSubmissions();
@@ -26,10 +31,24 @@ export default function SubmissionList() {
 
   async function fetchSubmissions() {
     try {
-      const res = await fetch("/api/submissions");
+      const res = await fetch("/api/submissions", { cache: "no-store" });
       const data = await res.json();
-      setSubmissions(data.submissions || []);
-    } catch { toast.error('Could not refresh submissions'); } finally {
+      if (!res.ok || !Array.isArray(data.submissions)) {
+        throw new Error(
+          res.status === 401
+            ? "Sign in again to load your library."
+            : "Could not refresh submissions. Your books have not been changed.",
+        );
+      }
+      setSubmissions(data.submissions);
+      setLoadError(null);
+    } catch (error) {
+      setLoadError(
+        error instanceof Error
+          ? error.message
+          : "Could not refresh submissions. Retry loading your library.",
+      );
+    } finally {
       setLoading(false);
     }
   }
@@ -58,9 +77,12 @@ export default function SubmissionList() {
       );
 
       const ACTIVE_DRAFT_STORAGE_KEY = "titchybook-active-editor-draft";
-      const storedDraftId = localStorage.getItem(ACTIVE_DRAFT_STORAGE_KEY);
+      const storedDraftId = draftPointerStorage.getItem(
+        ACTIVE_DRAFT_STORAGE_KEY,
+      );
       if (storedDraftId === submissionId) {
-        localStorage.removeItem(ACTIVE_DRAFT_STORAGE_KEY);
+        draftPointerStorage.removeItem(ACTIVE_DRAFT_STORAGE_KEY);
+        window.dispatchEvent(new Event("storage"));
       }
 
       toast.success("Draft deleted successfully");
@@ -71,7 +93,11 @@ export default function SubmissionList() {
 
   if (loading) {
     return (
-      <div className="space-y-3">
+      <div
+        className="space-y-3"
+        role="status"
+        aria-label="Loading your library"
+      >
         {[1, 2, 3].map((i) => (
           <div
             key={i}
@@ -97,6 +123,22 @@ export default function SubmissionList() {
       </div>
     );
   }
+
+  const errorNotice = loadError && (
+    <div role="alert" className="card p-5 mb-3">
+      <p>{loadError}</p>
+      <button
+        type="button"
+        className="btn btn-outline btn-sm mt-2"
+        onClick={() => {
+          void fetchSubmissions();
+        }}
+      >
+        Retry loading library
+      </button>
+    </div>
+  );
+  if (loadError && submissions.length === 0) return errorNotice;
 
   if (submissions.length === 0) {
     return (
@@ -131,9 +173,11 @@ export default function SubmissionList() {
           className="text-sm mb-6"
           style={{ color: "var(--color-text-muted)" }}
         >
-          Create your first booklet and start designing.
+          Start with a blank eight-page booklet, a template, or AI. Save a
+          draft, preview it, then submit for review. Order prints after
+          approval.
         </p>
-        <Link href="/create" className="btn btn-primary">
+        <Link href="/create?new=true" className="btn btn-primary">
           Create your first Titchybooks
         </Link>
       </div>
@@ -142,8 +186,16 @@ export default function SubmissionList() {
 
   return (
     <div className="space-y-3">
+      {errorNotice}
       {submissions.map((sub) => (
-        <SubmissionCard key={sub.id} submission={sub} onDelete={handleDelete} onChange={() => { void fetchSubmissions(); }} />
+        <SubmissionCard
+          key={sub.id}
+          submission={sub}
+          onDelete={handleDelete}
+          onChange={() => {
+            void fetchSubmissions();
+          }}
+        />
       ))}
     </div>
   );
@@ -158,21 +210,7 @@ function SubmissionCard({
   onDelete: (id: string) => void;
   onChange: () => void;
 }) {
-  const [loadingPdf, setLoadingPdf] = useState(false);
   const [deleting, setDeleting] = useState(false);
-
-  async function handleDownload() {
-    setLoadingPdf(true);
-    try {
-      const res = await fetch(`/api/submissions/${submission.id}`);
-      const data = await res.json();
-      if (data.pdfDownloadUrl) {
-        window.open(data.pdfDownloadUrl, "_blank");
-      }
-    } finally {
-      setLoadingPdf(false);
-    }
-  }
 
   async function handleDeleteClick() {
     setDeleting(true);
@@ -184,8 +222,8 @@ function SubmissionCard({
   }
 
   return (
-    <div className="card card-hover p-5 flex items-start justify-between gap-4">
-      <div className="flex-1 min-w-0">
+    <div className="card card-hover p-5 flex flex-col items-start justify-between gap-4 lg:flex-row">
+      <div className="w-full flex-1 min-w-0">
         <div className="flex items-center gap-2.5 mb-1.5">
           <span
             className="font-semibold text-[0.9375rem] truncate"
@@ -205,7 +243,11 @@ function SubmissionCard({
             year: "numeric",
           })}
         </p>
-        <RenderProgress submissionId={submission.id} status={submission.status} onChange={onChange} />
+        <RenderProgress
+          submissionId={submission.id}
+          status={submission.status}
+          onChange={onChange}
+        />
         {submission.status === "REJECTED" && submission.rejectionReason && (
           <div
             className="mt-2 flex items-center gap-1.5 text-xs p-2 rounded-md"
@@ -225,7 +267,7 @@ function SubmissionCard({
         )}
       </div>
 
-      <div className="flex items-center gap-2 flex-shrink-0">
+      <div className="flex w-full flex-col items-start gap-2 lg:w-auto lg:max-w-[65%] lg:flex-row">
         {submission.status === "DRAFT" && (
           <>
             <Link
@@ -245,28 +287,55 @@ function SubmissionCard({
           </>
         )}
 
-        {submission.status === "APPROVED" && submission.pdfS3Key && (
+        {submission.status === "APPROVED" && (
           <>
-            <Link
-              href={`/dashboard/orders/new?submissionId=${submission.id}`}
-              className="btn btn-secondary btn-sm"
-            >
-              Order prints
-            </Link>
-            <button
-              onClick={handleDownload}
-              disabled={loadingPdf}
+            {submission.pdfS3Key && (
+              <Link
+                href={`/dashboard/orders/new?submissionId=${submission.id}`}
+                className="btn btn-secondary btn-sm"
+              >
+                Order prints
+              </Link>
+            )}
+            <PdfDownloads
+              submissionId={submission.id}
+              printAvailable={Boolean(submission.pdfS3Key)}
+              readingAvailable={Boolean(submission.readingPdfS3Key)}
               className="btn btn-success btn-sm"
-            >
-              {loadingPdf ? "Loading..." : "Download PDF"}
-            </button>
+            />
           </>
         )}
 
         {submission.status === "REJECTED" && (
-          <Link href="/create" className="btn btn-primary btn-sm">
-            Re-upload
-          </Link>
+          <div>
+            {submission.mode === "EDITOR"
+              ? (
+                <OpenInEditorButton
+                  submissionId={submission.id}
+                  label="Make a correction copy"
+                  className="btn btn-primary btn-sm"
+                />
+              )
+              : (
+                <Link
+                  href={`/create/upload?replaces=${
+                    encodeURIComponent(submission.id)
+                  }`}
+                  className="btn btn-primary btn-sm"
+                >
+                  Re-upload corrected images
+                </Link>
+              )}
+            <p
+              className="mt-1 text-xs"
+              style={{ color: "var(--color-text-muted)" }}
+            >
+              {submission.mode === "EDITOR"
+                ? "Copies all pages and the protected template into a new draft."
+                : "Upload eight corrected pages as a separate submission."}{" "}
+              The original review and PDFs stay unchanged.
+            </p>
+          </div>
         )}
 
         {submission.status === "PENDING" && (

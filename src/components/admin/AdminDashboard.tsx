@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import StatusBadge from "@/components/submissions/StatusBadge";
 import RenderProgress from "@/components/submissions/RenderProgress";
+import PdfDownloads from "@/components/submissions/PdfDownloads";
 
 interface PagePreview {
   pageLabel: string;
@@ -17,6 +18,7 @@ interface AdminSubmission {
   mode: string;
   title: string | null;
   pdfS3Key: string | null;
+  readingPdfS3Key: string | null;
   pdfDownloadUrl: string | null;
   rejectionReason: string | null;
   createdAt: string;
@@ -38,21 +40,44 @@ export default function AdminDashboard() {
   const [filter, setFilter] = useState<string>("");
   const [refreshKey, setRefreshKey] = useState(0);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [pendingIds, setPendingIds] = useState<Set<string>>(new Set());
+  const actionLocks = useRef(new Set<string>());
 
   useEffect(() => {
     let cancelled = false;
     async function load() {
       setLoading(true);
+      setLoadError(null);
       const params = filter === SPOT_CHECK
         ? "?spotCheck=true"
         : filter
         ? `?status=${filter}`
         : "";
-      const res = await fetch(`/api/admin/submissions${params}`);
-      const data = await res.json();
-      if (!cancelled) {
-        setSubmissions(data.submissions || []);
-        setLoading(false);
+      try {
+        const res = await fetch(`/api/admin/submissions${params}`);
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(
+            data.error ||
+              `Submissions could not be loaded (HTTP ${res.status})`,
+          );
+        }
+        if (!Array.isArray(data.submissions)) {
+          throw new Error("The submission list response is unavailable");
+        }
+        if (!cancelled) setSubmissions(data.submissions);
+      } catch (error) {
+        if (!cancelled) {
+          setLoadError(
+            error instanceof Error
+              ? error.message
+              : "Submissions could not be loaded. Check your connection and retry.",
+          );
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
       }
     }
     load();
@@ -65,24 +90,56 @@ export default function AdminDashboard() {
     id: string,
     action: "APPROVE" | "REJECT",
   ) {
-    const rejectionReason = action === "REJECT"
-      ? prompt("Rejection reason (optional):")
-      : undefined;
-
-    const res = await fetch(`/api/admin/submissions/${id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        action,
-        rejectionReason: rejectionReason || undefined,
-      }),
-    });
-
-    if (res.ok) {
-      toast.success(`Submission ${action.toLowerCase()}d`);
+    if (actionLocks.current.has(id)) return;
+    setActionError(null);
+    let rejectionReason: string | undefined;
+    if (action === "REJECT") {
+      const reason = prompt(
+        "Explain what needs correcting (10–1000 characters). Cancel makes no changes.",
+      );
+      if (reason === null) return;
+      rejectionReason = reason.trim();
+      if (rejectionReason.length < 10 || rejectionReason.length > 1000) {
+        const message =
+          "Explain the required correction in 10–1000 characters.";
+        setActionError(message);
+        toast.error(message);
+        return;
+      }
+    }
+    actionLocks.current.add(id);
+    setPendingIds(new Set(actionLocks.current));
+    try {
+      const res = await fetch(`/api/admin/submissions/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action,
+          ...(rejectionReason ? { rejectionReason } : {}),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(
+          data.error ||
+            `Review was not confirmed (HTTP ${res.status}); reload before retrying.`,
+        );
+      }
+      toast.success(
+        action === "APPROVE"
+          ? "Submission approved"
+          : "Submission rejected with correction guidance",
+      );
       setRefreshKey((k) => k + 1);
-    } else {
-      toast.error("Action failed");
+    } catch (error) {
+      const message = error instanceof Error
+        ? error.message
+        : "Review was not confirmed. Check your connection and reload before retrying.";
+      setActionError(message);
+      toast.error(message);
+    } finally {
+      actionLocks.current.delete(id);
+      setPendingIds(new Set(actionLocks.current));
     }
   }
 
@@ -100,13 +157,18 @@ export default function AdminDashboard() {
 
       {/* Filter bar */}
       <div
-        className="flex gap-2 mb-6 pb-6"
+        className="flex flex-wrap gap-2 mb-6 pb-6"
+        role="group"
+        aria-label="Submission filters"
         style={{ borderBottom: "1px solid var(--color-border)" }}
       >
-        {["", "PROCESSING", "FAILED", "PENDING", "APPROVED", "REJECTED"].map((s) => (
+        {["", "PROCESSING", "FAILED", "PENDING", "APPROVED", "REJECTED"].map((
+          s,
+        ) => (
           <button
             key={s}
             onClick={() => setFilter(s)}
+            aria-pressed={filter === s}
             className={`btn btn-sm ${
               filter === s ? "btn-primary" : "btn-ghost"
             }`}
@@ -116,6 +178,7 @@ export default function AdminDashboard() {
         ))}
         <button
           onClick={() => setFilter(SPOT_CHECK)}
+          aria-pressed={filter === SPOT_CHECK}
           className={`btn btn-sm ${
             filter === SPOT_CHECK ? "btn-primary" : "btn-ghost"
           }`}
@@ -124,9 +187,24 @@ export default function AdminDashboard() {
         </button>
       </div>
 
+      {actionError && (
+        <div role="alert" className="card p-4 mb-4">
+          <p style={{ color: "var(--color-error)" }}>{actionError}</p>
+          <button
+            className="btn btn-outline btn-sm mt-2"
+            onClick={() => setRefreshKey((k) => k + 1)}
+          >
+            Reload submissions
+          </button>
+        </div>
+      )}
       {loading
         ? (
-          <div className="space-y-3">
+          <div
+            className="space-y-3"
+            role="status"
+            aria-label="Loading submissions"
+          >
             {[1, 2, 3].map((i) => (
               <div
                 key={i}
@@ -139,6 +217,18 @@ export default function AdminDashboard() {
                 />
               </div>
             ))}
+          </div>
+        )
+        : loadError
+        ? (
+          <div className="card p-6" role="alert">
+            <p style={{ color: "var(--color-error)" }}>{loadError}</p>
+            <button
+              className="btn btn-outline btn-sm mt-3"
+              onClick={() => setRefreshKey((k) => k + 1)}
+            >
+              Retry loading submissions
+            </button>
           </div>
         )
         : submissions.length === 0
@@ -167,7 +257,9 @@ export default function AdminDashboard() {
               className="font-medium mb-1"
               style={{ color: "var(--color-text)" }}
             >
-              No submissions yet
+              {filter
+                ? "No submissions match this filter"
+                : "No submissions yet"}
             </p>
             <p
               className="text-sm"
@@ -202,7 +294,7 @@ export default function AdminDashboard() {
                 </thead>
                 <tbody>
                   {submissions.map((sub) => (
-                    <>
+                    <Fragment key={sub.id}>
                       <tr
                         key={sub.id}
                         style={{
@@ -247,7 +339,9 @@ export default function AdminDashboard() {
                                 background: "var(--color-primary-muted)",
                                 color: "var(--color-primary)",
                               }}
-                              title={sub.qaSampled ? "AI-created, sampled for spot-check" : "AI-created"}
+                              title={sub.qaSampled
+                                ? "AI-created, sampled for spot-check"
+                                : "AI-created"}
                             >
                               AI{sub.qaSampled ? " · spot-check" : ""}
                             </span>
@@ -261,28 +355,36 @@ export default function AdminDashboard() {
                         </td>
                         <td className="px-5 py-4">
                           <StatusBadge status={sub.status} />
-                                                    <RenderProgress submissionId={sub.id} status={sub.status} onChange={() => setRefreshKey(k => k + 1)} />
+                          {sub.rejectionReason && (
+                            <p className="text-xs mt-2">
+                              Correction needed: {sub.rejectionReason}
+                            </p>
+                          )}
+                          <RenderProgress
+                            submissionId={sub.id}
+                            status={sub.status}
+                            onChange={() => setRefreshKey((k) => k + 1)}
+                          />
                         </td>
                         <td className="px-5 py-4">
-                          {sub.pdfDownloadUrl
+                          {sub.pdfS3Key || sub.readingPdfS3Key
                             ? (
-                              <a
-                                href={sub.pdfDownloadUrl}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="text-xs font-medium no-underline"
-                                style={{ color: "var(--color-primary)" }}
-                                onClick={(e) => e.stopPropagation()}
-                              >
-                                Preview PDF
-                              </a>
+                              <PdfDownloads
+                                submissionId={sub.id}
+                                printAvailable={Boolean(sub.pdfS3Key)}
+                                readingAvailable={Boolean(sub.readingPdfS3Key)}
+                              />
                             )
                             : (
                               <span
                                 className="text-xs"
                                 style={{ color: "var(--color-text-subtle)" }}
                               >
-                                Generating...
+                                {sub.status === "PROCESSING"
+                                  ? "Rendering…"
+                                  : sub.status === "FAILED"
+                                  ? "Rendering failed"
+                                  : "PDF unavailable"}
                               </span>
                             )}
                         </td>
@@ -296,6 +398,7 @@ export default function AdminDashboard() {
                                     handleAction(sub.id, "APPROVE");
                                   }}
                                   className="btn btn-success btn-sm"
+                                  disabled={pendingIds.has(sub.id)}
                                 >
                                   Approve
                                 </button>
@@ -305,6 +408,7 @@ export default function AdminDashboard() {
                                     handleAction(sub.id, "REJECT");
                                   }}
                                   className="btn btn-danger btn-sm"
+                                  disabled={pendingIds.has(sub.id)}
                                 >
                                   Reject
                                 </button>
@@ -314,7 +418,7 @@ export default function AdminDashboard() {
                               <span
                                 style={{ color: "var(--color-text-subtle)" }}
                               >
-                                \u2014
+                                —
                               </span>
                             )}
                         </td>
@@ -383,7 +487,7 @@ export default function AdminDashboard() {
                           </td>
                         </tr>
                       )}
-                    </>
+                    </Fragment>
                   ))}
                 </tbody>
               </table>

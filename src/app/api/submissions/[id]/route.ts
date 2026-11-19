@@ -1,11 +1,11 @@
 ﻿import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
-import { getPresignedDownloadUrl } from "@/lib/s3";
 import { z } from "zod";
 import { SubmissionMode } from "@/lib/constants";
 import { parseEditorScene } from "@/lib/editor/schema";
 import { errorResponse, lockSubmission, saveTitle, SubmissionError } from "@/lib/editor/submission-store";
+import { requireNoTemplateDependents } from '@/lib/assets/references';
 
 export const dynamic = "force-dynamic";
 
@@ -42,10 +42,10 @@ export async function GET(
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  let pdfDownloadUrl: string | null = null;
-  if (submission.pdfS3Key && (submission.status === "APPROVED" || session.user.role === "ADMIN")) {
-    pdfDownloadUrl = await getPresignedDownloadUrl(submission.pdfS3Key);
-  }
+  const canDownload = submission.status === 'APPROVED' || session.user.role === 'ADMIN';
+  const pdfBase = `/api/submissions/${encodeURIComponent(id)}/downloads`;
+  const pdfDownloadUrl = canDownload && submission.pdfS3Key ? `${pdfBase}?kind=print` : null;
+  const readingPdfDownloadUrl = canDownload && submission.readingPdfS3Key ? `${pdfBase}?kind=reading` : null;
 
   const hydratedSubmission =
     submission.mode === SubmissionMode.EDITOR || submission.isTemplate
@@ -61,7 +61,9 @@ export async function GET(
   return NextResponse.json({
     submission: hydratedSubmission,
     pdfDownloadUrl,
-  });
+    readingPdfDownloadUrl,
+    pdfPreviewUrl: pdfDownloadUrl ? `${pdfDownloadUrl}&disposition=inline` : null,
+  }, { headers: { 'Cache-Control': 'private, no-store', Vary: 'Cookie' } });
 }
 
 export async function PATCH(
@@ -149,6 +151,7 @@ export async function DELETE(
     await prisma.$transaction(async (tx) => {
       const current = await lockSubmission(tx, id, { id: session.user.id!, role: session.user.role });
       if (current.status !== "DRAFT") throw new SubmissionError(409, "Only drafts can be deleted");
+      if (current.isTemplate) await requireNoTemplateDependents(tx, id);
       await tx.submission.delete({ where: { id } });
     });
 

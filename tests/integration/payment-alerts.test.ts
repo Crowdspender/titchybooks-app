@@ -1,45 +1,49 @@
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { db, createUser, cleanupFixtures } from '../fixtures/database';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { db, createUser, cleanupFixtures, trackPaymentEvent } from '../fixtures/database';
+import { recordPaymentAlert } from '@/lib/orders/payment-alerts';
 import { createPendingOrderWithUser } from '../fixtures/orders';
 import {
   WEBHOOK_SECRET,
   completedEvent,
   signedEventRequest,
+  installSyntheticWebhookProvider,
 } from '../fixtures/stripe-events';
 import { POST as webhook } from '@/app/api/stripe/webhook/route';
 import { PATCH as updateOrder } from '@/app/api/admin/orders/[id]/route';
 import { GET as listAlerts } from '@/app/api/admin/payment-alerts/route';
 import { PATCH as resolveAlert } from '@/app/api/admin/payment-alerts/[id]/route';
-import { createVaultEntryForOrder } from '@/lib/orders/lifecycle';
+const vaultFault = vi.hoisted(() => ({ fail: false }));
 
 /**
  * Payment reconciliation alerts.
  *
- * The webhook deliberately survives ambiguous events instead of failing them -
- * a signature-verified payment on a superseded session is still honoured, an
- * unpaid completion is dropped - and the admin "mark PAID" path survives a
- * vault-entry failure. Each of those leaves a buyer whose money and goods may
- * disagree, so each one has to produce something an operator can see. A log
- * line does not qualify on serverless hosting; a row in /admin/orders does.
+ * Signed events now carry canonical outcomes; unknown sessions are held instead
+ * of being honored on signature alone. Existing alerts remain readable and
+ * manual-settlement failures still produce an operator-visible alert.
  */
 const session = vi.hoisted(() => ({
   user: null as null | { id: string; role: string; email: string | null },
 }));
 vi.mock('@/auth', () => ({ auth: async () => (session.user ? { user: session.user } : null) }));
 
-// Spied rather than replaced so the webhook keeps the real transition and the
-// real vault creation, and only the tests that need a failure inject one.
-vi.mock('@/lib/orders/lifecycle', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/lib/orders/lifecycle')>();
-  return { ...actual, createVaultEntryForOrder: vi.fn(actual.createVaultEntryForOrder) };
+// Fail after an actual Vault write inside the real transaction, proving rollback.
+vi.mock('@/lib/prisma', async () => {
+  const { db } = await import('../fixtures/database');
+  return { prisma: db.$extends({ query: { vaultEntry: {
+    async upsert({ args, query }) {
+      const row = await query(args);
+      if (vaultFault.fail) { vaultFault.fail = false; throw new Error('injected Vault failure'); }
+      return row;
+    },
+  } } }) };
 });
 
 beforeAll(() => {
-  // getStripeClient() needs *a* key; the handler only verifies signatures, so
-  // no network call is made with it.
+  // Cryptographic signatures are real; canonical provider reads are synthetic.
   vi.stubEnv('STRIPE_SECRET_KEY', 'sk_test_integration_only');
   vi.stubEnv('STRIPE_WEBHOOK_SECRET', WEBHOOK_SECRET);
 });
+beforeEach(installSyntheticWebhookProvider);
 afterEach(cleanupFixtures);
 
 /** Sign the mocked session in as a fresh administrator. */
@@ -74,29 +78,27 @@ async function alertsFor(orderId: string) {
   return db.paymentAlert.findMany({ where: { orderId }, orderBy: { firstSeenAt: 'asc' } });
 }
 
+async function eventsFor(orderId: string) {
+  return db.paymentEvent.findMany({ where: { orderId }, orderBy: { createdAt: 'asc' } });
+}
+async function raiseLegacyAlert(orderId: string) {
+  await recordPaymentAlert({ kind: 'stale-session', orderId, subject: 'cs_test_superseded',
+    message: 'Historical session requires review', context: { sessionId: 'cs_test_superseded', storedSessionId: 'cs_test_current' } });
+}
+
 describe('payment reconciliation alerts', () => {
-  it('records the superseded session a real payment arrived on', async () => {
+  it('retains an unknown superseded session for review without fulfilling', async () => {
     const { order } = await createPendingOrderWithUser({ stripeSessionId: 'cs_test_current' });
 
     const res = await deliver(completedEvent(order.id, 'cs_test_superseded'));
     expect(res.status).toBe(200);
 
-    // The payment is still honoured - the alert is a review prompt, not a block.
-    const paid = await db.order.findUniqueOrThrow({ where: { id: order.id } });
-    expect(paid.status).toBe('PAID');
-    expect(paid.stripeSessionId).toBe('cs_test_current');
-
-    const alerts = await alertsFor(order.id);
-    expect(alerts).toHaveLength(1);
-    expect(alerts[0]).toMatchObject({
-      kind: 'stale-session',
-      occurrences: 1,
-      resolvedAt: null,
-    });
-    expect(JSON.parse(alerts[0].context!)).toEqual({
-      sessionId: 'cs_test_superseded',
-      storedSessionId: 'cs_test_current',
-    });
+    const held = await db.order.findUniqueOrThrow({ where: { id: order.id } });
+    expect(held).toMatchObject({ status: 'PENDING_PAYMENT', paymentHold: true, stripeSessionId: 'cs_test_current' });
+    expect(await db.vaultEntry.count({ where: { orderId: order.id } })).toBe(0);
+    const events = await eventsFor(order.id);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ status: 'REVIEW', data: { sessionId: 'cs_test_superseded' } });
   });
 
   it('does not record anything for a payment on the session it was issued for', async () => {
@@ -104,9 +106,10 @@ describe('payment reconciliation alerts', () => {
 
     expect((await deliver(completedEvent(order.id, 'cs_test_matched'))).status).toBe(200);
     expect(await alertsFor(order.id)).toHaveLength(0);
+    expect((await eventsFor(order.id))[0].status).toBe('PROCESSED');
   });
 
-  it('collapses Stripe retries of the same event into one alert', async () => {
+  it('collapses Stripe retries of the same event into one durable outcome', async () => {
     const { order } = await createPendingOrderWithUser({ stripeSessionId: 'cs_test_current' });
     const event = completedEvent(order.id, 'cs_test_superseded');
 
@@ -114,9 +117,9 @@ describe('payment reconciliation alerts', () => {
     expect((await deliver(event)).status).toBe(200);
     expect((await deliver(event)).status).toBe(200);
 
-    const alerts = await alertsFor(order.id);
-    expect(alerts).toHaveLength(1);
-    expect(alerts[0].occurrences).toBe(3);
+    const events = await eventsFor(order.id);
+    expect(events).toHaveLength(1);
+    expect(events[0].status).toBe('REVIEW');
   });
 
   it('records an unpaid completion instead of leaving it in the log alone', async () => {
@@ -131,13 +134,9 @@ describe('payment reconciliation alerts', () => {
     expect(still.status).toBe('PENDING_PAYMENT');
     expect(await db.vaultEntry.count({ where: { orderId: order.id } })).toBe(0);
 
-    const alerts = await alertsFor(order.id);
-    expect(alerts).toHaveLength(1);
-    expect(alerts[0].kind).toBe('unpaid-completion');
-    expect(JSON.parse(alerts[0].context!)).toMatchObject({
-      sessionId: 'cs_test_current',
-      paymentStatus: 'unpaid',
-    });
+    const events = await eventsFor(order.id);
+    expect(events).toHaveLength(1);
+    expect(events[0].data).toMatchObject({ sessionId: 'cs_test_current', paymentStatus: 'unpaid' });
   });
 
   it('records an unpaid completion for an order that is no longer stored', async () => {
@@ -146,17 +145,11 @@ describe('payment reconciliation alerts', () => {
     await createUser();
     // orderId is a foreign key, so the alert has to be raised without one
     // rather than failing the write the handler is relying on.
-    const res = await deliver(
-      completedEvent('nonexistent-order-id', 'cs_test_orphan', { paymentStatus: 'unpaid' }),
-    );
-    expect(res.status).toBe(200);
-
-    const orphan = await db.paymentAlert.findMany({ where: { orderId: null } });
-    expect(orphan).toHaveLength(1);
-    expect(orphan[0].kind).toBe('unpaid-completion');
-    expect(JSON.parse(orphan[0].context!)).toMatchObject({
-      referencedOrderId: 'nonexistent-order-id',
-    });
+    const event = completedEvent('nonexistent-order-id', 'cs_test_orphan', { paymentStatus: 'unpaid' });
+    expect((await deliver(event)).status).toBe(200);
+    const orphan = await db.paymentEvent.findUniqueOrThrow({ where: { providerEventId: event.id } });
+    trackPaymentEvent(orphan.id);
+    expect(orphan).toMatchObject({ orderId: null, status: 'UNMATCHED', data: { orderId: 'nonexistent-order-id' } });
   });
 
   it('records a vault-entry failure when an admin marks an order PAID', async () => {
@@ -165,33 +158,33 @@ describe('payment reconciliation alerts', () => {
       vaultAddOn: true,
       stripeSessionId: 'cs_test_manual',
     });
-    vi.mocked(createVaultEntryForOrder).mockRejectedValueOnce(
-      new Error('vault table unreachable'),
-    );
+    vaultFault.fail = true;
 
-    const res = await patchOrder(order.id, { status: 'PAID' });
-    expect(res.status).toBe(200);
-    // The update landed, so the response must not claim an unqualified success.
-    await expect(res.json()).resolves.toMatchObject({
-      warnings: [expect.stringContaining('vault entry could not be created')],
-    });
+    const res = await patchOrder(order.id, { status: 'PAID', manualSettlement: {
+      method: 'BANK_TRANSFER', reference: 'Controlled receipt', confirmed: true,
+    } });
+    expect(res.status).toBe(503);
+    await expect(res.json()).resolves.toMatchObject({ error: expect.stringContaining('Update') });
 
     const updated = await db.order.findUniqueOrThrow({ where: { id: order.id } });
-    expect(updated.status).toBe('PAID');
-    expect(updated.paidAt).not.toBeNull();
+    expect(updated.status).toBe('PENDING_PAYMENT');
+    expect(updated.paidAt).toBeNull();
+    expect(updated.manualSettlement).toBeNull();
     expect(await db.vaultEntry.count({ where: { orderId: order.id } })).toBe(0);
 
     const alerts = await alertsFor(order.id);
     expect(alerts).toHaveLength(1);
     expect(alerts[0].kind).toBe('vault-entry-failed');
-    expect(JSON.parse(alerts[0].context!)).toEqual({ error: 'vault table unreachable' });
+    expect(JSON.parse(alerts[0].context!)).toEqual({ operatorId: session.user!.id, outcome: 'unconfirmed' });
   });
 
   it('records nothing when the vault entry is created successfully', async () => {
     await asAdmin();
     const { order } = await createPendingOrderWithUser({ vaultAddOn: true });
 
-    const res = await patchOrder(order.id, { status: 'PAID' });
+    const res = await patchOrder(order.id, { status: 'PAID', manualSettlement: {
+      method: 'CASH', reference: 'Controlled cash receipt', confirmed: true,
+    } });
     expect(res.status).toBe(200);
     await expect(res.json()).resolves.not.toHaveProperty('warnings');
 
@@ -201,7 +194,7 @@ describe('payment reconciliation alerts', () => {
 
   it('lists open alerts to admins and refuses everyone else', async () => {
     const { order } = await createPendingOrderWithUser({ stripeSessionId: 'cs_test_current' });
-    await deliver(completedEvent(order.id, 'cs_test_superseded'));
+    await raiseLegacyAlert(order.id);
 
     await asAdmin();
     const ok = await listAlerts();
@@ -229,8 +222,7 @@ describe('payment reconciliation alerts', () => {
 
   it('resolves an alert, then reopens it if the same condition recurs', async () => {
     const { order } = await createPendingOrderWithUser({ stripeSessionId: 'cs_test_current' });
-    const event = completedEvent(order.id, 'cs_test_superseded');
-    await deliver(event);
+    await raiseLegacyAlert(order.id);
     await asAdmin();
 
     const [alert] = await alertsFor(order.id);
@@ -239,12 +231,12 @@ describe('payment reconciliation alerts', () => {
     await expect(resolved.json()).resolves.toEqual({ resolved: true });
 
     const listed = await listAlerts();
-    await expect(listed.json()).resolves.toEqual({ alerts: [] });
+    await expect(listed.json()).resolves.toMatchObject({ alerts: [] });
     // Resolving is not permanent suppression of the id.
     expect((await patchAlert(alert.id)).status).toBe(404);
 
     // A dismissed alert that happens again is still live, so it comes back.
-    await deliver(event);
+    await raiseLegacyAlert(order.id);
     const reopened = await alertsFor(order.id);
     expect(reopened).toHaveLength(1);
     expect(reopened[0].id).toBe(alert.id);
@@ -254,7 +246,7 @@ describe('payment reconciliation alerts', () => {
 
   it('refuses to resolve an alert for a caller who is not an admin', async () => {
     const { order } = await createPendingOrderWithUser({ stripeSessionId: 'cs_test_current' });
-    await deliver(completedEvent(order.id, 'cs_test_superseded'));
+    await raiseLegacyAlert(order.id);
 
     const customer = await createUser();
     session.user = { id: customer.id, role: 'USER', email: customer.email };

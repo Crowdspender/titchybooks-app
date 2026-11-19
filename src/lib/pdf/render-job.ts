@@ -5,6 +5,7 @@ import { prisma } from '@/lib/prisma';
 import { lockSubmission, SubmissionError, type Actor, type Transaction } from '@/lib/editor/submission-store';
 import { captureSnapshot, InvalidRenderInput, parseRenderSnapshot, type RenderSnapshot } from './snapshot';
 import type { RenderArtifacts } from './render-output';
+import { AssetReferenceError } from '@/lib/assets/references';
 
 export const LEASE_MS = 120_000;
 export const HEARTBEAT_MS = 20_000;
@@ -134,6 +135,6 @@ export async function processRenderJob(job: ClaimedJob, render?: (input: RenderS
     if (!lostLease) await publishRender(job, artifacts);
   } catch (error) {
     console.error(JSON.stringify({ event: 'render-failed', jobId: job.id, attempt: job.attempts }));
-    if (!lostLease) await failRender(job, error instanceof InvalidRenderInput || error instanceof SubmissionError || error instanceof z.ZodError || error instanceof SyntaxError);
+    if (!lostLease) await failRender(job, error instanceof InvalidRenderInput || error instanceof AssetReferenceError || error instanceof SubmissionError || error instanceof z.ZodError || error instanceof SyntaxError);
   } finally { clearInterval(timer); }
 }

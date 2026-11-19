@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
-import { ORDER_STATUS_TRANSITIONS, type OrderStatus } from "@/lib/pricing/constants";
-import { createVaultEntryForOrder } from "@/lib/orders/lifecycle";
+import { ORDER_STATUS_TRANSITIONS } from "@/lib/pricing/constants";
+import { applyOrderLifecycle } from "@/lib/orders/lifecycle";
 import { recordPaymentAlert } from "@/lib/orders/payment-alerts";
 import { adminUpdateOrderSchema } from "@/lib/pricing/schema";
 
@@ -59,78 +59,35 @@ export async function PATCH(
     );
   }
 
-  const order = await prisma.order.findUnique({
-    where: { id },
-    include: {
-      submission: { select: { id: true, title: true } },
-      user: { select: { id: true, name: true, email: true } },
-    },
-  });
-  if (!order) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
-  }
-
-  // Validate status transition (if a status change is requested).
-  if (parsed.data.status && parsed.data.status !== order.status) {
-    const allowed = ORDER_STATUS_TRANSITIONS[order.status as OrderStatus] ?? [];
-    if (!allowed.includes(parsed.data.status)) {
-      return NextResponse.json(
-        {
-          error: `Cannot transition from ${order.status} to ${parsed.data.status}`,
-          allowed,
-        },
-        { status: 400 }
-      );
+  try {
+    const result = await prisma.$transaction(tx => applyOrderLifecycle(tx, id, {
+      source: "admin", operatorId: session.user.id, update: parsed.data,
+    }));
+    if (!result.ok) {
+      if (result.reason === "not-found") return NextResponse.json({ error: "Not found" }, { status: 404 });
+      if (result.reason === "conflict") {
+        return NextResponse.json({ error: "Order changed. Reload it before saving your edits." }, { status: 409 });
+      }
+      if (result.reason === "payment-review") {
+        return NextResponse.json({ error: "Payment is on hold. Reconcile and explicitly review its current history before fulfillment.", code: "PAYMENT_REVIEW_REQUIRED" }, { status: 409 });
+      }
+      return NextResponse.json({
+        error: `Cannot transition from ${result.status} to ${parsed.data.status}`,
+        allowed: result.status ? ORDER_STATUS_TRANSITIONS[result.status] : [],
+      }, { status: 400 });
     }
-  }
-
-  const updated = await prisma.order.update({
-    where: { id },
-    data: {
-      status: parsed.data.status ?? undefined,
-      // Mirror the webhook: stamp paidAt when manually flipping to PAID.
-      paidAt:
-        parsed.data.status === "PAID" && order.status !== "PAID"
-          ? new Date()
-          : undefined,
-      notes: parsed.data.notes === undefined ? undefined : parsed.data.notes,
-    },
-  });
-
-  // Shared side-effect with the Stripe webhook path: idempotently create
-  // the vault entry when a paid order carries the vault add-on.
-  let vaultEntryFailed = false;
-  if (parsed.data.status === "PAID") {
-    try {
-      await createVaultEntryForOrder(prisma, order.id);
-    } catch (error) {
-      vaultEntryFailed = true;
-      // Log error with context for recovery
-      console.error(
-        `[VaultEntry] Failed to create vault entry for order ${order.id}:`,
-        error
-      );
-      // The buyer has paid and the vault copy they paid for is missing, so an
-      // operator has to create it by hand. A log line is not a channel anyone
-      // watches on serverless hosting: record it for the reconciliation banner
-      // on /admin/orders and report it in this response.
+    return NextResponse.json({ order: result.order });
+  } catch (error) {
+    console.error("Order update transaction failed", error);
+    // Vault failures roll back. A connection loss during commit can be
+    // ambiguous: require a fresh read instead of claiming settlement succeeded.
+    if (parsed.data.status === "PAID") {
       await recordPaymentAlert({
-        kind: "vault-entry-failed",
-        orderId: order.id,
-        message: "Order marked PAID but the vault entry could not be created.",
-        context: { error: error instanceof Error ? error.message : String(error) },
+        kind: "vault-entry-failed", orderId: id,
+        message: "Manual settlement could not be confirmed. Reload the order and review before retrying.",
+        context: { operatorId: session.user.id, outcome: "unconfirmed" },
       });
     }
+    return NextResponse.json({ error: "Update could not be confirmed. Reload the order and review before retrying." }, { status: 503 });
   }
-
-  if (vaultEntryFailed) {
-    return NextResponse.json({
-      order: updated,
-      warnings: [
-        "Order is PAID but its vault entry could not be created - see the reconciliation banner.",
-      ],
-    });
-  }
-
-  return NextResponse.json({ order: updated });
 }

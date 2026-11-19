@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import sharp from 'sharp';
-import { PDFArray, PDFDocument, PDFRawStream, decodePDFRawStream } from 'pdf-lib';
+import { PDFArray, PDFDocument, PDFName, PDFRawStream, decodePDFRawStream } from 'pdf-lib';
 import { generateTitchybookPdf } from '@/lib/pdf/generate';
 import { renderSceneToPdfPage } from '@/lib/pdf/vector-render';
 import { parseRenderSnapshot, type RenderSnapshot } from '@/lib/pdf/snapshot';
@@ -21,7 +21,7 @@ import { layoutDesignText } from '@/lib/editor/design-text-layout';
 import { preflightDesign } from '@/lib/editor/design-preflight';
 import { loadServerDesignFonts } from '@/lib/pdf/design-fonts-server';
 import { renderEditorSceneForPanel, renderSceneTile, renderEditorSceneForReading } from '@/lib/pdf/editor-render';
-import { DEFAULT_PRINT_PROFILE } from '@/lib/pdf/print-profile';
+import { DEFAULT_PRINT_PROFILE, READING_ORDER } from '@/lib/pdf/print-profile';
 
 const storage = vi.hoisted(() => ({ objects: new Map<string, Buffer>() }));
 vi.mock('@/lib/prisma', () => ({ prisma: {} }));
@@ -172,6 +172,28 @@ it('renders text near the bottom of all six expanded private interior pages', as
   expect(JSON.stringify(source)).toBe(before);
   await writeFile(join(folder, 'reading.pdf'), reading);
   await writeFile(join(folder, 'print-sheet.pdf'), sheet);
+}, 30000);
+
+it('embeds upright pages in reading order independently of scene storage order', async () => {
+  const input = snapshot();
+  const colors = ['#112233', '#334455', '#556677', '#778899', '#99aabb', '#bbccdd', '#dd1122', '#22dd44'];
+  input.pages.forEach((page, i) => { page.scene.elements = []; page.scene.page.backgroundColor = colors[i]; });
+  const before = JSON.stringify(input);
+  const result = await generateTitchybookPdf(input, 'reading-order');
+  const reading = await PDFDocument.load(storage.objects.get(result.readingPdfS3Key)!);
+  expect(result.previews.map(page => page.pageLabel)).toEqual(READING_ORDER);
+  for (const [index, page] of reading.getPages().entries()) {
+    const objects = page.node.Resources()!.lookup(PDFName.of('XObject'));
+    const entries = (objects as import('pdf-lib').PDFDict).entries();
+    const image = entries.map(([, ref]) => reading.context.lookup(ref)).find(object => object instanceof PDFRawStream) as PDFRawStream;
+    const pixels = Buffer.from(decodePDFRawStream(image).decode());
+    const expected = input.pages.find(page => page.pageLabel === READING_ORDER[index])!.scene.page.backgroundColor;
+    expect(pixels.subarray(0, 3).toString('hex')).toBe(expected.slice(1));
+    expect(page.getRotation().angle).toBe(0);
+    expect(page.getWidth()).toBeCloseTo(mmToPoints(74));
+    expect(page.getHeight()).toBeCloseTo(mmToPoints(105));
+  }
+  expect(JSON.stringify(input)).toBe(before);
 }, 30000);
 
 it('fails explicitly on missing source objects instead of publishing an incomplete PDF', async () => {

@@ -2,6 +2,8 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
+import { formatCharge, isCurrency } from "@/lib/pricing/currency";
+import { paymentStateLabel } from "@/components/orders/PaymentStatus";
 
 const STATUS_STYLES: Record<string, { bg: string; color: string }> = {
     PENDING_PAYMENT: { bg: "var(--color-accent-light)", color: "#92400E" },
@@ -128,9 +130,39 @@ export default async function OrdersListPage() {
                                                 color: "var(--color-text)",
                                             }}
                                         >
+                                            {order.expectedMinorAmount !==
+                                                        null &&
+                                                    isCurrency(order.currency)
+                                                ? formatCharge(
+                                                    order.expectedMinorAmount,
+                                                    order.currency,
+                                                )
+                                                : "Original charge unproven"}
+                                        </span>
+                                        <span
+                                            className="text-xs"
+                                            style={{
+                                                color:
+                                                    "var(--color-text-muted)",
+                                            }}
+                                        >
                                             {order.totalHuf.toLocaleString(
                                                 "en-US",
-                                            )} HUF
+                                            )} HUF total
+                                        </span>
+                                        <span
+                                            className="text-xs"
+                                            style={{
+                                                color:
+                                                    "var(--color-text-muted)",
+                                            }}
+                                        >
+                                            {paymentStateLabel(
+                                                order.paymentState,
+                                            )}
+                                            {order.paymentHold
+                                                ? " · fulfillment review hold"
+                                                : ""}
                                         </span>
                                     </div>
                                 </Link>

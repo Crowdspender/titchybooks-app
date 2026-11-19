@@ -64,11 +64,6 @@ export async function POST(request: Request) {
     // Generate and send password reset email
     const resetUrl = `${process.env.NEXTAUTH_URL || "http://localhost:3000"}/reset-password?token=${resetToken}`;
     
-    // Only log reset URL in development environment
-    if (process.env.NODE_ENV === "development") {
-      console.log("🔵 [FORGOT-PASSWORD] Password reset URL (for development):", resetUrl);
-    }
-    
     // Send password reset email
     const emailSent = await sendPasswordResetEmail({
       to: email,
@@ -82,8 +77,8 @@ export async function POST(request: Request) {
     }
 
     return NextResponse.json({ success: true });
-  } catch (error) {
-    console.error('❌ [FORGOT-PASSWORD] Unexpected error:', error);
+  } catch {
+    console.error("password-reset-request-failed");
     return NextResponse.json(
       { error: "Internal server error" },
       { status: 500 }

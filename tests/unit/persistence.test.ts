@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { DraftPersistence, type DocumentSeed, type SaveTransport } from '@/lib/editor/persistence';
+import { DraftPersistence, DraftLoadError, EditorRequestError, type DocumentSeed, type SaveTransport } from '@/lib/editor/persistence';
 import { PAGE_LABELS } from '@/lib/constants';
 import { createEmptyEditorScene } from '@/lib/editor/schema';
 import { sceneWithText } from '../fixtures/scenes';
@@ -25,6 +25,31 @@ function coordinator(transport: SaveTransport, revision = 0) {
 afterEach(() => { localStorage.clear(); vi.useRealTimers(); });
 
 describe('document persistence', () => {
+  it('distinguishes unavailable drafts from auth/server/network interruptions', () => {
+    expect(new DraftLoadError(404, 'missing').unavailable).toBe(true);
+    expect(new DraftLoadError(409, 'not editable').unavailable).toBe(true);
+    for (const status of [0, 401, 403, 429, 500, 503]) expect(new DraftLoadError(status, 'retry').unavailable).toBe(false);
+  });
+
+  it('reports dirty, in-flight, acknowledged, and locked conflict states without stale retries', async () => {
+    const first = delayed<number>();
+    const transport = vi.fn<SaveTransport>().mockReturnValueOnce(first.promise).mockRejectedValue(new EditorRequestError(409, 'Draft changed'));
+    const { draft, state } = coordinator(transport);
+    draft.set('title', 'First');
+    expect(state).toHaveBeenLastCalledWith('idle');
+    const flight = draft.flush('title');
+    expect(state).toHaveBeenLastCalledWith('saving');
+    first.resolve(1); await flight;
+    expect(state).toHaveBeenLastCalledWith('saved');
+    draft.set('title', 'Conflicting local edits');
+    await expect(draft.flush('title')).rejects.toThrow('Draft changed');
+    expect(state).toHaveBeenLastCalledWith('conflict');
+    draft.set('title', 'Still retained');
+    await expect(draft.flushAll()).rejects.toThrow('Draft changed');
+    expect(transport).toHaveBeenCalledTimes(2);
+    expect(draft.readRecovery()?.title).toEqual({ value: 'Still retained', revision: 1 });
+  });
+
   it('serializes and coalesces writes using acknowledged revisions', async () => {
     const first = delayed<number>();
     const transport = vi.fn<SaveTransport>().mockReturnValueOnce(first.promise).mockResolvedValueOnce(2);

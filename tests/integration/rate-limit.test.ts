@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { db } from '../fixtures/database';
+import { db, createUser, cleanupFixtures, trackFixtureRateLimit } from '../fixtures/database';
 import { consumeRateLimit, peekRateLimit, releaseRateLimit } from '@/lib/rate-limit';
 
 /**
@@ -16,6 +16,20 @@ describe('durable rate limiting (RateLimitBucket)', () => {
   afterAll(async () => {
     await db.rateLimitBucket.deleteMany({ where: { bucketKey: { startsWith: KEY_PREFIX } } });
     await db.$disconnect();
+  });
+
+  it('cleans exact fixture-owned user/email/IP buckets and preserves unrelated buckets', async () => {
+    const user = await createUser();
+    const unrelated = `${KEY_PREFIX}:preserved:${Date.now()}`;
+    const owned = [`submission:user:${user.id}`, `login:${user.email}`, `forgot:email:${user.email}`,
+      trackFixtureRateLimit(`reset:ip:192.0.2.166`)];
+    try {
+      for (const key of [...owned, unrelated]) await consumeRateLimit(key, { limit: 2, windowMs: 60000 });
+      await cleanupFixtures();
+      expect(await db.rateLimitBucket.count({ where: { bucketKey: { in: owned } } })).toBe(0);
+      expect(await db.rateLimitBucket.count({ where: { bucketKey: unrelated } })).toBe(1);
+      expect(await db.user.findUnique({ where: { id: user.id } })).toBeNull();
+    } finally { await cleanupFixtures(); }
   });
 
   it('allows up to the limit, then blocks with a bounded retry window', async () => {

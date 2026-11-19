@@ -1,7 +1,7 @@
 ﻿import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
-import { deleteS3Object } from "@/lib/s3";
+import { AssetReferenceError, removeAssetFromLibrary } from '@/lib/assets/references';
 
 export const dynamic = "force-dynamic";
 
@@ -18,34 +18,12 @@ export async function DELETE(
   const { assetId } = await params;
 
   try {
-    const asset = await prisma.asset.findUnique({
-      where: { id: assetId },
-    });
-
-    if (!asset) {
-      return NextResponse.json({ error: "Asset not found" }, { status: 404 });
-    }
-
-    if (asset.userId !== session.user.id) {
-      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-    }
-
-    // Delete from S3 first
-    try {
-      await deleteS3Object(asset.s3Key);
-    } catch (error) {
-      console.warn("Failed to delete asset from S3:", error);
-      // Continue with database deletion even if S3 deletion fails
-    }
-
-    // Delete from database
-    await prisma.asset.delete({
-      where: { id: assetId },
-    });
+    await prisma.$transaction(tx => removeAssetFromLibrary(tx, assetId, session.user.id!), { timeout: 20000 });
 
     return NextResponse.json({ success: true });
   } catch (error) {
-    console.error("Error deleting asset:", error);
+    if (error instanceof AssetReferenceError) return NextResponse.json({ error: error.message }, { status: error.status });
+    console.error("Error removing asset:", error);
     return NextResponse.json(
       { error: "Failed to delete asset" },
       { status: 500 }

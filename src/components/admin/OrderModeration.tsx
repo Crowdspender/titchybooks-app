@@ -1,7 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import type { OrderPaymentState } from "@prisma/client";
+import OrderPaymentHistory from "./OrderPaymentHistory";
+import { paymentStateLabel } from "@/components/orders/PaymentStatus";
 import {
     ORDER_STATUS_TRANSITIONS,
     ORDER_STATUSES,
@@ -11,12 +14,22 @@ import {
 interface AdminOrderRow {
     id: string;
     status: OrderStatus;
+    paymentState: OrderPaymentState | null;
+    paymentHold: boolean;
     quantity: number;
     zone: string;
     totalHuf: number;
     vaultAddOn: boolean;
     vaultFeeHuf: number;
     createdAt: string;
+    updatedAt: string;
+    manualSettlement: {
+        source: string;
+        operatorId: string;
+        recordedAt: string;
+        method: string;
+        reference: string;
+    } | null;
     notes: string | null;
     recipientName: string;
     countryCode: string;
@@ -36,32 +49,68 @@ interface PaymentAlertRow {
     lastSeenAt: string;
 }
 
+interface PaymentEventRow {
+    id: string;
+    orderId: string | null;
+    providerEventId: string;
+    type: string;
+    status: string;
+    source: string;
+    objectId: string | null;
+    outcome: string | null;
+}
+
 const ALERT_KIND_LABELS: Record<string, string> = {
     "stale-session": "Superseded session",
     "unpaid-completion": "Unpaid completion",
-    "vault-entry-failed": "Missing vault entry",
+    "vault-entry-failed": "Settlement / Vault failure",
 };
 
 export default function OrderModeration() {
     const [orders, setOrders] = useState<AdminOrderRow[]>([]);
     const [alerts, setAlerts] = useState<PaymentAlertRow[]>([]);
+    const [events, setEvents] = useState<PaymentEventRow[]>([]);
+    const [eventCount, setEventCount] = useState(0);
+    const [queueError, setQueueError] = useState("");
+    const [loadError, setLoadError] = useState("");
+    const [historyId, setHistoryId] = useState<string | null>(null);
     const [loading, setLoading] = useState(true);
     const [filter, setFilter] = useState<"" | OrderStatus>("");
     const [refreshKey, setRefreshKey] = useState(0);
     const [editingId, setEditingId] = useState<string | null>(null);
     const [pendingStatus, setPendingStatus] = useState<OrderStatus | "">("");
     const [pendingNotes, setPendingNotes] = useState("");
+    const [manualMethod, setManualMethod] = useState("BANK_TRANSFER");
+    const [manualReference, setManualReference] = useState("");
+    const [manualConfirmed, setManualConfirmed] = useState(false);
+    const [saving, setSaving] = useState(false);
+    const savingRef = useRef(false);
+    const [editError, setEditError] = useState("");
 
     useEffect(() => {
         let cancelled = false;
         async function load() {
             setLoading(true);
             const params = filter ? `?status=${filter}` : "";
-            const res = await fetch(`/api/admin/orders${params}`);
-            const data = await res.json();
-            if (!cancelled) {
-                setOrders(data.orders || []);
-                setLoading(false);
+            try {
+                const res = await fetch(`/api/admin/orders${params}`, {
+                    cache: "no-store",
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error("Orders unavailable");
+                if (!cancelled) {
+                    setOrders(data.orders || []);
+                    setLoadError("");
+                }
+            } catch {
+                if (!cancelled) {
+                    setOrders([]);
+                    setLoadError(
+                        "Orders could not be loaded. Reload before taking any action.",
+                    );
+                }
+            } finally {
+                if (!cancelled) setLoading(false);
             }
         }
         load();
@@ -76,11 +125,24 @@ export default function OrderModeration() {
     useEffect(() => {
         let cancelled = false;
         async function loadAlerts() {
-            const res = await fetch("/api/admin/payment-alerts");
-            if (!res.ok) return;
-            const data = await res.json();
-            if (!cancelled) {
-                setAlerts(data.alerts || []);
+            try {
+                const res = await fetch("/api/admin/payment-alerts", {
+                    cache: "no-store",
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error("Queue unavailable");
+                if (!cancelled) {
+                    setAlerts(data.alerts || []);
+                    setEvents(data.events || []);
+                    setEventCount(data.eventCount ?? 0);
+                    setQueueError("");
+                }
+            } catch {
+                if (!cancelled) {
+                    setQueueError(
+                        "Payment reconciliation queue could not be loaded. Its absence is not proof that payments are clear.",
+                    );
+                }
             }
         }
         loadAlerts();
@@ -93,9 +155,22 @@ export default function OrderModeration() {
         setEditingId(order.id);
         setPendingStatus(order.status);
         setPendingNotes(order.notes ?? "");
+        setManualMethod("BANK_TRANSFER");
+        setManualReference("");
+        setManualConfirmed(false);
+        setEditError("");
     }
 
     async function saveEdit(order: AdminOrderRow) {
+        if (savingRef.current) return;
+        const manual = pendingStatus === "PAID" &&
+            order.status === "PENDING_PAYMENT";
+        if (manual && (!manualConfirmed || !manualReference.trim())) {
+            setEditError(
+                "Payment evidence and explicit confirmation are required.",
+            );
+            return;
+        }
         const body: Record<string, unknown> = {};
         if (pendingStatus && pendingStatus !== order.status) {
             body.status = pendingStatus;
@@ -107,39 +182,58 @@ export default function OrderModeration() {
             setEditingId(null);
             return;
         }
-        const res = await fetch(`/api/admin/orders/${order.id}`, {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(body),
-        });
-        if (res.ok) {
+        body.expectedUpdatedAt = order.updatedAt;
+        if (manual) {
+            body.manualSettlement = {
+                method: manualMethod,
+                reference: manualReference.trim(),
+                confirmed: true,
+            };
+        }
+        savingRef.current = true;
+        setSaving(true);
+        setEditError("");
+        try {
+            const res = await fetch(`/api/admin/orders/${order.id}`, {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(body),
+            });
             const data = await res.json();
-            // The update landed but a side-effect did not: say so instead of
-            // reporting an unqualified success.
-            const warning = data.warnings?.[0];
-            if (warning) {
-                toast.warning(warning);
-            } else {
-                toast.success("Order updated");
-            }
+            if (!res.ok) throw new Error(data.error || "Update failed");
+            toast.success(
+                manual
+                    ? "Manual settlement recorded; this does not confirm a Stripe payment."
+                    : "Order updated",
+            );
             setEditingId(null);
             setRefreshKey((k) => k + 1);
-        } else {
-            const data = await res.json();
-            toast.error(data.error || "Update failed");
+        } catch (error) {
+            const message = error instanceof Error
+                ? error.message
+                : "Update could not be confirmed. Reload the order before retrying.";
+            setEditError(message);
+            toast.error(message);
+        } finally {
+            savingRef.current = false;
+            setSaving(false);
         }
     }
 
     async function dismissAlert(id: string) {
-        const res = await fetch(`/api/admin/payment-alerts/${id}`, {
-            method: "PATCH",
-        });
-        if (res.ok) {
+        try {
+            const res = await fetch(`/api/admin/payment-alerts/${id}`, {
+                method: "PATCH",
+            });
+            if (!res.ok) throw new Error("Could not dismiss the alert");
             setAlerts((current) => current.filter((alert) => alert.id !== id));
-            toast.success("Alert dismissed");
-        } else {
-            const data = await res.json();
-            toast.error(data.error || "Could not dismiss the alert");
+            toast.success(
+                "Historical alert dismissed. Financial holds are unchanged.",
+            );
+        } catch {
+            toast.error(
+                "Alert dismissal could not be confirmed. Reload the queue.",
+            );
             setRefreshKey((k) => k + 1);
         }
     }
@@ -155,6 +249,92 @@ export default function OrderModeration() {
                     Order Moderation
                 </h1>
             </div>
+
+            {(queueError || loadError) && (
+                <div className="card p-4 mb-4">
+                    {queueError && <p role="alert">{queueError}</p>}
+                    {loadError && <p role="alert">{loadError}</p>}
+                    <button
+                        className="btn btn-ghost btn-sm mt-2"
+                        disabled={saving}
+                        onClick={() => setRefreshKey((k) => k + 1)}
+                    >
+                        Reload orders and payment queue
+                    </button>
+                </div>
+            )}
+            {historyId && (
+                <OrderPaymentHistory
+                    key={historyId}
+                    orderId={historyId}
+                    onClose={() => setHistoryId(null)}
+                    onChanged={() =>
+                        setRefreshKey((k) => k + 1)}
+                />
+            )}
+            {events.length > 0 && (
+                <section
+                    className="card p-5 mb-6 space-y-3"
+                    aria-label="Unresolved payment events"
+                >
+                    <h2 className="font-semibold">
+                        Unresolved payment events ({eventCount})
+                    </h2>
+                    <p className="text-sm">
+                        Showing {events.length} of {eventCount}{" "}
+                        unresolved events, newest first. No event is silently
+                        discarded. Unmatched references require operator
+                        comparison with Stripe Dashboard; no order is inferred.
+                    </p>
+                    <ul className="space-y-3 text-sm">
+                        {events.map((event) => (
+                            <li key={event.id}>
+                                <p className="font-medium break-all">
+                                    {event.type} · {event.status}
+                                </p>
+                                <p className="text-xs break-all">
+                                    {event.providerEventId} · object{" "}
+                                    {event.objectId ?? "unknown"}
+                                </p>
+                                {event.outcome && (
+                                    <details>
+                                        <summary>Recorded outcome</summary>
+                                        <p className="text-xs break-all">
+                                            {event.outcome}
+                                        </p>
+                                    </details>
+                                )}
+                                {event.orderId
+                                    ? (
+                                        <button
+                                            className="btn btn-ghost btn-sm mt-1"
+                                            style={{
+                                                whiteSpace: "normal",
+                                                overflowWrap: "anywhere",
+                                                maxWidth: "100%",
+                                            }}
+                                            disabled={saving ||
+                                                historyId !== null}
+                                            onClick={() => {
+                                                setEditingId(null);
+                                                setHistoryId(event.orderId);
+                                            }}
+                                        >
+                                            Review payment for order{" "}
+                                            {event.orderId}
+                                        </button>
+                                    )
+                                    : (
+                                        <p className="text-xs">
+                                            Unmatched — retained for manual
+                                            provider review.
+                                        </p>
+                                    )}
+                            </li>
+                        ))}
+                    </ul>
+                </section>
+            )}
 
             {alerts.length > 0 && (
                 <div
@@ -177,9 +357,10 @@ export default function OrderModeration() {
                         {alerts.length}{" "}
                         {alerts.length === 1 ? "event needs" : "events need"}
                         {" "}
-                        a decision. These were handled without failing the
-                        payment, so they are listed here rather than only in the
-                        server log.
+                        a decision. Review the recorded outcome before retrying
+                        settlement or fulfillment. An alert is not proof of
+                        payment. Dismissing a historical alert does not release
+                        a financial hold.
                     </p>
                     <ul className="space-y-3">
                         {alerts.map((alert) => (
@@ -241,6 +422,7 @@ export default function OrderModeration() {
                 {STATUS_FILTERS.map((status) => (
                     <button
                         key={status || "all"}
+                        disabled={saving || historyId !== null}
                         onClick={() => setFilter(status)}
                         className={`btn btn-sm ${
                             filter === status ? "btn-primary" : "btn-ghost"
@@ -251,6 +433,22 @@ export default function OrderModeration() {
                 ))}
             </div>
 
+            {editError && (
+                <div className="card p-4 mb-4">
+                    <p role="alert">{editError}</p>
+                    <button
+                        className="btn btn-ghost btn-sm mt-2"
+                        disabled={saving}
+                        onClick={() => {
+                            setEditingId(null);
+                            setEditError("");
+                            setRefreshKey((k) => k + 1);
+                        }}
+                    >
+                        Reload orders
+                    </button>
+                </div>
+            )}
             {loading
                 ? (
                     <div className="space-y-3">
@@ -271,6 +469,8 @@ export default function OrderModeration() {
                         ))}
                     </div>
                 )
+                : loadError
+                ? null
                 : orders.length === 0
                 ? (
                     <div className="card p-12 text-center">
@@ -310,7 +510,12 @@ export default function OrderModeration() {
                 )
                 : (
                     <div className="card overflow-hidden">
-                        <div className="overflow-x-auto">
+                        <div
+                            className="overflow-x-auto"
+                            role="region"
+                            aria-label="Orders"
+                            tabIndex={0}
+                        >
                             <table className="w-full text-sm">
                                 <thead>
                                     <tr
@@ -354,9 +559,14 @@ export default function OrderModeration() {
                                         const isEditing =
                                             editingId === order.id;
                                         const allowedNext =
-                                            ORDER_STATUS_TRANSITIONS[
+                                            (ORDER_STATUS_TRANSITIONS[
                                                 order.status
-                                            ] ?? [];
+                                            ] ?? [])
+                                                .filter((next) =>
+                                                    !order.paymentHold ||
+                                                    !["PAID", "IN_PRODUCTION"]
+                                                        .includes(next)
+                                                );
                                         return (
                                             <tr
                                                 key={order.id}
@@ -453,9 +663,21 @@ export default function OrderModeration() {
                                                         )}
                                                 </td>
                                                 <td className="px-5 py-4">
+                                                    <p className="text-xs mb-2">
+                                                        {paymentStateLabel(
+                                                            order
+                                                                .paymentState ??
+                                                                null,
+                                                        )}
+                                                        {order.paymentHold
+                                                            ? " · review hold"
+                                                            : ""}
+                                                    </p>
                                                     {isEditing
                                                         ? (
                                                             <select
+                                                                aria-label="Order status"
+                                                                disabled={saving}
                                                                 value={pendingStatus}
                                                                 onChange={(
                                                                     event,
@@ -463,7 +685,7 @@ export default function OrderModeration() {
                                                                     event.target
                                                                         .value as OrderStatus,
                                                                 )}
-                                                                className="input text-xs py-1 px-2 w-auto"
+                                                                className="input text-xs py-1 px-2 w-auto min-w-36"
                                                             >
                                                                 <option
                                                                     value={order
@@ -506,12 +728,165 @@ export default function OrderModeration() {
                                                 >
                                                     {new Date(order.createdAt)
                                                         .toLocaleDateString()}
+                                                    {order.manualSettlement
+                                                                ?.source ===
+                                                            "manual" && (
+                                                        <details className="mt-2 text-left break-all">
+                                                            <summary>
+                                                                Manual
+                                                                settlement
+                                                                evidence
+                                                            </summary>
+                                                            <p>
+                                                                Recorded by{" "}
+                                                                {order
+                                                                    .manualSettlement
+                                                                    .operatorId}
+                                                                {" "}
+                                                                at{" "}
+                                                                {new Date(
+                                                                    order
+                                                                        .manualSettlement
+                                                                        .recordedAt,
+                                                                ).toLocaleString()}
+                                                            </p>
+                                                            <p>
+                                                                {order
+                                                                    .manualSettlement
+                                                                    .method}:
+                                                                {" "}
+                                                                {order
+                                                                    .manualSettlement
+                                                                    .reference}
+                                                            </p>
+                                                            <p>
+                                                                Operator-verified;
+                                                                not Stripe
+                                                                confirmation.
+                                                            </p>
+                                                        </details>
+                                                    )}
                                                 </td>
                                                 <td className="px-5 py-4 text-right">
                                                     {isEditing
                                                         ? (
-                                                            <div className="flex flex-col items-end gap-2">
+                                                            <div className="flex w-64 flex-col items-end gap-2">
+                                                                {pendingStatus ===
+                                                                        "PAID" &&
+                                                                    order
+                                                                            .status ===
+                                                                        "PENDING_PAYMENT" &&
+                                                                    (
+                                                                        <fieldset
+                                                                            disabled={saving}
+                                                                            className="w-64 text-left space-y-2"
+                                                                        >
+                                                                            <legend className="font-medium">
+                                                                                Record
+                                                                                manual
+                                                                                settlement
+                                                                            </legend>
+                                                                            <p className="text-xs">
+                                                                                Verify
+                                                                                payment
+                                                                                evidence
+                                                                                before
+                                                                                confirming.
+                                                                                This
+                                                                                records
+                                                                                your
+                                                                                manual
+                                                                                decision,
+                                                                                not
+                                                                                a
+                                                                                Stripe
+                                                                                payment.
+                                                                                Do
+                                                                                not
+                                                                                include
+                                                                                card
+                                                                                or
+                                                                                bank
+                                                                                account
+                                                                                details.
+                                                                            </p>
+                                                                            <label className="block">
+                                                                                Payment
+                                                                                method
+                                                                                <select
+                                                                                    className="input text-xs"
+                                                                                    value={manualMethod}
+                                                                                    onChange={(event) => {
+                                                                                        setManualMethod(
+                                                                                            event
+                                                                                                .target
+                                                                                                .value,
+                                                                                        );
+                                                                                        setManualConfirmed(
+                                                                                            false,
+                                                                                        );
+                                                                                    }}
+                                                                                >
+                                                                                    <option value="BANK_TRANSFER">
+                                                                                        Bank
+                                                                                        transfer
+                                                                                    </option>
+                                                                                    <option value="CASH">
+                                                                                        Cash
+                                                                                    </option>
+                                                                                    <option value="OTHER">
+                                                                                        Other
+                                                                                    </option>
+                                                                                </select>
+                                                                            </label>
+                                                                            <label className="block">
+                                                                                Payment
+                                                                                evidence
+                                                                                /
+                                                                                reference
+                                                                                <textarea
+                                                                                    className="input text-xs"
+                                                                                    rows={2}
+                                                                                    maxLength={500}
+                                                                                    value={manualReference}
+                                                                                    onChange={(event) => {
+                                                                                        setManualReference(
+                                                                                            event
+                                                                                                .target
+                                                                                                .value,
+                                                                                        );
+                                                                                        setManualConfirmed(
+                                                                                            false,
+                                                                                        );
+                                                                                    }}
+                                                                                />
+                                                                            </label>
+                                                                            <label className="flex items-start gap-2">
+                                                                                <input
+                                                                                    type="checkbox"
+                                                                                    checked={manualConfirmed}
+                                                                                    onChange={(event) =>
+                                                                                        setManualConfirmed(
+                                                                                            event
+                                                                                                .target
+                                                                                                .checked,
+                                                                                        )}
+                                                                                />
+                                                                                I
+                                                                                verified
+                                                                                this
+                                                                                manual
+                                                                                payment
+                                                                                and
+                                                                                confirm
+                                                                                settlement.
+                                                                            </label>
+                                                                        </fieldset>
+                                                                    )}
                                                                 <textarea
+                                                                    aria-label="Internal notes"
+                                                                    disabled={saving}
+                                                                    maxLength={2000}
                                                                     value={pendingNotes}
                                                                     onChange={(
                                                                         event,
@@ -530,15 +905,27 @@ export default function OrderModeration() {
                                                                             saveEdit(
                                                                                 order,
                                                                             )}
+                                                                        disabled={saving ||
+                                                                            (pendingStatus ===
+                                                                                    "PAID" &&
+                                                                                order
+                                                                                        .status ===
+                                                                                    "PENDING_PAYMENT" &&
+                                                                                (!manualConfirmed ||
+                                                                                    !manualReference
+                                                                                        .trim()))}
                                                                         className="btn btn-success btn-sm text-xs"
                                                                     >
-                                                                        Save
+                                                                        {saving
+                                                                            ? "Saving…"
+                                                                            : "Save"}
                                                                     </button>
                                                                     <button
                                                                         onClick={() =>
                                                                             setEditingId(
                                                                                 null,
                                                                             )}
+                                                                        disabled={saving}
                                                                         className="btn btn-ghost btn-sm text-xs"
                                                                     >
                                                                         Cancel
@@ -552,11 +939,27 @@ export default function OrderModeration() {
                                                                     startEdit(
                                                                         order,
                                                                     )}
+                                                                disabled={saving ||
+                                                                    historyId !==
+                                                                        null}
                                                                 className="btn btn-primary btn-sm text-xs"
                                                             >
                                                                 Update
                                                             </button>
                                                         )}
+                                                    <button
+                                                        className="btn btn-ghost btn-sm text-xs mt-2"
+                                                        disabled={saving ||
+                                                            historyId !== null}
+                                                        onClick={() => {
+                                                            setEditingId(null);
+                                                            setHistoryId(
+                                                                order.id,
+                                                            );
+                                                        }}
+                                                    >
+                                                        Payment history
+                                                    </button>
                                                 </td>
                                             </tr>
                                         );

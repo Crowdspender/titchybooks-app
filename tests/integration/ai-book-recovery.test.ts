@@ -1,5 +1,8 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Prisma } from '@prisma/client';
+import { Readable } from 'node:stream';
+import { PDFDocument } from 'pdf-lib';
+import { describeArtifact } from '@/lib/pdf/artifacts';
 import { cleanupFixtures, createDraft, createUser, db } from '../fixtures/database';
 import { prisma } from '@/lib/prisma';
 
@@ -8,8 +11,8 @@ import { prisma } from '@/lib/prisma';
 // ownership, phase derivation and queue sampling all run for real.
 const session = vi.hoisted(() => ({ user: null as null | { id: string; role: string } }));
 vi.mock('@/auth', () => ({ auth: async () => (session.user ? { user: session.user } : null) }));
-const storage = vi.hoisted(() => ({ getPresignedDownloadUrl: vi.fn() }));
-vi.mock('@/lib/s3', () => ({ getPresignedDownloadUrl: storage.getPresignedDownloadUrl }));
+const storage = vi.hoisted(() => ({ getPresignedDownloadUrl: vi.fn(), openS3Object: vi.fn() }));
+vi.mock('@/lib/s3', () => storage);
 vi.mock('@/lib/ai/client', () => ({ isAIConfigured: () => true }));
 
 import { GET as listJobs, POST as startJob } from '@/app/api/ai/books/route';
@@ -17,7 +20,7 @@ import { GET as jobStatus } from '@/app/api/ai/books/[id]/route';
 import { GET as download } from '@/app/api/ai/books/[id]/downloads/route';
 import { GET as renderStatus } from '@/app/api/submissions/[id]/render-status/route';
 
-const SIGNED = 'https://storage.example.invalid/signed.pdf';
+let pdfBytes: Buffer;
 const params = (id: string) => ({ params: Promise.resolve({ id }) });
 const request = (url = 'http://localhost/test', body?: unknown) =>
   new Request(url, {
@@ -30,7 +33,12 @@ const downloadFor = (id: string, kind?: string) =>
 
 beforeEach(async () => {
   session.user = await createUser();
-  storage.getPresignedDownloadUrl.mockResolvedValue(SIGNED);
+  const pdf = await PDFDocument.create();
+  pdf.addPage([841.8897637795277, 595.2755905511812]);
+  pdfBytes = Buffer.from(await pdf.save());
+  storage.openS3Object.mockImplementation(async () => ({
+    body: Readable.from([pdfBytes]), size: pdfBytes.length, contentType: 'application/pdf',
+  }));
 });
 afterEach(async () => {
   await cleanupFixtures();
@@ -172,16 +180,18 @@ describe('AI book recovery surface', () => {
     const book = await createBook(owner.id);
     const job = await createJob(owner.id, { status: 'COMPLETED', stage: 'QA', submissionId: book.id });
 
-    expect((await downloadFor(job.id, 'print')).status).toBe(302);
-    expect(storage.getPresignedDownloadUrl).toHaveBeenLastCalledWith('renders/print.pdf', {
-      filename: 'a-rainy-day-print-sheet-a4-fold.pdf',
-    });
+    const print = await downloadFor(job.id, 'print');
+    expect(print.status).toBe(200);
+    expect(print.headers.get('content-disposition')).toBe('attachment; filename="a-rainy-day-print-sheet-a4-fold.pdf"');
+    expect(Buffer.from(await print.arrayBuffer())).toEqual(pdfBytes);
+    expect(storage.openS3Object).toHaveBeenLastCalledWith('renders/print.pdf', expect.any(AbortSignal));
     const reading = await downloadFor(job.id, 'reading');
-    expect(reading.status).toBe(302);
-    expect(reading.headers.get('location')).toBe(SIGNED);
-    expect(storage.getPresignedDownloadUrl).toHaveBeenLastCalledWith('renders/reading.pdf', {
-      filename: 'a-rainy-day-reading-74x105mm.pdf',
-    });
+    expect(reading.status).toBe(200);
+    expect(reading.headers.get('location')).toBeNull();
+    expect(reading.headers.get('content-disposition')).toBe('attachment; filename="a-rainy-day-reading-74x105mm.pdf"');
+    expect(Buffer.from(await reading.arrayBuffer())).toEqual(pdfBytes);
+    expect(storage.openS3Object).toHaveBeenLastCalledWith('renders/reading.pdf', expect.any(AbortSignal));
+    expect(storage.getPresignedDownloadUrl).not.toHaveBeenCalled();
 
     expect((await downloadFor(job.id)).status).toBe(400);
     expect((await downloadFor(job.id, 'poster')).status).toBe(400);
@@ -192,7 +202,9 @@ describe('AI book recovery surface', () => {
 
     // An admin may still inspect the proof.
     session.user = await createUser('ADMIN');
-    expect((await downloadFor(job.id, 'print')).status).toBe(302);
+    const proof = await downloadFor(job.id, 'print');
+    expect(proof.status).toBe(200);
+    await proof.arrayBuffer();
 
     session.user = await createUser();
     expect((await downloadFor(job.id, 'print')).status).toBe(403);
@@ -208,11 +220,11 @@ describe('AI book recovery surface', () => {
 
     const response = await downloadFor(job.id, 'reading');
     expect(response.status).toBe(409);
-    expect((await response.json()).error).toContain('only the print sheet is available');
+    expect((await response.json()).error).toContain('reading PDF is unavailable');
 
     const status = await (await renderStatus(request(), params(legacy.id))).json();
-    expect(status).toMatchObject({ readingPdfUrl: null, readingPdfAvailable: false, ready: false });
-    expect(status.pdfUrl).toBe(SIGNED);
+    expect(status).toMatchObject({ readingPdfUrl: null, readingPdfAvailable: false, ready: true, legacy: true });
+    expect(status.pdfUrl).toBe(`/api/submissions/${legacy.id}/downloads?kind=print`);
   });
 
   it('declares readiness only when the book is approved and both artifacts exist', async () => {
@@ -224,15 +236,23 @@ describe('AI book recovery surface', () => {
 
     const status = await (await renderStatus(request(), params(complete.id))).json();
     expect(status).toMatchObject({ ready: true, readingPdfAvailable: true, submissionStatus: 'APPROVED' });
-    expect(status.pdfUrl).toBe(SIGNED);
-    expect(status.readingPdfUrl).toBe(SIGNED);
+    expect(status.pdfUrl).toBe(`/api/submissions/${complete.id}/downloads?kind=print`);
+    expect(status.readingPdfUrl).toBe(`/api/submissions/${complete.id}/downloads?kind=reading`);
 
     // Approving a print-only render is not enough to claim the book is finished.
     const printOnly = await createBook(owner.id, { readingPdfS3Key: null });
+    const printManifest = {
+      schemaVersion: 1, submissionId: printOnly.id, submissionRevision: printOnly.revision,
+      renderJobId: 'incomplete-new-render', printProfile: 'test', templateId: null, templateVersion: null,
+      title: printOnly.title, createdAt: new Date(0).toISOString(),
+      print: await describeArtifact({ kind: 'print', s3Key: 'renders/print.pdf', bytes: pdfBytes }),
+      reading: await describeArtifact({ kind: 'reading', s3Key: 'renders/reading.pdf', bytes: pdfBytes }),
+    };
+    await db.submission.update({ where: { id: printOnly.id }, data: { artifactManifest: printManifest as unknown as Prisma.InputJsonValue } });
     await db.renderJob.create({ data: { submissionId: printOnly.id, status: 'COMPLETED', pdfS3Key: 'renders/print.pdf', completedAt: new Date() } });
     const half = await (await renderStatus(request(), params(printOnly.id))).json();
     expect(half).toMatchObject({ ready: false, readingPdfAvailable: false, readingPdfUrl: null });
-    expect(half.pdfUrl).toBe(SIGNED);
+    expect(half.pdfUrl).toBe(`/api/submissions/${printOnly.id}/downloads?kind=print`);
 
     // A book queued for render is not downloadable yet.
     const unfinished = await createBook(owner.id, { status: 'PENDING' });

@@ -1,7 +1,8 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useRef, useState } from "react";
+import { draftPointerStorage } from "@/lib/editor/persistence";
 import { toast } from "sonner";
 
 /**
@@ -23,9 +24,14 @@ export default function OpenInEditorButton({
 }) {
     const router = useRouter();
     const [opening, setOpening] = useState(false);
+    const openingRef = useRef(false);
+    const [openError, setOpenError] = useState<string | null>(null);
 
     async function handleClick() {
+        if (openingRef.current) return;
+        openingRef.current = true;
         setOpening(true);
+        setOpenError(null);
         try {
             const response = await fetch(
                 `/api/submissions/${submissionId}/duplicate`,
@@ -45,27 +51,39 @@ export default function OpenInEditorButton({
                 );
             }
 
-            router.push(`/create?submissionId=${copyId}`);
-        } catch (error) {
-            toast.error(
-                error instanceof Error
-                    ? error.message
-                    : "Could not open this book in the editor",
+            draftPointerStorage.setItem(
+                "titchybook-active-editor-draft",
+                copyId,
             );
+            router.push(`/create?submissionId=${encodeURIComponent(copyId)}`);
+        } catch (error) {
+            const message = error instanceof Error
+                ? error.message
+                : "Could not open this book in the editor";
+            setOpenError(
+                `${message}. The original book is unchanged; retry creating a copy.`,
+            );
+            toast.error(message);
+            openingRef.current = false;
             // Stay put so the user can retry; on success the navigation unmounts this.
             setOpening(false);
         }
     }
 
     return (
-        <button
-            type="button"
-            onClick={handleClick}
-            disabled={opening}
-            aria-busy={opening}
-            className={className}
-        >
-            {opening ? "Opening..." : label}
-        </button>
+        <div>
+            <button
+                type="button"
+                onClick={handleClick}
+                disabled={opening}
+                aria-busy={opening}
+                className={className}
+            >
+                {opening ? "Opening..." : label}
+            </button>
+            {openError && (
+                <p role="alert" className="mt-1 text-xs">{openError}</p>
+            )}
+        </div>
     );
 }

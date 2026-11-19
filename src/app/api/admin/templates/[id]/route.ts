@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { parseEditorScene } from "@/lib/editor/schema";
 import { z } from "zod";
 import { errorResponse, lockSubmission, SubmissionError } from "@/lib/editor/submission-store";
+import { requireNoTemplateDependents } from '@/lib/assets/references';
 
 export const dynamic = "force-dynamic";
 
@@ -149,8 +150,7 @@ export async function DELETE(
     await prisma.$transaction(async tx => {
       const template = await lockSubmission(tx, id);
       if (!template.isTemplate) throw new SubmissionError(404, 'Template not found');
-      const instanceCount = await tx.submission.count({ where: { templateId: id } });
-      if (instanceCount) throw new SubmissionError(409, 'Templates with linked drafts cannot be deleted');
+      await requireNoTemplateDependents(tx, id);
       await tx.submission.delete({ where: { id } });
     });
     return NextResponse.json({ success: true, deletedInstanceCount: 0 });

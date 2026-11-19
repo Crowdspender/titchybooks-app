@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { auth } from '@/auth';
 import { prisma } from '@/lib/prisma';
 import { PAGE_LABELS } from '@/lib/constants';
-import { errorResponse, lockSubmission, requireEditable, requireRevision, mergedPages, SubmissionError } from '@/lib/editor/submission-store';
+import { errorResponse, lockSubmission, requireEditable, requireRevision, mergedPages, validateSceneAssets, SubmissionError } from '@/lib/editor/submission-store';
 
 export const dynamic = 'force-dynamic';
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -19,6 +19,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       requireRevision(current.revision, body.revision);
       if (!current.templateId) throw new SubmissionError(400, 'This submission has no template');
       const pages = await mergedPages(tx, current);
+      await validateSceneAssets(tx, pages.map(page => page.scene), { id: session.user.id!, role: session.user.role });
       for (const page of pages) {
         const existing = await tx.submissionPage.findUniqueOrThrow({ where: { submissionId_pageLabel: { submissionId: id, pageLabel: page.pageLabel } } });
         requireRevision(existing.revision, body.pageRevisions[page.pageLabel]);

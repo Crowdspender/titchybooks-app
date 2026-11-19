@@ -1,8 +1,8 @@
 import { defineConfig, devices } from '@playwright/test';
-import { testEnvironment } from './scripts/test-environment.mts';
+import { applyTestEnvironment, testEnvironment } from './scripts/test-environment.mts';
 
 const env = testEnvironment();
-Object.assign(process.env, env);
+applyTestEnvironment(env);
 export default defineConfig({
   testDir: './tests/browser',
   outputDir: 'test-results/browser',
@@ -16,7 +16,7 @@ export default defineConfig({
   use: { baseURL: 'http://localhost:3100', trace: 'retain-on-failure', screenshot: 'only-on-failure' },
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'], viewport: { width: 1600, height: 1000 } } }],
   webServer: {
-    command: 'node node_modules/tsx/dist/cli.mjs scripts/test-db.ts server',
+    command: 'node node_modules/tsx/dist/cli.mjs scripts/test-db.ts server-quotes',
     url: 'http://localhost:3100/login',
     reuseExistingServer: false,
     timeout: 120000,

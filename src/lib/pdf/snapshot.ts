@@ -8,6 +8,7 @@ import { DEFAULT_PRINT_PROFILE, isCurrentPrintProfile } from './print-profile';
 import { FONT_MANIFEST, requiredDesignFonts } from '@/lib/editor/design-fonts';
 import { loadServerDesignFonts } from './design-fonts-server';
 import { preflightDesign } from '@/lib/editor/design-preflight';
+import { lockAssetReferences } from '@/lib/assets/references';
 
 const assetSchema = z.object({
   id: z.string().min(1), s3Key: z.string().min(1), mimeType: z.string(),
@@ -110,6 +111,7 @@ export function requiresDualOutput(snapshot: RenderSnapshot): snapshot is Render
 }
 
 export async function captureSnapshot(tx: Transaction, submission: Submission, actor: Actor, force = false) {
+  await lockAssetReferences(tx);
   let warnings: DpiWarning[] = [];
   const base = {
     version: 2 as const,

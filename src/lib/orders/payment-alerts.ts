@@ -3,11 +3,10 @@ import { prisma } from "@/lib/prisma";
 /**
  * Durable payment-reconciliation alerts.
  *
- * The checkout webhook and the admin "mark PAID" path both take decisions that
- * are correct but still need a human to look at them: a signature-verified
- * payment against a superseded session is honoured anyway, an unpaid completion
- * is acknowledged and dropped, and a vault entry that fails to be created
- * leaves a paid order without the storage copy the buyer paid for.
+ * Historical alerts and failed manual settlements remain visible. New Stripe
+ * deliveries use durable PaymentEvent outcomes and canonical reconciliation.
+ * Settlement and Vault creation are atomic; an ambiguous commit response
+ * requires a fresh order read before retrying.
  *
  * A structured log line is not a sufficient signal for any of those on
  * serverless hosting, where the log stream is only visible to someone who goes

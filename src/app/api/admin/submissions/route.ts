@@ -50,7 +50,7 @@ export async function GET(request: NextRequest) {
   const submissionsWithUrls = await Promise.all(
     submissions.map(async (sub) => {
       const pdfDownloadUrl = sub.pdfS3Key
-        ? await getPresignedDownloadUrl(sub.pdfS3Key)
+        ? `/api/submissions/${encodeURIComponent(sub.id)}/downloads?kind=print`
         : null;
 
       const pagePreviews = await Promise.all(
@@ -71,5 +71,5 @@ export async function GET(request: NextRequest) {
     })
   );
 
-  return NextResponse.json({ submissions: submissionsWithUrls });
+  return NextResponse.json({ submissions: submissionsWithUrls }, { headers: { 'Cache-Control': 'private, no-store', Vary: 'Cookie' } });
 }

@@ -28,7 +28,7 @@ export async function POST(request: Request) {
     }
 
     const assetId = crypto.randomUUID();
-    const ext = parsed.data.filename.split(".").pop() || "jpg";
+    const ext = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' }[parsed.data.contentType];
     const s3Key = buildAssetUploadKey(session.user.id, assetId, ext);
     const uploadUrl = await getPresignedUploadUrl(s3Key, parsed.data.contentType);
 
@@ -36,7 +36,7 @@ export async function POST(request: Request) {
       assetId,
       uploadUrl,
       s3Key,
-    });
+    }, { headers: { 'Cache-Control': 'private, no-store', Vary: 'Cookie' } });
   } catch {
     return NextResponse.json(
       { error: "Internal server error" },
