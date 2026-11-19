@@ -71,6 +71,10 @@ test('moderation locks repeated actions, surfaces server failure, then retries t
   const { id, row } = await reviewFixture(page);
   const original = await db.submission.findUniqueOrThrow({ where: { id } });
   let requests = 0;
+  // Test-wide counter independent of the failure route: a duplicate PATCH
+  // dispatched late must still be visible after the route is removed.
+  let totalPatches = 0;
+  page.on('request', request => { if (request.method() === 'PATCH' && request.url().endsWith(`/api/admin/submissions/${id}`)) totalPatches++; });
   let release!: () => void;
   const held = new Promise<void>(resolve => { release = resolve; });
   await page.route(`**/api/admin/submissions/${id}`, async route => {
@@ -88,6 +92,7 @@ test('moderation locks repeated actions, surfaces server failure, then retries t
   release();
   await expect(page.getByRole('alert').filter({ hasText: 'Injected review unavailable' })).toBeVisible();
   expect(await db.submission.findUniqueOrThrow({ where: { id } })).toEqual(original);
+  expect(requests).toBe(1);
   await page.screenshot({ path: testInfo.outputPath('batch6-review-server-error.png'), fullPage: true });
   await page.unroute(`**/api/admin/submissions/${id}`);
   await page.getByRole('button', { name: 'Reload submissions', exact: true }).click();
@@ -97,6 +102,8 @@ test('moderation locks repeated actions, surfaces server failure, then retries t
   await expect(row.getByText('Correction needed: Please correct the cover text.')).toBeVisible();
   const rejected = await db.submission.findUniqueOrThrow({ where: { id } });
   expect(rejected).toEqual({ ...original, status: 'REJECTED', rejectionReason: 'Please correct the cover text.', updatedAt: rejected.updatedAt });
+  // Only the original approval and the intended rejection ever left the page.
+  expect(totalPatches).toBe(2);
 });
 
 test('admin list failures are contextual and mobile filters remain reachable', async ({ page }, testInfo) => {
@@ -110,9 +117,15 @@ test('admin list failures are contextual and mobile filters remain reachable', a
   await page.screenshot({ path: testInfo.outputPath('batch6-admin-mobile-error.png'), fullPage: true });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.unroute(/\/api\/admin\/submissions(?:\?.*)?$/);
+  // Consume the retry's own response before the loop so the first filter
+  // cannot pass on it.
+  const retry = page.waitForResponse(res => res.request().method() === 'GET' && new URL(res.url()).pathname === '/api/admin/submissions');
   await page.getByRole('button', { name: 'Retry loading submissions', exact: true }).click();
+  expect((await retry).status()).toBe(200);
+  const searches: Record<string, string> = { PROCESSING: '?status=PROCESSING', FAILED: '?status=FAILED', PENDING: '?status=PENDING', APPROVED: '?status=APPROVED', REJECTED: '?status=REJECTED', 'Spot-check': '?spotCheck=true', All: '' };
   for (const name of ['PROCESSING', 'FAILED', 'PENDING', 'APPROVED', 'REJECTED', 'Spot-check', 'All']) {
-    const response = page.waitForResponse(res => new URL(res.url()).pathname === '/api/admin/submissions');
+    // Match each response to its filter's request parameters, not just the path.
+    const response = page.waitForResponse(res => res.request().method() === 'GET' && new URL(res.url()).pathname === '/api/admin/submissions' && new URL(res.url()).search === searches[name]);
     await page.getByRole('button', { name, exact: true }).click();
     expect((await response).status()).toBe(200);
   }

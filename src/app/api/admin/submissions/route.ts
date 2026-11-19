@@ -3,6 +3,7 @@ import type { Prisma } from "@prisma/client";
 import { auth } from "@/auth";
 import { SubmissionStatus, VALID_STATUSES } from "@/lib/constants";
 import { prisma } from "@/lib/prisma";
+import { artifactAvailability } from "@/lib/pdf/artifacts";
 import { getPresignedDownloadUrl } from "@/lib/s3";
 
 export const dynamic = "force-dynamic";
@@ -49,7 +50,10 @@ export async function GET(request: NextRequest) {
   // Generate presigned URLs for PDFs and page previews
   const submissionsWithUrls = await Promise.all(
     submissions.map(async (sub) => {
-      const pdfDownloadUrl = sub.pdfS3Key
+      // Advertise only artifacts the download route's manifest rules accept;
+      // raw key presence alone can promise a transfer that would 409.
+      const artifacts = artifactAvailability(sub);
+      const pdfDownloadUrl = artifacts.printSheet
         ? `/api/submissions/${encodeURIComponent(sub.id)}/downloads?kind=print`
         : null;
 
@@ -67,6 +71,7 @@ export async function GET(request: NextRequest) {
         ...sub,
         pdfDownloadUrl,
         pagePreviews,
+        artifacts: { printSheet: artifacts.printSheet, readingPdf: artifacts.readingPdf },
       };
     })
   );

@@ -17,7 +17,20 @@ vi.mock(
 );
 vi.mock(
     "@/components/submissions/PdfDownloads",
-    () => ({ default: () => null }),
+    () => ({
+        default: (
+            { printAvailable, readingAvailable }: {
+                printAvailable: boolean;
+                readingAvailable: boolean;
+            },
+        ) => (
+            <div
+                data-testid="pdf-downloads"
+                data-print={String(printAvailable)}
+                data-reading={String(readingAvailable)}
+            />
+        ),
+    }),
 );
 const submission = {
     id: "controlled-review",
@@ -27,6 +40,7 @@ const submission = {
     pdfS3Key: "retained/master.pdf",
     readingPdfS3Key: null,
     pdfDownloadUrl: null,
+    artifacts: { printSheet: true, readingPdf: false },
     rejectionReason: null,
     createdAt: "2026-01-01T00:00:00Z",
     aiGenerated: false,
@@ -155,4 +169,93 @@ it("HTTP failures cannot silently become an empty list", async () => {
         "Administrator access",
     );
     expect(screen.queryByText("No submissions yet")).toBeNull();
+});
+
+it("confirms a committed review even when the success body is unreadable", async () => {
+    patch.mockResolvedValue(new Response("not-json", { status: 200 }));
+    render(<AdminDashboard />);
+    fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
+    await waitFor(() =>
+        expect(toast.success).toHaveBeenCalledWith("Submission approved")
+    );
+    expect(screen.queryByRole("alert")).toBeNull();
+    // The committed review still triggers the list refresh.
+    await waitFor(() => expect(list).toHaveBeenCalledTimes(2));
+});
+
+it("reports an unreadable failure body with the HTTP status, not a parse error", async () => {
+    patch.mockResolvedValue(
+        new Response("<html>bad gateway</html>", { status: 502 }),
+    );
+    render(<AdminDashboard />);
+    fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
+    expect((await screen.findByRole("alert")).textContent).toContain(
+        "HTTP 502",
+    );
+    expect(toast.success).not.toHaveBeenCalled();
+});
+
+it("clears the action error after its reload succeeds", async () => {
+    patch.mockResolvedValue(
+        Response.json(
+            { error: "Review changed; reload before retrying." },
+            { status: 409 },
+        ),
+    );
+    render(<AdminDashboard />);
+    fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
+    await screen.findByRole("alert");
+    fireEvent.click(
+        screen.getByRole("button", { name: "Reload submissions" }),
+    );
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+});
+
+it("keeps the action error when the reload itself fails", async () => {
+    patch.mockResolvedValue(
+        Response.json(
+            { error: "Review changed; reload before retrying." },
+            { status: 409 },
+        ),
+    );
+    render(<AdminDashboard />);
+    fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
+    await screen.findByRole("alert");
+    list.mockRejectedValueOnce(new Error("Connection lost"));
+    fireEvent.click(
+        screen.getByRole("button", { name: "Reload submissions" }),
+    );
+    await screen.findByText(/Connection lost/);
+    expect(screen.getByText(/Review changed/)).toBeDefined();
+});
+
+it("offers only server-verified artifacts, not raw storage key presence", async () => {
+    list.mockImplementation(async () =>
+        Response.json({
+            submissions: [{
+                ...submission,
+                readingPdfS3Key: "retained/reading.pdf",
+                artifacts: { printSheet: true, readingPdf: false },
+            }],
+        })
+    );
+    render(<AdminDashboard />);
+    const marker = await screen.findByTestId("pdf-downloads");
+    expect(marker.getAttribute("data-print")).toBe("true");
+    expect(marker.getAttribute("data-reading")).toBe("false");
+});
+
+it("hides download links when a mismatched manifest makes both artifacts unavailable", async () => {
+    list.mockImplementation(async () =>
+        Response.json({
+            submissions: [{
+                ...submission,
+                artifacts: { printSheet: false, readingPdf: false },
+            }],
+        })
+    );
+    render(<AdminDashboard />);
+    await screen.findByText("Review book");
+    expect(screen.queryByTestId("pdf-downloads")).toBeNull();
+    expect(screen.getByText("PDF unavailable")).toBeDefined();
 });

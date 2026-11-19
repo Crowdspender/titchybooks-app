@@ -20,6 +20,7 @@ interface AdminSubmission {
   pdfS3Key: string | null;
   readingPdfS3Key: string | null;
   pdfDownloadUrl: string | null;
+  artifacts: { printSheet: boolean; readingPdf: boolean };
   rejectionReason: string | null;
   createdAt: string;
   aiGenerated: boolean;
@@ -44,6 +45,9 @@ export default function AdminDashboard() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [pendingIds, setPendingIds] = useState<Set<string>>(new Set());
   const actionLocks = useRef(new Set<string>());
+  // The action error a "Reload submissions" click intends to clear; only a
+  // successful reload clears it, and only if no newer error replaced it.
+  const reloadForError = useRef<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -67,7 +71,16 @@ export default function AdminDashboard() {
         if (!Array.isArray(data.submissions)) {
           throw new Error("The submission list response is unavailable");
         }
-        if (!cancelled) setSubmissions(data.submissions);
+        if (!cancelled) {
+          setSubmissions(data.submissions);
+          if (reloadForError.current !== null) {
+            const capturedError = reloadForError.current;
+            setActionError((current) =>
+              current === capturedError ? null : current
+            );
+            reloadForError.current = null;
+          }
+        }
       } catch (error) {
         if (!cancelled) {
           setLoadError(
@@ -118,8 +131,11 @@ export default function AdminDashboard() {
           ...(rejectionReason ? { rejectionReason } : {}),
         }),
       });
-      const data = await res.json();
+      // Check status before touching the body: a committed review with an
+      // unreadable 2xx body must still confirm and refresh, and a failure with
+      // an unreadable body reports the HTTP status instead of a parse error.
       if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
         throw new Error(
           data.error ||
             `Review was not confirmed (HTTP ${res.status}); reload before retrying.`,
@@ -192,7 +208,10 @@ export default function AdminDashboard() {
           <p style={{ color: "var(--color-error)" }}>{actionError}</p>
           <button
             className="btn btn-outline btn-sm mt-2"
-            onClick={() => setRefreshKey((k) => k + 1)}
+            onClick={() => {
+              reloadForError.current = actionError;
+              setRefreshKey((k) => k + 1);
+            }}
           >
             Reload submissions
           </button>
@@ -367,12 +386,12 @@ export default function AdminDashboard() {
                           />
                         </td>
                         <td className="px-5 py-4">
-                          {sub.pdfS3Key || sub.readingPdfS3Key
+                          {sub.artifacts.printSheet || sub.artifacts.readingPdf
                             ? (
                               <PdfDownloads
                                 submissionId={sub.id}
-                                printAvailable={Boolean(sub.pdfS3Key)}
-                                readingAvailable={Boolean(sub.readingPdfS3Key)}
+                                printAvailable={sub.artifacts.printSheet}
+                                readingAvailable={sub.artifacts.readingPdf}
                               />
                             )
                             : (

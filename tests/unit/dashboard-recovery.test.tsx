@@ -25,7 +25,11 @@ vi.mock(
 );
 vi.mock(
     "@/components/submissions/RenderProgress",
-    () => ({ default: () => null }),
+    () => ({
+        default: ({ onChange }: { onChange: () => void }) => (
+            <button type="button" onClick={onChange}>Refresh progress</button>
+        ),
+    }),
 );
 const key = "titchybook-active-editor-draft";
 const book = {
@@ -107,6 +111,41 @@ it("does not project a previous draft check onto a changed pointer", async () =>
     );
     await screen.findByRole("link", { name: "Continue editing" });
 });
+it("does not reuse an earlier check result when the pointer returns to a previous draft", async () => {
+    localStorage.setItem(key, "first");
+    const resolvers: Array<(response: Response) => void> = [];
+    const fetch = vi.fn()
+        .mockResolvedValueOnce(
+            Response.json({ submission: { status: "DRAFT" } }),
+        )
+        .mockImplementation(() =>
+            new Promise<Response>((r) => {
+                resolvers.push(r);
+            })
+        );
+    vi.stubGlobal("fetch", fetch);
+    render(<ContinueEditingButton />);
+    await screen.findByRole("link", { name: "Continue editing" });
+    act(() => {
+        localStorage.setItem(key, "second");
+        window.dispatchEvent(new Event("storage"));
+    });
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
+    act(() => {
+        localStorage.setItem(key, "first");
+        window.dispatchEvent(new Event("storage"));
+    });
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(3));
+    // The stale "valid" result for first must not show while its new check runs.
+    expect(
+        screen.getByRole("link", { name: "Checking saved draft…" })
+            .getAttribute("href"),
+    ).toContain("first");
+    await act(async () =>
+        resolvers[1](Response.json({ submission: { status: "APPROVED" } }))
+    );
+    await screen.findByRole("link", { name: "Review saved draft" });
+});
 it("shows library failure rather than a false empty state and retries", async () => {
     vi.stubGlobal(
         "fetch",
@@ -125,6 +164,50 @@ it("shows library failure rather than a false empty state and retries", async ()
         screen.getByRole("link", { name: "Create your first Titchybooks" })
             .getAttribute("href"),
     ).toBe("/create?new=true");
+});
+it("reports the sign-in guidance for a 401 with a non-JSON body", async () => {
+    vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValueOnce(new Response("", { status: 401 })),
+    );
+    render(<SubmissionList />);
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Sign in again to load your library.");
+});
+it("allows one list refresh in flight and never restores a deleted draft from an older snapshot", async () => {
+    let resolveRefresh!: (response: Response) => void;
+    let resolveDelete!: (response: Response) => void;
+    const draft = { ...book, id: "draft-a", status: "DRAFT" };
+    const fetch = vi.fn()
+        .mockResolvedValueOnce(Response.json({ submissions: [draft] }))
+        .mockImplementationOnce(() =>
+            new Promise<Response>((r) => {
+                resolveRefresh = r;
+            })
+        )
+        .mockImplementationOnce(() =>
+            new Promise<Response>((r) => {
+                resolveDelete = r;
+            })
+        );
+    vi.stubGlobal("fetch", fetch);
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(<SubmissionList />);
+    await screen.findByRole("button", { name: "Delete" });
+    fireEvent.click(screen.getByRole("button", { name: "Refresh progress" }));
+    // A second refresh while one is in flight is dropped, not raced.
+    fireEvent.click(screen.getByRole("button", { name: "Refresh progress" }));
+    expect(fetch).toHaveBeenCalledTimes(2);
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(3));
+    await act(async () => resolveDelete(Response.json({ success: true })));
+    await screen.findByText("No Titchybooks yet");
+    // The outstanding snapshot predates the deletion and still lists the draft.
+    await act(async () =>
+        resolveRefresh(Response.json({ submissions: [draft] }))
+    );
+    expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
+    expect(screen.getByText("No Titchybooks yet")).toBeTruthy();
 });
 it("routes editor corrections to a content-preserving copy and legacy corrections to uploads", async () => {
     vi.stubGlobal(
@@ -202,6 +285,12 @@ it("reset-request success never claims provider delivery or confirms account exi
     expect(screen.getByText(/If an account exists for/).textContent).toContain(
         "reader@example.invalid",
     );
+    // The route can suppress sending (account rate cap) while still returning
+    // success, so the panel must not promise that a link will arrive.
+    expect(screen.queryByText(/receive a password reset link/)).toBeNull();
+    expect(
+        screen.getByText(/This response does not confirm delivery/).textContent,
+    ).toContain("or that a new link was sent");
     expect(mocks.success).toHaveBeenCalledWith(
         "Reset request received. Check your email for next steps.",
     );

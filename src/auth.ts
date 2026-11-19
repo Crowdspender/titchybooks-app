@@ -117,8 +117,15 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
       session.user.id = token.id;
       // JWT roles are identity hints, not current authority. All auth() consumers,
       // including the proxy and privileged resource routes, receive the current role.
-      const currentUser = await prisma.user.findUnique({ where: { id: token.id }, select: { role: true } });
-      session.user.role = currentUser?.role ?? "USER";
+      // A lookup failure must not throw: Auth.js clears the session cookie when
+      // this callback rejects, signing out a user whose JWT is still valid. Degrade
+      // to USER instead — fail closed for privilege, keep the session alive.
+      try {
+        const currentUser = await prisma.user.findUnique({ where: { id: token.id }, select: { role: true } });
+        session.user.role = currentUser?.role ?? "USER";
+      } catch {
+        session.user.role = "USER";
+      }
       return session;
     },
   },

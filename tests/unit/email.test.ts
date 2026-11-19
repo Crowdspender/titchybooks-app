@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
+import { format } from 'node:util';
 const send = vi.hoisted(() => vi.fn());
 vi.mock('resend', () => ({ Resend: class { emails = { send }; } }));
 afterEach(() => { vi.unstubAllEnvs(); vi.restoreAllMocks(); send.mockReset(); vi.resetModules(); });
@@ -34,7 +35,9 @@ it('minimizes logs when a provider exception includes personal data or tokens', 
   expect(await sendWelcomeEmail({ to: 'private@example.invalid', name: 'Private name' })).toBe(false);
   expect(await sendPasswordResetEmail({ to: 'private@example.invalid', resetUrl: 'http://localhost/reset?token=secret-reset-token' })).toBe(false);
   expect(await sendContactEmail({ name: 'Private name', email: 'private@example.invalid', topic: 'general', message: 'Private message' })).toBe(false);
-  const output = JSON.stringify([warn.mock.calls, error.mock.calls, log.mock.calls, info.mock.calls]);
+  // Format each call the way Node would print it: JSON.stringify drops
+  // Error.message, which console.error does render.
+  const output = [warn, error, log, info].flatMap(spy => spy.mock.calls.map(args => format(...args))).join('\n');
   expect(output).not.toContain('private@example.invalid');
   expect(output).not.toContain('secret-reset-token');
   expect(output).not.toContain('Private name');

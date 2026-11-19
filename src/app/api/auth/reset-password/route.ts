@@ -54,15 +54,21 @@ export async function POST(request: Request) {
     }
 
     // Hash outside the database operation, then admit only one valid redemption.
-    // Concurrent reuse, expiry during hashing, and a newly issued token all fail closed.
+    // Concurrent reuse, expiry during hashing, and a newly issued token all fail
+    // closed. The expiry cutoff is stamped AFTER the row lock is held: a token
+    // that expires while this write waits behind a concurrent redemption must
+    // not slip through on a stale pre-lock timestamp.
     const passwordHash = await hash(password, 12);
-    const redeemed = await prisma.user.updateMany({
-      where: { id: user.id, passwordResetToken: hashedToken, passwordResetExpires: { gt: new Date() } },
-      data: {
-        passwordHash,
-        passwordResetToken: null,
-        passwordResetExpires: null,
-      },
+    const redeemed = await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT "id" FROM "User" WHERE "id" = ${user.id} FOR UPDATE`;
+      return tx.user.updateMany({
+        where: { id: user.id, passwordResetToken: hashedToken, passwordResetExpires: { gt: new Date() } },
+        data: {
+          passwordHash,
+          passwordResetToken: null,
+          passwordResetExpires: null,
+        },
+      });
     });
 
     if (redeemed.count !== 1) {

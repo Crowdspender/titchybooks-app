@@ -53,7 +53,15 @@ it('admits exactly one concurrent redemption after both contenders pass lookup',
     return actual.hash(value, 10);
   });
   const passwords = ['First-concurrent-password-42!', 'Second-concurrent-password-42!'];
-  const results = await Promise.all(passwords.map(value => reset(request(token, value))));
+  const results = await Promise.all(passwords.map(async value => {
+    try {
+      return await reset(request(token, value));
+    } finally {
+      // A contender that settles before reaching hash (rate limit, failed
+      // lookup) must still open the gate, or the other waits forever.
+      release();
+    }
+  }));
   expect(arrivals).toBe(2);
   expect(results.map(r => r.status).sort()).toEqual([200, 400]);
   const stored = await db.user.findUniqueOrThrow({ where: { id: user.id } });
@@ -80,4 +88,44 @@ it.each(['expiry', 'replacement'])('rechecks %s after hashing without consuming 
   const stored = await db.user.findUniqueOrThrow({ where: { id: user.id } });
   expect(stored.passwordHash).toBe(user.passwordHash);
   if (condition === 'replacement') expect(stored.passwordResetToken).toBe(newerToken);
+});
+
+it('rechecks expiry after waiting on the row lock, not on a pre-lock timestamp', async () => {
+  const expiresAt = new Date(Date.now() + 60_000);
+  const { user, token } = await issued(expiresAt);
+  // Fake only Date so real timers still drive pg I/O. A concurrent writer holds
+  // the row lock while the clock passes the token's expiry; the route must
+  // stamp its cutoff AFTER acquiring the lock, not before waiting on it.
+  vi.useFakeTimers({ toFake: ['Date'] });
+  try {
+    let lockAcquired!: () => void;
+    let releaseWriter!: () => void;
+    const locked = new Promise<void>(resolve => { lockAcquired = resolve; });
+    const held = new Promise<void>(resolve => { releaseWriter = resolve; });
+    let writer!: Promise<unknown>;
+    vi.mocked(hash).mockImplementationOnce(async () => {
+      writer = prisma.$transaction(async tx => {
+        await tx.$queryRaw`SELECT "id" FROM "User" WHERE "id" = ${user.id} FOR UPDATE`;
+        lockAcquired();
+        await held;
+      });
+      await locked;
+      return 'unused-fixture-hash';
+    });
+    const pending = reset(request(token));
+    await locked;
+    // Give the route's redemption write time to park behind the row lock with
+    // its cutoff already chosen, then expire the token while it waits.
+    await new Promise(resolve => setTimeout(resolve, 200));
+    vi.advanceTimersByTime(120_000);
+    releaseWriter();
+    await writer;
+    expect((await pending).status).toBe(400);
+    const stored = await db.user.findUniqueOrThrow({ where: { id: user.id } });
+    expect(stored.passwordHash).toBe(user.passwordHash);
+    expect(stored.passwordResetToken).not.toBeNull();
+    expect(stored.passwordResetExpires).toEqual(expiresAt);
+  } finally {
+    vi.useRealTimers();
+  }
 });

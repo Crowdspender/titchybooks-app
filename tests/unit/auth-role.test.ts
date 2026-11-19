@@ -25,7 +25,9 @@ it('does not grant deleted accounts the stale administrator role', async () => {
   captured.user.mockResolvedValue(null);
   expect((await captured.callback!(args())).user.role).toBe('USER');
 });
-it('fails closed when authority cannot be checked', async () => {
+it('fails closed for privilege without destroying a valid session when authority cannot be checked', async () => {
   captured.user.mockRejectedValue(new Error('Database unavailable'));
-  await expect(captured.callback!(args())).rejects.toThrow('Database unavailable');
+  // Auth.js clears the session cookie when this callback throws, so a database
+  // outage must degrade to USER rather than sign out a still-valid JWT holder.
+  expect((await captured.callback!(args())).user).toMatchObject({ id: 'fixture-user', role: 'USER' });
 });

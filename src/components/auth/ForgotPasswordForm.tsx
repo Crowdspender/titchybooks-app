@@ -67,10 +67,10 @@ export default function ForgotPasswordForm() {
                         className="text-sm"
                         style={{ color: "var(--color-text-muted)" }}
                     >
-                        If an account exists for <strong>{email}</strong>{" "}
-                        and email delivery is available, you&apos;ll receive a
-                        password reset link. This response does not confirm
-                        delivery.
+                        If an account exists for <strong>{email}</strong>,
+                        check your inbox and spam folder for a password reset
+                        email. This response does not confirm delivery or that
+                        a new link was sent.
                     </p>
                 </div>
 
