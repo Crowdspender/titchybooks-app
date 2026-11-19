@@ -3,6 +3,12 @@
 Audit date: November 17, 2026. No payment, order, pricing, storage or print
 operation was performed.
 
+Post-audit revision (November 19, 2026): commit `718f1e9` landed immutable
+accepted quotes, durable payment attempts/events, amount reconciliation and
+atomic settlement after this inspection. Sections 4–6 mark the superseded
+baseline observations and record the verified current behavior; pricing
+values and live observations remain the November 17 baseline.
+
 ## 1. Reusable foundations
 
 Keep `src/lib/pricing/{engine,shipping,currency,config,schema}.ts`, OrderPanel,
@@ -128,7 +134,8 @@ Configured minimum charge amounts in Stripe units are HUF 17,500, EUR 50,
 GBP 30. These are existing code values; launch should reconfirm provider rules
 rather than generalize them to new currencies.
 
-Financial reproducibility gaps:
+Financial reproducibility gaps (November 17 baseline; largely superseded by
+`718f1e9` — see the post-audit status below):
 
 - Order stores HUF components, currency and a configuration version, but not the
   actual FX factor or expected charge minor units.
@@ -145,7 +152,22 @@ configuration versions, and reconciliation of the provider charge. Existing
 historical values must remain unchanged; unavailable FX must be labeled unknown,
 not reconstructed with today's rate.
 
+Post-audit status (`718f1e9`, verified against current source): orders now pin
+the accepted quote (`quoteSnapshot`, `expectedMinorAmount`, `fxRate` as
+numeric(24,18), `quoteAcceptedAt`), protected by a database immutability
+trigger and completeness/range checks. Payment retry validates the pinned
+snapshot and reuses the original frozen configuration — current FX is
+irrelevant to a frozen offer; a weight increase requires a new manual quote.
+Durable `PaymentAttempt` rows carry unique idempotency keys and
+`(orderId,sequence)`; `PaymentEvent` rows store unique provider event IDs and
+processing outcomes. Reconciliation compares the provider's collected
+`amount_total`/currency against the pinned expectation under a `FOR UPDATE`
+row lock and flags mismatches for review. PricingConfig version history and
+per-item refund allocations remain open.
+
 ## 5. Current payment sequence and failure boundaries
+
+The table below is the November 17 baseline; post-audit status follows it.
 
 | Boundary               | Present behavior                                                                           | Expansion requirement                                                                                 |
 | ---------------------- | ------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------- |
@@ -162,11 +184,24 @@ not reconstructed with today's rate.
 | Admin settlement       | Reads allowed prior status then updates by ID, vault creation afterward                    | Shared compare-and-set/transactional settlement boundary with evidence and actor audit                |
 | Notifications          | Welcome/reset/contact email exists                                                         | Transactional order/delivery emails through an outbox; retries independent of settlement              |
 
-The webhook's paid transition and vault creation run inside a transaction. That
-does not establish global exactly-once side effects: VaultEntry has no unique
-order key and the admin path is separate. The helper named “idempotent” performs
-`findFirst` then `create`; naming/comments are not a concurrency guarantee. Its
-caller, not the helper itself, supplies payment-state validation.
+Post-audit status (`718f1e9`): the Session creation, Retry, Webhook
+authentication, Paid completion, Replay and Admin settlement rows above
+describe the baseline. Retry now reuses the pinned quote and issues durable
+idempotent attempts committed before the provider request; signed webhook
+deliveries are recorded as unique `PaymentEvent` rows before provider lookups,
+with durable outcomes; settlement (webhook and admin) runs through a shared
+transactional boundary with `SELECT … FOR UPDATE` row locking and an
+`expectedUpdatedAt` compare-and-set, and admin settlement records operator
+evidence in `Order.manualSettlement`. `VaultEntry.orderId` is now unique.
+Refund/dispute workflow and transactional notifications remain open.
+
+At the audit baseline, the webhook's paid transition and vault creation ran
+inside a transaction. That did not establish global exactly-once side effects:
+VaultEntry had no unique order key and the admin path was separate. The helper
+named “idempotent” performed `findFirst` then `create`; naming/comments are not
+a concurrency guarantee. Its caller, not the helper itself, supplied
+payment-state validation. Post-audit, `VaultEntry.orderId` is unique and both
+settlement paths share the locked compare-and-set boundary described above.
 
 An order's CANCELLED status does not refund Stripe. A signed unexpected payment
 may be real money even when its order transition is refused; it needs financial
@@ -188,7 +223,7 @@ and account reconciliation were not verified. No live payment was attempted.
 | Generated files           | Private S3 objects; keys on Submission and RenderJob; manifests for modern outputs                                               |
 | Version retention         | Attempt-specific render keys/history and frozen inputs exist; no commercial version registry or guaranteed storage-level history |
 | Regeneration              | Possible from retained snapshots/assets and compatible renderer/fonts/profile; not guaranteed if sources are deleted or changed  |
-| Secure download           | Authorized API issues expiring signed GET; not a perpetual public URL and not a purchased entitlement                            |
+| Secure download           | Baseline: authorized API issued expiring signed GETs. Post-audit (`718f1e9`): `submissions/[id]/downloads` streams same-origin with fresh per-request authorization and `private, no-store` headers; still not a purchased entitlement |
 | Print-ready determination | Technical rendering/manifest checks and approval; legacy ordering checks approved plus print key only                            |
 | Future reuse              | Reuse the existing qualified master object by immutable reference; no automatic regeneration or copied book required             |
 

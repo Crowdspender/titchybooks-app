@@ -106,6 +106,10 @@ If you add a required environment variable, also add a test-only value to
 `scripts/test-environment.mts`; otherwise the production-mode browser server
 refuses to boot by design.
 
+The integration and browser suites launch Chromium. Install it once with
+`npx playwright install chromium` (CI runs `npx playwright install --with-deps
+chromium` automatically before `test:integration`).
+
 ### Commands
 
 | Command                      | What it does                                                                                                                               |

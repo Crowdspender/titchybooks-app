@@ -10,11 +10,16 @@ encoding produces some replacement characters in the file reader; the file was
 not repaired or changed. This report covers the existing application, not an
 assumed historical WordPress, SQLite, or Supabase implementation.
 
-Repository baseline: branch `baseline-capture`, commit
-`416d2c1fc09221d5254ab5a2afbd2ef5d782e982`. Existing untracked
+Repository baseline: the inspected code state was branch `baseline-capture`,
+commit `416d2c1fc09221d5254ab5a2afbd2ef5d782e982`. At inspection time these
+documents were untracked audit outputs; they were first committed in `718f1e9`
+("Land payment reconciliation, immutable quotes, asset safety and PDF
+downloads"), which also landed post-audit hardening. `718f1e9` is therefore the
+package's landing commit, not the inspected baseline. Existing untracked
 `next-phase-dev.md` and `dashboard-monitor.png` were preserved. Only the eight
-requested documents in this directory are audit outputs. No source, schema,
-migration, dependency, environment, or production setting was changed.
+requested documents in this directory are audit outputs. The audit itself
+changed no source, schema, migration, dependency, environment, or production
+setting.
 
 Evidence labels used throughout the audit:
 
@@ -38,6 +43,34 @@ line independently proven correct. No mutating live journeys, builds, tests,
 installations, seeds, worker runs, or workflow dispatches were performed. Exact
 deployed commit and production environment variables were not independently
 attested.
+
+## Post-audit revision — November 19, 2026
+
+Commit `718f1e9` changed the application after the November 17 inspection.
+Verified deltas against current source; inventories in this document are
+updated accordingly, and superseded observations are labeled as baseline:
+
+- Four migrations were added (`20261117190000_asset_soft_removal`,
+  `20261118120000_atomic_order_settlement`,
+  `20261119120000_immutable_order_quotes`,
+  `20261120120000_payment_reconciliation`): 19 repository migrations.
+- Two models were added (`PaymentAttempt`, `PaymentEvent`): 16 application
+  models. `Asset` gained `deletedAt`; `Order` gained immutable-quote,
+  request-idempotency, settlement-evidence and payment-projection columns;
+  `VaultEntry.orderId` is now unique.
+- Two routes were added (`submissions/[id]/downloads`,
+  `admin/orders/[id]/payment`): 50 `route.ts` files.
+- Payment retry validates the pinned accepted quote and frozen configuration
+  instead of re-pricing at current FX; settlement uses `FOR UPDATE` row locking
+  plus compare-and-set; signed webhook deliveries are durably recorded with
+  unique provider event IDs and reconciled against expected amounts.
+- Asset deletion is reference-guarded soft removal; both template deletion
+  routes enforce the same dependent guard; private asset/PDF responses use
+  `private, no-store` headers; PDF downloads stream same-origin instead of
+  issuing signed GET URLs.
+- The session callback re-reads the current role from the database; reset
+  tokens are redeemed by one atomic conditional update; asset registration
+  verifies staged bytes server-side before storing canonical references.
 
 ## Executive assessment
 
@@ -123,7 +156,9 @@ require hardening; reuse does not mean retaining known weaknesses.
 
 ## API inventory
 
-There are 48 `route.ts` files. Paths below are relative to `/api`; brackets
+There are 50 `route.ts` files (48 at the November 17 baseline;
+`submissions/[id]/downloads` and `admin/orders/[id]/payment` were added
+post-audit). Paths below are relative to `/api`; brackets
 denote dynamic segments. Authorization is performed in handlers/services, not
 inferred from the path name.
 
@@ -131,14 +166,14 @@ inferred from the path name.
 | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
 | Identity (4)           | `auth/[...nextauth]`, `register`, `auth/forgot-password`, `auth/reset-password`                                                                                                                                                                                                    | Public authentication/recovery with relevant rate limits                                          |
 | Public/support (3)     | `contact`, `health`, `vault`                                                                                                                                                                                                                                                       | Contact request, database liveness, consent-filtered directory                                    |
-| Submissions (10)       | `submissions`, `submissions/from-template`, `submissions/[id]`, `submissions/[id]/pages/[pageLabel]`, `submissions/[id]/submit`, `submissions/[id]/pdf`, `submissions/[id]/render-status`, `submissions/[id]/duplicate`, `submissions/[id]/detach-from-template`, `upload/presign` | Authenticated creation, owner/admin checks, rendering and legacy uploads                          |
+| Submissions (11)       | `submissions`, `submissions/from-template`, `submissions/[id]`, `submissions/[id]/pages/[pageLabel]`, `submissions/[id]/submit`, `submissions/[id]/pdf`, `submissions/[id]/downloads`, `submissions/[id]/render-status`, `submissions/[id]/duplicate`, `submissions/[id]/detach-from-template`, `upload/presign` | Authenticated creation, owner/admin checks, rendering, same-origin PDF downloads and legacy uploads |
 | Assets (4)             | `assets`, `assets/presign`, `assets/[assetId]`, `assets/[assetId]/image`                                                                                                                                                                                                           | Authenticated uploads, ownership/usage-sensitive image access and deletion                        |
 | Templates (2)          | `templates/public`, `templates/[id]/elements`                                                                                                                                                                                                                                      | Published-template discovery and controlled template element access; not marketplace products     |
 | AI (5)                 | `ai/chat`, `ai/books`, `ai/books/[id]`, `ai/books/[id]/downloads`, `ai/drain`                                                                                                                                                                                                      | Owner AI workflows; drain uses cron bearer authorization                                          |
 | Orders/payments (6)    | `orders`, `orders/calculate`, `orders/[id]`, `orders/[id]/pay`, `pricing/public`, `stripe/webhook`                                                                                                                                                                                 | Authenticated quote/order access; Stripe signature for webhook; `pricing/public` is not anonymous |
 | Vault owner action (1) | `vault/[id]/consent`                                                                                                                                                                                                                                                               | Purchaser-author consent under current owner-only commerce                                        |
 | Operations (2)         | `render/drain`, `queue/health`                                                                                                                                                                                                                                                     | Cron-bearer drain and queue health                                                                |
-| Admin (11)             | `admin/orders`, `admin/orders/[id]`, `admin/payment-alerts`, `admin/payment-alerts/[id]`, `admin/pricing-config`, `admin/queue`, `admin/submissions`, `admin/submissions/[id]`, `admin/templates`, `admin/templates/[id]`, `admin/templates/[id]/publish`                          | ADMIN management                                                                                  |
+| Admin (12)             | `admin/orders`, `admin/orders/[id]`, `admin/orders/[id]/payment`, `admin/payment-alerts`, `admin/payment-alerts/[id]`, `admin/pricing-config`, `admin/queue`, `admin/submissions`, `admin/submissions/[id]`, `admin/templates`, `admin/templates/[id]`, `admin/templates/[id]/publish`                          | ADMIN management                                                                                  |
 
 Existing owner/admin response shapes are not safe public catalog DTOs. Public
 marketplace APIs must project approved public metadata explicitly and never
@@ -146,7 +181,9 @@ expose private user fields, source scenes, or master object keys.
 
 ## Persistence and identity
 
-Fourteen application models plus Prisma migration metadata live in `public`.
+Sixteen application models (fourteen at the audit baseline; `PaymentAttempt`
+and `PaymentEvent` were added post-audit) plus Prisma migration metadata live
+in `public`.
 Nine additional tables exist in `neon_auth`; they are outside the Prisma
 application schema and are not the credentials system used by `src/auth.ts`. See
 [complete inventory](DATABASE_SCHEMA_AUDIT.md).
@@ -166,9 +203,11 @@ entitlement.
 
 - Credentials are bcrypt-hashed. Password reset tokens are random, stored as
   SHA-256 digests, expire after one hour, and are cleared after reset.
-- JWT sessions capture ID and role at login. Current callbacks do not
-  continuously revalidate role/account state; a revocation strategy is needed
-  for expanded privileges.
+- JWT sessions capture ID and role at login. At the audit baseline, callbacks
+  did not revalidate role/account state. Post-audit (`718f1e9`), the session
+  callback re-reads the current role from the database on each session check,
+  so a revoked role denies subsequent actions. Password-change/suspension
+  invalidation still needs a session-version strategy for expanded privileges.
 - Durable PostgreSQL rate-limit buckets coordinate serverless instances.
 - The proxy checks origin/provenance for cookie-authenticated API mutations;
   NextAuth and signed Stripe/cron requests have distinct authentication
@@ -183,17 +222,24 @@ entitlement.
 - Do not introduce Supabase or blindly enable RLS. First define
   application/worker/migration roles and verify all access paths; database least
   privilege and audited service authorization are the recommended baseline.
-- Source findings needing approval to fix include authorized image responses
-  marked publicly cacheable, untracked asset deletion, a template deletion
-  bypass, reset-token check/update concurrency, and logging/privacy
-  inconsistencies. Details are in [risks](RISKS_AND_DEPENDENCIES.md).
+- Baseline source findings included authorized image responses marked publicly
+  cacheable, untracked asset deletion, a template deletion bypass, reset-token
+  check/update concurrency, and logging/privacy inconsistencies. Post-audit
+  (`718f1e9`), private no-store image headers, reference-guarded soft asset
+  removal, a shared template dependent guard and atomic reset-token redemption
+  landed; logging/privacy items were not re-assessed in this revision. Details
+  and per-risk status are in [risks](RISKS_AND_DEPENDENCIES.md).
 
 ## File storage and rendering
 
 S3 keys are separated into `uploads/`, `assets/`, attempt-specific `renders/`,
 historical `pdfs/`, and `previews/`. Upload URLs expire after 600 seconds;
 download URLs default to 3,600 seconds. A signed URL is a temporary bearer
-capability, not a license record.
+capability, not a license record. Post-audit (`718f1e9`), owner/admin PDF
+downloads no longer redirect to signed S3 GETs: `submissions/[id]/downloads`
+streams the object same-origin with fresh per-request authorization and
+`private, no-store` headers (`src/lib/pdf/download.ts`). Presigned uploads
+remain.
 
 Render jobs freeze scenes and source references, lease work with claim tokens,
 and publish print/reading keys plus a manifest under a completion fence.

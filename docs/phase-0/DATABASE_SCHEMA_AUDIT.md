@@ -2,10 +2,19 @@
 
 Audit date: November 17, 2026. Read-only findings; no schema or data changes.
 
+Post-audit revision (November 19, 2026): commit `718f1e9` added four migrations
+(`20261117190000_asset_soft_removal`, `20261118120000_atomic_order_settlement`,
+`20261119120000_immutable_order_quotes`,
+`20261120120000_payment_reconciliation`), bringing the repository to 19
+migrations and 16 application models. Catalog/row-count observations below
+remain the November 17 baseline; inventory entries revised against current
+source are marked post-audit.
+
 ## Evidence and scope
 
-Sources: [Prisma schema](../../prisma/schema.prisma), the 15 repository
-migrations, and PostgreSQL catalogs for columns, constraints, indexes, enums,
+Sources: [Prisma schema](../../prisma/schema.prisma), the repository
+migrations (15 at inspection; 19 after the post-audit revision), and
+PostgreSQL catalogs for columns, constraints, indexes, enums,
 tables, roles and policies. Catalog/configuration/aggregate inspection used
 transactions explicitly set to `READ ONLY`. No credentials, password hashes,
 reset tokens, payment addresses or private manuscript contents are reproduced.
@@ -106,10 +115,17 @@ element/asset references reside inside JSON text, not foreign keys.
 
 `id: text PK`; `userId: text FK User`; `s3Key: text UNIQUE`;
 `originalFilename: text`; `mimeType: text`; `width: int?`; `height: int?`;
-`fileSize: int`; `createdAt: ts = now()`; `updatedAt: ts`.
+`fileSize: int`; `deletedAt: ts?` (post-audit); `createdAt: ts = now()`;
+`updatedAt: ts`.
 
-No relational use/reference count, source-byte digest, immutable S3 version
-identity or retention state exists.
+At the audit baseline no retention state existed. Post-audit (`718f1e9`,
+migration `20261117190000_asset_soft_removal`), deletion is soft removal via
+`deletedAt`, guarded by a central reference check
+(`src/lib/assets/references.ts`) that scans saved scenes, template elements,
+pinned templates, manifests, render snapshots and legacy images under a
+transaction-scoped advisory lock, and refuses removal while references remain.
+No relational reference count, source-byte digest or immutable S3 version
+identity exists; S3 versioning remains unenabled.
 
 ### Order
 
@@ -135,12 +151,64 @@ identity or retention state exists.
 | notes                                                 | text?                                     |
 | createdAt                                             | ts = now()                                |
 | updatedAt                                             | ts                                        |
+| quoteSnapshot (post-audit)                            | jsonb?; immutable accepted offer          |
+| expectedMinorAmount (post-audit)                      | int?; pinned provider minor units         |
+| fxRate (post-audit)                                   | numeric(24,18)?                           |
+| quoteAcceptedAt (post-audit)                          | ts?                                       |
+| requestKey, requestDigest (post-audit)                | text? each; unique (userId,requestKey)    |
+| manualSettlement (post-audit)                         | jsonb?; operator settlement evidence      |
+| paymentState (post-audit)                             | OrderPaymentState?                        |
+| paymentSummary (post-audit)                           | jsonb?                                    |
+| paymentHold (post-audit)                              | bool = false                              |
+| paymentRevision (post-audit)                          | int = 0                                   |
 
 Amounts are HUF snapshots, not necessarily the foreign-currency amount
-collected. No FX factor, expected Stripe minor amount, PaymentIntent, per-item
-tax/refund, or payment-attempt history is stored. Required single-book/address
+collected. At the audit baseline no FX factor, expected Stripe minor amount or
+payment-attempt history was stored. Post-audit (`718f1e9`), the order pins the
+accepted quote (`quoteSnapshot`, `expectedMinorAmount`, `fxRate`,
+`quoteAcceptedAt`), records request idempotency (`requestKey`/`requestDigest`,
+unique per user), operator settlement evidence (`manualSettlement`) and a
+canonical payment projection (`paymentState`, `paymentSummary`, `paymentHold`,
+`paymentRevision`), with durable `PaymentAttempt`/`PaymentEvent` history below.
+A database trigger protects the pinned quote fields from rewrite. Legacy
+orders keep null quote/payment fields; unknown facts are not backfilled.
+Per-item tax/refund allocations are still absent. Required single-book/address
 fields cannot represent a digital-only/mixed order without an additive
 compatibility transition.
+
+### PaymentAttempt (post-audit)
+
+Added by `20261120120000_payment_reconciliation`. Durable issuance record
+committed before any Checkout provider request; frozen request parameters
+permit recovery of the same idempotent request.
+
+`id: text PK`; `orderId: text FK Order (onDelete Restrict)`; `sequence: int`;
+`idempotencyKey: text UNIQUE`; `expectedMinorAmount: int`; `currency: text`;
+`livemode: bool`; `providerAccountId: text?`; `providerRequest: jsonb`;
+`status: PaymentAttemptStatus = PREPARED`; `sessionId: text?, unique`;
+`paymentIntentId: text?, unique`; `requestStartedAt: ts?`;
+`providerSnapshot: jsonb?`; `failureCode: text?`; `createdAt: ts = now()`;
+`updatedAt: ts`.
+
+Unique `(orderId,sequence)`; index `(orderId,status)`; check constraints on
+charge validity and positive sequence; a trigger protects issuance facts.
+
+### PaymentEvent (post-audit)
+
+Added by `20261120120000_payment_reconciliation`. Signed deliveries and
+operator reconciliation/review outcomes, without card, customer, address,
+email or full provider payload storage.
+
+`id: text PK`; `providerEventId: text UNIQUE`; `source: text`; `type: text`;
+`orderId: text? FK Order (SetNull)`; `attemptId: text? FK PaymentAttempt
+(SetNull)`; `providerAccountId: text?`; `livemode: bool?`; `objectId: text?`;
+`providerCreatedAt: ts?`; `data: jsonb`; `dataDigest: text`;
+`status: PaymentEventStatus = RECEIVED`; `outcome: text?`; `processedAt: ts?`;
+`createdAt: ts = now()`; `updatedAt: ts`.
+
+Indexes `(orderId,createdAt)`, `(attemptId)`, `(status,createdAt)`. Orphan
+events are retained rather than discarded; a digest mismatch never overwrites
+the original record.
 
 ### TemplateElement
 
@@ -319,10 +387,14 @@ erDiagram
   Submission ||--o{ VaultEntry : archived_book
   Order ||--o{ VaultEntry : archive_addon
   Order o|--o{ PaymentAlert : reconciliation
+  Order ||--o{ PaymentAttempt : attempts
+  Order o|--o{ PaymentEvent : events
+  PaymentAttempt o|--o{ PaymentEvent : attempt_events
 ```
 
 PricingConfig, QueueDrainRun and RateLimitBucket are standalone tables. This
-diagram describes today's schema, not future marketplace entities.
+diagram describes the post-audit schema (November 19, 2026 revision), not
+future marketplace entities.
 
 ## Migration metadata and history
 
@@ -349,9 +421,14 @@ model.
 | 20261024120000_add_template_managed_key              | Seed-owned template identity                                              |
 | 20261110090000_add_payment_alerts                    | Durable reconciliation alerts                                             |
 | 20261110100000_drop_deprecated_user_business_columns | Removed historical business fields                                        |
+| 20261117190000_asset_soft_removal (post-audit)       | Asset soft-removal retention marker                                       |
+| 20261118120000_atomic_order_settlement (post-audit)  | Settlement evidence column; unique VaultEntry.orderId                     |
+| 20261119120000_immutable_order_quotes (post-audit)   | Pinned accepted quote, request idempotency, quote-protection trigger      |
+| 20261120120000_payment_reconciliation (post-audit)   | Payment projection, durable PaymentAttempt/PaymentEvent tables            |
 
-Database metadata had 16 history rows for 15 distinct migrations: a rolled-back
-failed repair attempt and a subsequent finished resolution are both retained.
+Database metadata had 16 history rows for 15 distinct migrations at the
+November 17 inspection: a rolled-back failed repair attempt and a subsequent
+finished resolution are both retained.
 All 15 names have finished rows, but some report zero applied steps. This is
 history evidence, not permission to replay/resolve migrations or proof that
 every statement was executed by Prisma. The last four finished on November 14,

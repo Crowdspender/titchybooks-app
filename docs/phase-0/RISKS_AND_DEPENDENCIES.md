@@ -32,6 +32,10 @@ reproduction was attempted.
 
 ## 2. Risk register
 
+The register below is the November 17 baseline snapshot. Post-audit status
+changes verified against current source are recorded in section 2a; entries
+not listed there were not re-assessed in this revision.
+
 | ID  | Priority / evidence | Finding and consequence                                                                                                                                                                      | Required response after approval / owner                                                                                                                                          |
 | --- | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | R01 | P1, S/D             | Shipping zone and address country are independent. Server recomputes a zone price without validating that it serves the country; unsupported/underpriced delivery can be sold                | Server country→carrier/zone mapping, approved destination matrix and boundary tests before expanded checkout; engineering + shipping owner                                        |
@@ -62,10 +66,52 @@ reproduction was attempted.
 | R26 | P2, D/E             | Provider-managed neon_auth is outside Prisma; migration metadata has historical failed/resolved rows. Vercel success exists but live exact binary/config is not independently attested       | Preserve provider schema/history; formal drift/restore rehearsal and deployment/schema attestation; no cleanup based on apparent disuse; operations                               |
 | R27 | P3, S               | README/runbook/comments/copy differ from current behavior: render-before-review, owner downloads, superseded sessions, boot validation, price defaults, archive consent and “invoiced later” | Correct documentation/UI claims only in approved implementation; code/live evidence wins; product/engineering                                                                     |
 
+## 2a. Post-audit risk status — November 19, 2026
+
+Commit `718f1e9` ("Land payment reconciliation, immutable quotes, asset safety
+and PDF downloads") landed hardening after the audit. Verified status changes:
+
+- **R02 — resolved for new orders.** Orders pin the accepted quote
+  (`quoteSnapshot`, `expectedMinorAmount`, `fxRate`, `quoteAcceptedAt`) under a
+  database immutability trigger; payment retry validates the pinned snapshot
+  and frozen configuration rather than re-pricing at current FX. Legacy orders
+  keep null quote fields. PricingConfig version history is still not retained.
+- **R03 — resolved for new payments.** Durable `PaymentAttempt`/`PaymentEvent`
+  tables record issuance (unique idempotency key, unique `(orderId,sequence)`)
+  and signed deliveries (unique `providerEventId`) with processing outcomes;
+  reconciliation compares collected amount/currency against the pinned
+  expectation and flags mismatches for review.
+- **R05 — resolved.** Settlement uses a shared transactional boundary with
+  `FOR UPDATE` row locking and `expectedUpdatedAt` compare-and-set;
+  `VaultEntry.orderId` is now unique; admin settlement records operator
+  evidence in `Order.manualSettlement`.
+- **R06 — partially resolved.** Asset deletion is now reference-guarded soft
+  removal (`deletedAt`; `src/lib/assets/references.ts` scans saved scenes,
+  template elements, pins, manifests, render snapshots and legacy images under
+  an advisory lock). S3 versioning/byte immutability and verified object
+  retention remain absent (see R11).
+- **R07 — resolved.** Both template deletion routes (owner and admin) enforce
+  the same `requireNoTemplateDependents` guard under the shared fence.
+- **R08 — resolved.** Private asset image responses send
+  `Cache-Control: private, no-store`, `Vary: Cookie`, nosniff and
+  `Cross-Origin-Resource-Policy: same-origin`.
+- **R16 — largely resolved.** The session callback re-reads the current role
+  from the database on every session check, so a revoked role denies
+  subsequent actions; reset tokens are redeemed by a single atomic
+  `updateMany` conditioned on the hashed token and expiry. Password-change
+  session invalidation still has no session-version mechanism.
+- **R19 — resolved for the upload path.** Asset registration verifies staged
+  bytes server-side (size/type/dimension checks, animated-image rejection)
+  before storing canonical content-addressed references; client metadata is
+  not trusted for the stored facts.
+
+All other entries retain their baseline status.
+
 ## 3. Evidence anchors for high-risk findings
 
 Paths are relative to the repository root; the relevant current code was
-inspected, not changed.
+inspected, not changed. Anchors describe the November 17 baseline; post-audit
+changes are summarized in section 2a.
 
 - R01: `src/lib/pricing/schema.ts`, `src/app/api/orders/route.ts`,
   `src/components/orders/OrderPanel.tsx` — two-character country input and

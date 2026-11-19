@@ -1,0 +1,854 @@
+{
+  "2d679c8b-c420-424a-b2c4-2b0ddf56c15d": {
+    "disposition": "fixed",
+    "reason": "eventReasons now requires nonempty session IDs on both sides before comparing; regression: sessionless signed charge stays REVIEW against a sessionless PREPARED attempt."
+  },
+  "c7c0cc3a-4379-4928-9a14-7d1832c3b2c5": {
+    "disposition": "fixed",
+    "reason": "Publish transaction adopts a verified OPEN session of the latest attempt as Order.stripeSessionId (also keeps old missing-pointer recovery); regression: expired pointer replaced by recovered session."
+  },
+  "09dc8dc6-4e35-4565-a757-db8496b2f6d1": {
+    "disposition": "fixed",
+    "reason": "Admin audit row finalized inside the publish transaction via reconcileOrderPayment(orderId, auditEventId); catch reads stored outcome before marking FAILED; regressions: atomic finalize and rollback-with-settlement."
+  },
+  "19e5a756-59c2-4d7a-9cc4-31026ad6dcf2": {
+    "disposition": "fixed",
+    "reason": "reconcileOrderPayment returns the published revision; releasePaymentHold rejects an intervening revision change; regression: newer failed admin hold committed after the canonical read survives the release."
+  },
+  "1949e1b3-6251-4b59-a9a5-467ded48f80a": {
+    "disposition": "fixed",
+    "reason": "Same revision fence carries the release reconciliation's committed revision into the final transaction; fingerprint and pending-event checks retained."
+  },
+  "d44a9f7a-0ab0-4d4e-b5c4-20d42fe56f2a": {
+    "disposition": "fixed",
+    "reason": "PROCESSED events are no longer rewritten by later clean reconciliations; first settled outcome and processedAt preserved; regression asserts outcome/timestamp stability."
+  },
+  "4501a30d-b0ec-44f7-9f50-0447aae8bd4a": {
+    "disposition": "fixed",
+    "reason": "Pay route reconciles existing payment before shipping eligibility; shipping checks still precede prepare/issue (including ambiguous replay); regression: paid order confirmed despite missing shipping policy."
+  },
+  "a1258173-5055-4271-82f1-d83365e22ca5": {
+    "disposition": "skipped",
+    "reason": "Already guarded: issuePaymentAttempt refuses PREPARED/AMBIGUOUS replay once requestStartedAt exceeds the 23h PAYMENT_RECOVERY_WINDOW_MS (Stripe prunes at 24h); covered by 'holds an ambiguity past the safe idempotency window'."
+  },
+  "d890351e-bd7f-411e-8067-1ebb3698ebae": {
+    "disposition": "skipped",
+    "reason": "Traced: open+unpaid session without intent projects OPEN/UNPAID, and issuePaymentAttempt's session path returns the active URL; PROCESSING only occurs when an intent is actually processing (complete+unpaid), where blocking new issuance is correct."
+  },
+  "bf26a361-575b-4fd2-9147-d3617c345d43": {
+    "disposition": "skipped",
+    "reason": "Issuance fence already rechecks order.status/paymentHold under the Order FOR UPDATE lock in both issue paths and the publication eligibility check; manual settlement commits under the same lock."
+  },
+  "20b4dbb9-9aa4-4f3f-8016-dcd8a29bb690": {
+    "disposition": "skipped",
+    "reason": "Operational verification, not a code defect: runbook activation step 9 mandates Checkout/payment-intent/charge/refund/dispute subscriptions, and canonical reconciliation lists refunds/disputes on every reconcile, repairing missing deliveries."
+  },
+  "10e01dbe-3c5f-4ab3-8489-28c43f63279a": {
+    "disposition": "skipped",
+    "reason": "Publish fence compares the revision captured BEFORE provider reads; an intervening refund commit increments it, forcing a retry with fresh canonical facts (covered by 'retries a stale database revision')."
+  },
+  "92018ffe-786b-4c69-ae18-1f1e9a0d93e7": {
+    "disposition": "skipped",
+    "reason": "resolveEventOrder matches legacy Order.stripeSessionId and falls back to metadata.orderId/client_reference_id; importLegacyPaymentAttempt then canonically proves the session before settlement."
+  },
+  "14cd45b8-abb9-49d1-bb29-9b519c5463d3": {
+    "disposition": "skipped",
+    "reason": "Only IGNORED/PROCESSED/REVIEW are terminal; RECEIVED/FAILED rows reprocess on redelivery and settle once (covered by 'keeps a failed canonical fetch durable and holds fulfillment until recovery')."
+  },
+  "22e871d7-d082-4d60-a40c-2411065c2490": {
+    "disposition": "fixed",
+    "reason": "startEdit captures an immutable baseline (status/notes/updatedAt); saveEdit compares against it, sends its revision, and refuses when the refreshed row moved on; regression: mid-edit reload blocks the stale save without a PATCH."
+  },
+  "da3aa3d1-edee-404d-84e1-172c32363891": {
+    "disposition": "fixed",
+    "reason": "Same edit-baseline fence: a status-only save can no longer carry draft notes from version one with version two's expectedUpdatedAt; server conflict check remains as the second fence."
+  },
+  "38449b50-af0a-499b-9f56-e766cd8e0c07": {
+    "disposition": "fixed",
+    "reason": "GET /api/admin/payment-alerts accepts an olderThan createdAt cursor and the queue UI appends older pages via 'Show older events'; regressions: integration cursor paging + UI reachability of the oldest unmatched event."
+  },
+  "a3b9242f-f9db-43c7-b701-826022e61b4c": {
+    "disposition": "fixed",
+    "reason": "Same cursor pagination makes every unresolved event reachable beyond the newest-100 slice; unmatched events keep their documented manual Stripe-Dashboard review workflow."
+  },
+  "e861a09a-b543-4d77-8d71-fb4d8e8d4904": {
+    "disposition": "skipped",
+    "reason": "Documented hold semantics gate UNSTARTED fulfillment only: customer copy says 'Unstarted fulfillment is on hold', runbook says review held unstarted orders before production and preserve already-shipped orders; lifecycle blocks settlement and PAID→IN_PRODUCTION under hold, and the selector matches it."
+  },
+  "1de1a75a-eedd-4a25-9543-607c59326848": {
+    "disposition": "fixed",
+    "reason": "Manual-settlement fieldset now shows the frozen accepted charge (expectedMinorAmount + currency, already in the admin list payload) before evidence confirmation; regression asserts '32.60 EUR' is visible."
+  },
+  "b2ec4a57-d238-4c35-8b6b-56ca46fc43ed": {
+    "disposition": "fixed",
+    "reason": "OrderPanel is keyed by submission.id on the order page (remount on navigation) and handlePlaceOrder additionally refuses any recovered payload whose submissionId differs from the current prop; regression: prop change never posts the other book's request."
+  },
+  "9eb98fc8-c7e8-4ec1-9bd3-2104cbbf5a4c": {
+    "disposition": "fixed",
+    "reason": "Expired/mismatched offers already returned OFFER_REVIEW_REQUIRED (cleared); the remaining definitive 409 (request-key conflict) now carries REQUEST_KEY_CONFLICT and the client clears saved state on it; regressions for both codes unlock a fresh order."
+  },
+  "5372a05f-8b8f-4bad-88be-5e6ee72efdb2": {
+    "disposition": "fixed",
+    "reason": "Successful dismissal bumps refreshKey, cancelling the in-flight queue effect and refetching; regression: a stale snapshot resolving after dismissal cannot restore the alert."
+  },
+  "5db57f26-4e02-4046-8225-4a84862242cb": {
+    "disposition": "fixed",
+    "reason": "Both history actions no longer clear editingId; the draft survives opening/closing history and the edit baseline fences any intervening change; regression asserts the notes draft is restored."
+  },
+  "de9ad0cf-e45c-4f01-a1f9-160fa7297e23": {
+    "disposition": "fixed",
+    "reason": "'Discard saved request' appears only when uncertain with no readable payload (retry impossible), removes the storage entry and resets the panel; fail-closed behavior for replayable requests is unchanged; regressions for null/{} /not-json."
+  },
+  "ff62efc0-85dc-4575-a044-4ad21a1da3fa": {
+    "disposition": "fixed",
+    "reason": "Same explicit discard recovery: user-initiated only, never automatic, and new submissions still require working storage (pre-send setItem check unchanged)."
+  },
+  "44f08203-a79f-4795-8309-3f77d8afd805": {
+    "disposition": "fixed",
+    "reason": "Offer expiry display and submit checks use the calculate response's Date header to offset browser clock skew (>30s drift only, avoiding second-granularity noise); verifyOffer stays authoritative; regression: 11-minute-fast clock keeps a fresh offer orderable."
+  },
+  "be4ea2ac-b237-4203-8596-d14d9a1230a0": {
+    "disposition": "fixed",
+    "reason": "Destination label and shipping-band display now derive from the matching quote's calculated zone (serverCalc/breakdown.zone), immune to a late /api/pricing/public zone reset."
+  },
+  "fde6c152-6745-4500-bde3-e56f1a7093ea": {
+    "disposition": "skipped",
+    "reason": "Already guarded: renderAssets synthesizes 'Retained source' entries for pinned/materialized images absent from the caller's library, and the image route authorizes via the canAccessAssetViaTemplate ladder and keeps serving soft-removed sources; evidence regression: asset-safety reads a soft-removed pinned source (200) while the library list hides it."
+  },
+  "aafeb330-2d3c-4363-8e2b-b76845eb3839": {
+    "disposition": "fixed",
+    "reason": "activeBootIntent ownership: a canceled boot's late create POST records the issued draft but only writes the resume pointer while its intent still owns the editor; regression: design-browser late-create test keeps the newer explicit pointer."
+  },
+  "da31961f-2840-4bc1-9281-7c0f1680af95": {
+    "disposition": "skipped",
+    "reason": "Already guarded: the elements route's third authorization rung accepts any owned Submission linked to the template with no status filter, so an unpublished (DRAFT) template stays readable for its instance owners; evidence regression: template-pin-detach owner 200 / stranger 403 after unpublishing."
+  },
+  "940d6d6b-1ac6-4393-a636-2d1c759fecb4": {
+    "disposition": "fixed",
+    "reason": "Boot branch is forceNew || (startNewRequested && !submissionId): an explicit submission URL outranks a lingering separate-draft request on the same mounted instance; regression: design-browser precedence test loads the explicit draft without another POST."
+  },
+  "41cd8c5d-7dc6-44aa-95e0-dfadd71310b1": {
+    "disposition": "fixed",
+    "reason": "Inline edits live in a recovery-only overlay (DraftPersistence.setInlineDraft): snapshot/recovery include the uncommitted text but flush/flushAll never write it; regressions: persistence overlay unit test + design-browser inline-leak test (reconnect flush, Escape discard, commit)."
+  },
+  "c8ed4587-22c1-479a-bf24-3410c20b6f56": {
+    "disposition": "fixed",
+    "reason": "guardNavigation's 409 catch offers a confirmed escape that proceeds while preserving the local recovery copy, so a conflicted save cannot trap sign-out/navigation; regression: design-browser leave-guard escape via titchybook-before-leave."
+  },
+  "4256bd67-55b8-41b4-bc9f-151b496214af": {
+    "disposition": "fixed",
+    "reason": "Download always captures a fresh snapshot after syncDocument, and the reviewed copy hides as soon as the document signature moves past the review baseline; regressions: browser stale-tab download content parse + design-browser staleness/re-review test."
+  },
+  "6c38382b-3556-4877-9c44-062a1180038f": {
+    "disposition": "fixed",
+    "reason": "Retry saving is disabled only while offline; the per-part 409 fence in flush() keeps conflicted parts out of every write, so retrying cannot overwrite newer server state; regression: browser stale-tab retry click keeps the conflict and the server title unchanged."
+  },
+  "95df68a3-c338-42b5-a73c-0ca68b173d2a": {
+    "disposition": "fixed",
+    "reason": "duplicateAsDraft authorizes the copied user-layer scenes via validateSceneAssets instead of re-merging the live template (mergedPages), which rejected copies whose template text slots changed and blocked the reopen needed to fix stale overrides; regression: submission-duplicate stale-override copy test."
+  },
+  "e3189897-afe1-4bba-8946-f344909b67c5": {
+    "disposition": "fixed",
+    "reason": "newDraftSeq makes every 'Create a separate draft' click a fresh boot intent while 'Retry loading draft' reuses the issued draft through the intent-keyed createdDraftRef; regression: design-browser fresh-drafts/retry-reuse test."
+  },
+  "8804e16f-2624-4dc5-a59c-3594d14d2963": {
+    "disposition": "fixed",
+    "reason": "The stale-tab browser test now parses the downloaded recovery JSON stream and asserts parts.title value/revision, not just the suggested filename."
+  },
+  "e44b653a-1802-48ec-b5ae-cd7a179e050b": {
+    "disposition": "fixed",
+    "reason": "editor-queue review assertions derive the expected winner from the race responses' positions instead of hard-coding APPROVED, so the expectation is independent of the implementation under test."
+  },
+  "bf257730-53d6-494c-a7fe-b88b42342901": {
+    "disposition": "fixed",
+    "reason": "The completion route now deletes the losing content-addressed canonical object when a competing upsert wins with different staged bytes; the winner and the staging source stay untouched. Regression: concurrent completions finalizing different bytes assert one immutable winner and loser cleanup."
+  },
+  "9eb6bef3-d72b-4f12-8c22-8053f9576f2d": {
+    "disposition": "fixed",
+    "reason": "The removal scan skips absent historical inputSnapshots while still checking their artifact manifests; malformed present snapshots still fail closed. The fail-closed render case now uses a malformed present snapshot, and a new test proves null-snapshot rows stay removable."
+  },
+  "4d066f09-4490-44e8-bba1-01981204a5d4": {
+    "disposition": "fixed",
+    "reason": "Recognized payloads (scenes, elements, pins, manifests, retained snapshots, AI stage output) now match only source ID/S3 key reference fields; opaque ai/artifact manifests keep whole-payload matching and malformed payloads still fail closed. New regression: saved text equal to an asset ID or key no longer blocks removal."
+  },
+  "908456e2-3fd5-4ec7-af73-c620a9efabe5": {
+    "disposition": "fixed",
+    "reason": "The removal scan validates retained snapshots against a structural retainedRenderSnapshotSchema that omits font-hash and print-profile qualification, so font or profile updates can no longer block unrelated removals. New regression: a stale-policy snapshot stays scannable while its real references still protect the asset."
+  },
+  "2e997cd5-ec2a-4ecb-a91b-f41b38393312": {
+    "disposition": "fixed",
+    "reason": "A probe confirmed the SVG rasterizer and sharp extract ignore EXIF while browsers and verifyImageBytes apply it; loadAssetBuffers now normalizes orientation once for both render decoders while canonical bytes stay original. New orientation-6 regression asserts portrait pixels matching the finalized dimensions."
+  },
+  "e07314d0-be6b-4ba1-a103-8f65e779a26e": {
+    "disposition": "fixed",
+    "reason": "processAiBookJob classifies AssetReferenceError as terminal, so a stale pin fails on the first attempt with the actionable 'missing or removed' message instead of spending the retry budget. New COMPOSE-stage stale-pin regression asserts FAILED, failureCount 1 and rollback."
+  },
+  "3100532d-55c5-4445-98b7-7f5f4b02bf93": {
+    "disposition": "fixed",
+    "reason": "The duplicate draft is deleted before detachment, so the post-detach image read is authorized by the detached book's materialized scenes alone rather than another pinned draft."
+  },
+  "e1c3700b-7b29-4b06-9f77-0e86304d07fa": {
+    "disposition": "fixed",
+    "reason": "The retained-snapshot render test now asserts embedded Image XObjects on print-sheet page 0 (at least the eight panels) and reading page 0, alongside the retained page-count and retention checks."
+  },
+  "5b437441-0a69-4ffa-a100-aecb19acb3e1": {
+    "disposition": "fixed",
+    "reason": "All three fence tests race readiness against early transaction failure and, in outer cleanup, release the fence and await every started operation before finishing, so fixture cleanup can never overlap active transactions."
+  },
+  "5cffc15f-fdb0-4fa7-a4e0-237d71955278": {
+    "disposition": "skipped",
+    "reason": "The image route streams the stored original bytes without re-encoding; finalize caps the input at MAX_FILE_SIZE and output equals input, so a separate output cap adds nothing."
+  },
+  "d0c059a0-9365-4f6f-ac81-21aa7a491259": {
+    "disposition": "skipped",
+    "reason": "Removal and every reference writer (savePage, validatePinnedAssetReferences, captureSnapshot, upload upsert) take the same pg_advisory_xact_lock(741001,1) before reading state and hold it through commit; the save-first/remove-first fence tests prove both orders."
+  },
+  "34e260a8-6c10-43c3-860a-6ad6a5227179": {
+    "disposition": "skipped",
+    "reason": "Finalize never deletes the staging source and the canonical key is content-addressed, so a retry after a failed transaction re-derives and adopts the same object (proven by 'recovers a failed canonical write'); losing concurrent objects are now cleaned up (bf257730). Permanently abandoned uploads are a manual sweep documented in the operations runbook's S3 section."
+  },
+  "fbd06bfe-6044-4737-82a9-28ab8ab0fcb6": {
+    "disposition": "skipped",
+    "reason": "Prisma's default Read Committed applies and the fence is each transaction's first statement, so the post-lock asset query observes any removal committed while it waited and rejects the reference; both lock orders are covered by fence tests."
+  },
+  "41f80c65-ab78-46db-8700-1e4d0d13fdee": {
+    "disposition": "skipped",
+    "reason": "assertActiveAssetIds is only an existence gate; callers enforce authorization: validateSceneAssets checks ownership or canAccessAssetViaTemplate before persistence, and the image route applies the same ladder before delivery. Cross-user denial tests cover both paths."
+  },
+  "bf4065ee-cb02-4192-a040-33748f5562a6": {
+    "disposition": "skipped",
+    "reason": "The contention claim is gated on production-sized retained history, which does not exist at this stage; the removal scan is bounded by its 20s transaction timeout and the fence releases on commit/rollback, so waits cannot exceed that bound. Re-measure at lockAssetReferences if retained history grows."
+  },
+  "310827cf-b1f9-40a7-8128-ca60d57de98f": {
+    "disposition": "skipped",
+    "reason": "The migration is a single additive ALTER TABLE ADD COLUMN statement; the rehearsal's pg_temp shadow resolves through search_path and the test passes on PG16, so no multi-statement ordering hazard exists."
+  },
+  "0ab8b0f9-f7fb-4c6f-b334-52bd4e00b3a4": {
+    "disposition": "skipped",
+    "reason": "@prisma/client ships its own postinstall hook that runs prisma generate during npm ci (verified in node_modules/@prisma/client/scripts/postinstall.js; only PRISMA_SKIP_POSTINSTALL_GENERATE disables it), so a fresh checkout has the generated client before npm test. auth-role.test.ts additionally mocks @/lib/prisma and next-auth, and the only runtime enum import in the unit suite (job-status.test.ts) is satisfied by that generation."
+  },
+  "8c54a5cc-01f3-44ea-80b1-ade362de7f1e": {
+    "disposition": "skipped",
+    "reason": "CI is in the inheritedNames allowlist in scripts/test-environment.mts, so applyTestEnvironment preserves it and playwright.design.config.ts computes headless=Boolean(CI)=true on CI runners. Added a regression asserting CI and PLAYWRIGHT_BROWSERS_PATH survive offlineTestEnvironment."
+  },
+  "995a7d6b-f717-42ba-8d72-6c14eff814d7": {
+    "disposition": "skipped",
+    "reason": "pageSeeds emits elements: [] for every page (prisma/seed-recipes.ts), so no image reference can live in sceneJson; all recipe images are in elementSeeds, which the seed transaction schema-parses and checks with assertActiveAssetIds under lockAssetReferences. The finding's own refutation condition holds."
+  },
+  "9eb4c807-fb76-42f4-977f-19931968b3cc": {
+    "disposition": "skipped",
+    "reason": "Batch 3 ran prisma generate, next build and next start under exactly this guarded testEnvironment() with zero TEST_EGRESS_BLOCKED errors; telemetry and update checks are disabled (NEXT_TELEMETRY_DISABLED, PRISMA_HIDE_UPDATE_MESSAGE), engines are installed, and fonts are local @fontsource packages, so no external request remains."
+  },
+  "d3802712-f1b6-41be-baf3-fe95ddfacf1d": {
+    "disposition": "fixed",
+    "reason": "Added PLAYWRIGHT_BROWSERS_PATH to the inheritedNames allowlist in scripts/test-environment.mts so design and full-app browser runners find Chromium installed outside the default cache; no unrelated shell variables are restored. Regression in tests/unit/test-environment.test.ts asserts the value survives."
+  },
+  "4d7edd34-5f0f-48de-922c-7380c6b0b3b4": {
+    "disposition": "skipped",
+    "reason": "The datasource declares only url = env(\"DATABASE_URL\") with no directUrl (prisma/schema.prisma), so migrate deploy uses the restored, validated TEST_DATABASE_URL; the blanked DIRECT_URL is inert. test:db:migrate ran green in earlier batches under this environment."
+  },
+  "bfd7970d-5124-4758-a42e-7838914b95a8": {
+    "disposition": "fixed",
+    "reason": "The guard now injects a guarded lookup for localhost connections (net/tls, and http/fetch via the socket layer) that validates every resolved candidate address is loopback before the connection proceeds, covering single-address and all:true lookup forms while preserving Node's normalized connect arguments and callbacks. Regressions block a custom lookup resolving localhost to 203.0.113.1 and confirm ordinary localhost/127.0.0.1 HTTP and connect callbacks still work."
+  },
+  "c38553ec-2f50-45da-9560-87e1d4914d7c": {
+    "disposition": "skipped",
+    "reason": "Worker isolation holds: vitest.config.mts wipes credentials via applyTestEnvironment before workers fork and setupFiles installs the guard inside every worker. Added an in-worker regression (not a child process) asserting blank STRIPE/RESEND keys, test-only OPENAI key, and TEST_EGRESS_BLOCKED on a provider fetch; it passes."
+  },
+  "8bfc3e66-0577-4b5c-83a7-a7e8847935f5": {
+    "disposition": "skipped",
+    "reason": "Reaching the local PostgreSQL service is the integration runner's intended behavior: testEnvironment() restores the validated loopback TEST_DATABASE_URL and the guard allows loopback sockets. Batch 4 ran 115/115 integration tests through this exact runner against 127.0.0.1:55432."
+  },
+  "57dce333-02a3-4f83-8c69-3422af359c75": {
+    "disposition": "fixed",
+    "reason": "The fixture error page now builds the retry URL from normalized kind and disposition values, preserving disposition=inline (attachment stays the default). New design-browser test verifies an inline reading retry returns an inline 8-page reading PDF after recovery."
+  },
+  "72c4a5aa-1378-4ebd-9af1-9e9efa853f57": {
+    "disposition": "fixed",
+    "reason": "kind and disposition are normalized to closed alphabets (reading/print, inline/attachment) before any markup is produced and the retry href is serialized with URLSearchParams, so decoded query values can never alter the error page. New design-browser test requests a quote/script-laden kind and asserts the normalized href and zero script nodes."
+  },
+  "cf2255b6-d96e-4a64-b893-75d3bac4c34e": {
+    "disposition": "skipped",
+    "reason": "The stack-layer ordering concern is stale: tests/fixtures/pricing.ts exists at HEAD with all layers applied, and every test-db.ts action runs. The fixture imports only zod pricing schemas (no database or credential dependency), so loading it for all actions is harmless."
+  },
+  "17e9c3b1-3c32-42ee-9ad6-a6929585ae4a": {
+    "disposition": "fixed",
+    "reason": "The design action now appends process.argv.slice(3) to the Playwright arguments, matching the browser action. Verified: test:design --grep with a non-matching pattern reports \"No tests found\" instead of silently running the full suite."
+  },
+  "7f6d3114-4cff-48ad-bdc5-d6a0e43cea22": {
+    "disposition": "fixed",
+    "reason": "Port/IPC classification now mirrors Node's isPipeName (Number(value) >= 0 means TCP port), so whitespace-padded numeric strings like ' 80 ' are checked as TCP instead of skipped as IPC. Regressions block padded-port connects to remote hosts and confirm real IPC paths still pass."
+  },
+  "ce703520-401f-4057-add3-c94eaf6a8810": {
+    "disposition": "fixed",
+    "reason": "The fetch wrapper now checks the hostname only for http:/https: URLs; data: and blob: carry local bytes and are delegated to native fetch. Regression reads both schemes under the guard while remote fetches still fail with TEST_EGRESS_BLOCKED."
+  },
+  "ca902089-a0d6-4965-abb2-940da1433026": {
+    "disposition": "fixed",
+    "reason": "Same change as ce703520: protocol-aware fetch check delegates data:/blob: to native fetch (no network host) while retaining destination checks for HTTP(S); covered by the local-schemes regression."
+  },
+  "2d104cba-89f8-4c39-8937-f10fdd2e46ee": {
+    "disposition": "skipped",
+    "reason": "SubmissionList derives availability from Boolean(pdfS3Key)/Boolean(readingPdfS3Key), exactly the fixture fields; the design suite asserts both links for normal and print-only plus the reading-unavailable message for legacy (25/25 green)."
+  },
+  "13c5a24f-29ae-452b-b8aa-8240b3ba95c4": {
+    "disposition": "skipped",
+    "reason": "tests/fixtures/database.ts calls testEnvironment() independently at module load and pins an explicit Prisma datasource URL; a direct shell run is rejected without a validated loopback TEST_DATABASE_URL containing \"test\", so isolation is not launcher-only."
+  },
+  "1bc876cb-826f-416f-903b-3bc3f8935317": {
+    "disposition": "skipped",
+    "reason": "Verified in the installed stripe SDK (cjs/resources/Accounts.js): a non-string id, including null, selects GET /v1/account (the authenticated own account), so the null-ID signature in the test is correct."
+  },
+  "5df915dc-1230-4874-8adb-03845d3768c4": {
+    "disposition": "fixed",
+    "reason": "Moved both createUser calls inside the try/cleanup scope in payment-browser-evidence.mts so a failed customer insert removes the tracked admin instead of leaking it."
+  },
+  "6852def2-3094-4b6b-8d1e-16f349569496": {
+    "disposition": "skipped",
+    "reason": "Cleanup only ever touches disposable sprint-...@example.invalid fixture identities in the validated local test database; audit exposes the exact fixtureUserIds and cleanup demands the exact IDs from seed/audit. Cross-seed ownership state would add persistence for a blast radius already limited to throwaway fixtures."
+  },
+  "1667bc77-dfdd-4717-9968-148241b726f0": {
+    "disposition": "fixed",
+    "reason": "beforeEach now asserts toBeOK() on the /fixtures/reset response so a failed prerequisite stops the test instead of running on unverified fixture state."
+  },
+  "27de6aa3-b023-43b2-85be-8e49e0c9ec42": {
+    "disposition": "fixed",
+    "reason": "The preview test captures the popup's own navigation response via context.waitForEvent and requires 200 + application/pdf + inline disposition, so a 500 in the new tab fails even when the separate API request succeeds."
+  },
+  "faabc21f-5577-4fe7-acc2-1eee1dc4033a": {
+    "disposition": "fixed",
+    "reason": "Added a valid two-frame APNG fixture (acTL + fcTL x2 + fdAT with per-chunk CRC32), proven well-formed by a full sharp decode; asserts the animation-specific rejection. This sharp build exposes no APNG page count, so the acTL chunk walker is the defense under test. The malformed-chunk test is retained."
+  },
+  "920b73a5-93bb-4e4b-bfea-593dc14327c8": {
+    "disposition": "fixed",
+    "reason": "The S3 size-bound test now uses a gated Readable that stays open after emitting more than maxBytes; it requires S3ObjectSizeError, destroy, and readableEnded=false before the test permits EOF, then releases the gate in cleanup."
+  },
+  "62813990-3294-45f6-a3dd-06a7bf4ffcd6": {
+    "disposition": "fixed",
+    "reason": "Console captures are formatted with node:util format(...args) per call so Error.message content is included in the PII/token scan, matching what Node would actually print."
+  },
+  "639a73f4-1b8e-4074-b2d2-531a2836c27c": {
+    "disposition": "fixed",
+    "reason": "The manual-settlement test now asserts the PATCH targets /api/admin/orders/controlled-order in addition to the body facts."
+  },
+  "9ea327c5-329c-470d-9928-03cb41090c91": {
+    "disposition": "fixed",
+    "reason": "The orders mock honors ?status= like the component request; after clicking SHIPPED the test waits for the pending order row to disappear while unmatched and held events remain visible."
+  },
+  "fd6ca298-5a1f-4c3a-a3c1-3847642bf05d": {
+    "disposition": "fixed",
+    "reason": "The late out-of-order response is flushed inside act() before clicking Place order; the test asserts the newer charge stays visible and the POST carries the captured newer offer token alongside quantity 41."
+  },
+  "a9ac77e0-5994-4b85-a0fa-1e40556072ea": {
+    "disposition": "fixed",
+    "reason": "The fetch mock matches method and full path (/api/admin/orders/local-order/payment GET/POST, /api/orders/local-order/pay POST) and throws on any unexpected URL, so misdirected requests cannot receive success responses."
+  },
+  "e6ea2dab-0807-4ffb-8a15-df8e69f0f992": {
+    "disposition": "fixed",
+    "reason": "Added a PENDING_PAYMENT + PROCESSING + unheld case asserting no Pay now, with an otherwise identical payable UNPAID control asserting Pay now is present, isolating the processing restriction."
+  },
+  "bb84acdd-c20f-40a6-987e-21af1eb57ba5": {
+    "disposition": "fixed",
+    "reason": "Converted the it.each table to row factories evaluated inside each test after beforeEach builds the manifest, so the missing-key case differs from the valid row only in pdfS3Key."
+  },
+  "ca87be05-2976-4ee3-9b7b-07ed1e4c41ef": {
+    "disposition": "fixed",
+    "reason": "Laziness is proven with a pull-recording Readable: zero reads and not destroyed before body.cancel(), destroyed after; readableLength alone could not distinguish a fully buffered source."
+  },
+  "c142948a-4ccb-4990-a75f-c424d24b1232": {
+    "disposition": "fixed",
+    "reason": "Unavailable-artifact messages are asserted visible without jest-dom: no hidden attribute or hidden/aria-hidden ancestor and no display:none/visibility:hidden inline style."
+  },
+  "4d410eec-efb6-40d5-9a84-33bb9bb95fb9": {
+    "disposition": "fixed",
+    "reason": "Each page now carries an asymmetric black corner marker; the test decodes embedded pixels using the XObject Width/Height and asserts ink in the top-left region and none in the bottom-right, while keeping the zero-rotation metadata assertion."
+  },
+  "bc9102bf-5cb8-4c56-a646-a0b464b41460": {
+    "disposition": "fixed",
+    "reason": "Added expect(reading.getPageCount()).toBe(READING_ORDER.length) before the per-page loop so a missing final page cannot pass."
+  },
+  "cb7d82b1-2d40-4b61-9a4b-f739de07dba2": {
+    "disposition": "fixed",
+    "reason": "HUF retrieval now accepts 400000 with identical proof fields as a positive control before rejecting 400001, ruling out a blanket HUF refusal."
+  },
+  "e9e473cc-9e45-4d50-bce1-d4d0562df184": {
+    "disposition": "fixed",
+    "reason": "CURRENT_ARCHITECTURE.md baseline paragraph now states the inspected code state was 416d2c1 (docs untracked at audit time) and the package landed in 718f1e9 with post-audit hardening; a dated Post-audit revision section lists verified deltas (19 migrations, 16 models, 50 routes, quote pinning, soft removal, private headers, role revalidation)."
+  },
+  "eaef7d3a-713f-4be2-bc49-8a24ac98a799": {
+    "disposition": "fixed",
+    "reason": "Verified via git: docs were added in 718f1e9 (--diff-filter=A) whose parent 416d2c1 is the inspected baseline. Baseline paragraph rewritten to distinguish the inspected commit from the landing commit; historical GitHub/live observations remain labeled as the November 17 baseline."
+  },
+  "2c7f9110-36d2-4ba3-8fae-1df1d5c913df": {
+    "disposition": "fixed",
+    "reason": "API inventory updated 48→50 route.ts files: Submissions (11) now lists submissions/[id]/downloads and Admin (12) lists admin/orders/[id]/payment (both verified to exist). File-storage section and PAYMENT_AND_PRINTING_AUDIT secure-download row now describe same-origin streaming via submissionPdfResponse with private, no-store headers instead of signed GETs."
+  },
+  "836ad787-7648-4168-961b-2a25d8d8ef95": {
+    "disposition": "fixed",
+    "reason": "DATABASE_SCHEMA_AUDIT.md revised against prisma/schema.prisma and migration SQL: Asset +deletedAt with reference-guarded soft removal; Order +quote/idempotency/settlement/payment-projection columns; new PaymentAttempt/PaymentEvent inventory sections; relationship diagram +3 edges; migration history +4 rows (19 total); header counts labeled 15-at-inspection/19-post-audit and 16 models."
+  },
+  "b7662d7b-14c5-4a9a-99d0-ce73caa706e3": {
+    "disposition": "fixed",
+    "reason": "PAYMENT_AND_PRINTING_AUDIT.md financial-gap bullets and payment-sequence table labeled as November 17 baseline with verified post-audit status: pinned quote validated on retry (pay route 409s on snapshot drift; frozen config, weight increase → manual quote), durable attempts (unique idempotencyKey, (orderId,sequence)), unique providerEventId events, amount_total reconciliation under FOR UPDATE (payment-reconciliation.ts), atomic compare-and-set settlement; RISKS R02/R03/R05 updated in section 2a."
+  },
+  "3e3c1410-fce5-437c-82b2-c80aa40e3aad": {
+    "disposition": "fixed",
+    "reason": "RISKS_AND_DEPENDENCIES.md section 2a records verified status: R06 partially resolved (removeAssetFromLibrary scans scenes/elements/pins/manifests/render snapshots/legacy images under pg_advisory_xact_lock and soft-removes via deletedAt; S3 versioning still absent per R11), R08 resolved (image route sends private, no-store + Vary: Cookie + nosniff + CORP same-origin), plus R07 resolved (both template deletion routes call requireNoTemplateDependents). Register labeled baseline snapshot."
+  },
+  "0482b70d-bfba-43d2-9384-ec087c533ced": {
+    "disposition": "fixed",
+    "reason": "R16 revised in section 2a: src/auth.ts session callback re-reads the current role from the database per session check (revoked role denies actions), and reset-password redeems via one atomic updateMany conditioned on hashedToken + expiry; password-change session invalidation remains open. CURRENT_ARCHITECTURE JWT bullet updated to match."
+  },
+  "e1ee8af0-1f90-411b-b5e7-e174b5702024": {
+    "disposition": "skipped",
+    "reason": "Already guarded: createOrderInputSchema.acceptTerms is z.literal(true) (pricing/schema.ts) and POST /api/orders safeParses the body before acceptOrderQuote, so false/missing consent never reaches order creation. Covered by orders-quote requires signed complete matching inputs, consent and unexpired preview."
+  },
+  "4868c6d6-de99-470e-a5f4-0e131af7fefb": {
+    "disposition": "skipped",
+    "reason": "Already guarded: requireEditable blocks edits to non-DRAFT submissions, and rewriteInstanceOverrides resets status to DRAFT and nulls pdfS3Key/readingPdfS3Key/artifactManifest so a repaired book re-renders; acceptOrderQuote requires the current APPROVED status + pdfS3Key under FOR SHARE. A stale-revision PDF can never be approved or ordered."
+  },
+  "b4dd1e10-1688-4cd3-9601-db9d2cfb7f8e": {
+    "disposition": "skipped",
+    "reason": "Intentional policy: protect_payment_fulfillment only blocks held transitions from PENDING_PAYMENT/CANCELLED into IN_PRODUCTION/SHIPPED/DELIVERED; an already-paid IN_PRODUCTION->SHIPPED under hold is deliberately allowed (trigger comment: a held unstarted order cannot bypass the application guard), mirrored by lifecycle.ts and covered by payment-migration tests."
+  },
+  "059a3777-c13d-46de-80e7-22b2fac55f3e": {
+    "disposition": "skipped",
+    "reason": "Already guarded: adminUpdateOrderSchema superRefine rejects status PAID without confirmed manualSettlement evidence; applyOrderLifecycle re-parses for every caller and the admin route safeParses first. Covered by order-settlement requires bounded evidence and confirmation."
+  },
+  "bc9a8658-a437-4b6f-ac5c-dbca4c1d9202": {
+    "disposition": "skipped",
+    "reason": "Already guarded: adminUpdateOrderSchema superRefine rejects status PAID without confirmed manualSettlement evidence; applyOrderLifecycle re-parses for every caller and the admin route safeParses first. Covered by order-settlement requires bounded evidence and confirmation."
+  },
+  "4a27d093-b5ad-424c-92db-c73d24b28645": {
+    "disposition": "skipped",
+    "reason": "Already guarded: POST /api/orders/[id]/pay reconciles first; an expired canonical session projects EXPIRED -> attempt EXPIRED, state UNPAID/FAILED without hold, and preparePaymentAttempt then issues a recorded successor. Covered by orders-quote expired/legacy recovery tests."
+  },
+  "e4facb0d-7546-4f87-821f-594e206ddb2d": {
+    "disposition": "fixed",
+    "reason": "Added closeCheckoutSessionForManualSettlement (payment-reconciliation) + expireCheckoutSession (stripe), called by admin PATCH before the settlement transaction: an open unpaid Checkout session is expired so the buyer cannot also pay it; a started/completed payment or a failed expiry returns 409 PAYMENT_REVIEW_REQUIRED (reconcile first). Regressions: order-settlement expires-open-session / refuses-in-progress / refuses-unclosable."
+  },
+  "f735c554-8c5f-43ff-977d-23040cb8ab89": {
+    "disposition": "fixed",
+    "reason": "Restructured issuePaymentAttempt: the first locked transaction now only validates (no writes); account binding + requestStartedAt + AMBIGUOUS marking moved into a second locked transaction that re-reads the attempt and never overwrites a competing account binding or published session (immutable fields pass through for the DB trigger). The catch only condemns attempts whose request actually started (requestStartedAt not null, status PREPARED/AMBIGUOUS), so a failed account lookup leaves an unstarted attempt PREPARED and retryable. Regressions: payment-attempts unstarted-lookup-retry / competing-account-binding / preflight-hold."
+  },
+  "ede057ec-9151-415d-ae9e-5a7d8ec4ff8d": {
+    "disposition": "fixed",
+    "reason": "Restructured issuePaymentAttempt: the first locked transaction now only validates (no writes); account binding + requestStartedAt + AMBIGUOUS marking moved into a second locked transaction that re-reads the attempt and never overwrites a competing account binding or published session (immutable fields pass through for the DB trigger). The catch only condemns attempts whose request actually started (requestStartedAt not null, status PREPARED/AMBIGUOUS), so a failed account lookup leaves an unstarted attempt PREPARED and retryable. Regressions: payment-attempts unstarted-lookup-retry / competing-account-binding / preflight-hold."
+  },
+  "20ed21d7-3658-4b9a-8afc-18a2b72e0606": {
+    "disposition": "fixed",
+    "reason": "Restructured issuePaymentAttempt: the first locked transaction now only validates (no writes); account binding + requestStartedAt + AMBIGUOUS marking moved into a second locked transaction that re-reads the attempt and never overwrites a competing account binding or published session (immutable fields pass through for the DB trigger). The catch only condemns attempts whose request actually started (requestStartedAt not null, status PREPARED/AMBIGUOUS), so a failed account lookup leaves an unstarted attempt PREPARED and retryable. Regressions: payment-attempts unstarted-lookup-retry / competing-account-binding / preflight-hold."
+  },
+  "33fa2e7f-e5bc-4270-a0cb-4937fce3dbc6": {
+    "disposition": "fixed",
+    "reason": "resolveEventOrder now binds legacy intents without order metadata through the provider's own checkout.sessions.list({payment_intent}) plus the recorded Order.stripeSessionId reference (never metadata hints), so refund/dispute events on pre-migration payments reach their order. Regressions: payment-reconciliation legacy refund.updated / charge.dispute.created association."
+  },
+  "36216208-e649-40e7-8e34-05a24cd9490c": {
+    "disposition": "fixed",
+    "reason": "resolveEventOrder now binds legacy intents without order metadata through the provider's own checkout.sessions.list({payment_intent}) plus the recorded Order.stripeSessionId reference (never metadata hints), so refund/dispute events on pre-migration payments reach their order. Regressions: payment-reconciliation legacy refund.updated / charge.dispute.created association."
+  },
+  "c0bbb576-dceb-4a9d-8abb-f915e430913c": {
+    "disposition": "fixed",
+    "reason": "readCanonicalAttempt now tracks succeeded and pending/requires_action refund totals separately and accepts charge.amount_refunded matching either the succeeded-only or succeeded+pending aggregate (Stripe's in-flight inclusion is undocumented), preserving mid-pagination arrival detection under both semantics. Regression: payment-provider accepts an amount_refunded aggregate that includes in-flight refunds."
+  },
+  "ab8f411c-a478-4707-b368-76ff10f19f32": {
+    "disposition": "fixed",
+    "reason": "readCanonicalAttempt now tracks succeeded and pending/requires_action refund totals separately and accepts charge.amount_refunded matching either the succeeded-only or succeeded+pending aggregate (Stripe's in-flight inclusion is undocumented), preserving mid-pagination arrival detection under both semantics. Regression: payment-provider accepts an amount_refunded aggregate that includes in-flight refunds."
+  },
+  "349d5d7f-f237-4d9b-9c74-77571c5cab1e": {
+    "disposition": "fixed",
+    "reason": "acceptOrderQuote re-checks offer.expiresAt against the quoteAcceptedAt timestamp after acquiring the submission FOR SHARE lock and before creating the order, throwing OfferReviewRequired (409) so an offer that expired while waiting on the lock can never be frozen as an immutable accepted charge. Regression: orders-quote rechecks offer expiry after the submission lock before freezing acceptance."
+  },
+  "83025143-3988-44ca-ba43-a9b1ca388a81": {
+    "disposition": "fixed",
+    "reason": "processSignedPaymentEvent marks UNMATCHED via a conditional updateMany (orderId null, attemptId null, status RECEIVED/FAILED/UNMATCHED) and re-reads the row, so a concurrent delivery that matched and reconciled the same event keeps its committed PROCESSED/REVIEW outcome. Regression: payment-reconciliation does not clobber a concurrently matched delivery when a later lookup finds nothing."
+  },
+  "01576c53-c8f8-4555-ba00-582e0d1559fe": {
+    "disposition": "fixed",
+    "reason": "loadCheckoutPricingConfig now parses weightBands defensively: malformed shared-band JSON is passed to strictShippingTable as invalid caps, so only legacy matrix rows are rejected while canonical per-zone ladders stay checkoutable. Integration regression covers canonical-pass, legacy-fail and repaired-pass."
+  },
+  "cbc00f12-3458-4d73-b38f-779d42538573": {
+    "disposition": "fixed",
+    "reason": "createOrderInputSchema now lowercases requestKey (RFC 9562 UUID text is case-insensitive), so the replay lookup, advisory lock and insert share one spelling; an uppercase retry returns the original order instead of creating a second one. Unit + integration regressions."
+  },
+  "ed43bebf-16c4-4516-a868-eaaca79930fb": {
+    "disposition": "fixed",
+    "reason": "buildCheckoutRequest now explicitly sends adaptive_pricing:{enabled:false} (supported by the pinned stripe v23 SDK / API 2026-09-30.endive), so the account dashboard default cannot localize an accepted charge; retrieveOrderCheckoutSession also rejects sessions with adaptive pricing enabled. Unit regressions."
+  },
+  "e3f54926-9738-4f96-b34b-891fb7ad151b": {
+    "disposition": "fixed",
+    "reason": "The pinned SDK declares total_details and amount_shipping nullable. The guard now accepts omitted details when amount_subtotal === amount_total and automatic_tax is disabled (frozen requests never carry discounts/shipping/tax - verified via git history), and treats null amount_shipping as no shipping rate. Explicit nonzero adjustments still reject; unit regressions updated."
+  },
+  "8bbbea27-01f2-4ea6-8fa8-00a246d8d96d": {
+    "disposition": "fixed",
+    "reason": "The sweet-spot tip now requires the packed weight to stay in the band the bare quantity targets, so packaging/Vault parcel copies that move the order into a heavier band suppress the \"fit perfectly\" claim. Unit regression at the 1000g->2000g boundary."
+  },
+  "ebcf1051-2b48-461f-8f69-923cc6d48d9d": {
+    "disposition": "fixed",
+    "reason": "The near-price-break hint now skips candidates whose packed weight exceeds options.maxWeightGrams (matching suggestOptimalQuantity); quantities at the exact cap stay eligible. Unit regressions on both sides of the cap."
+  },
+  "a4ace9bd-0fec-46bd-ac2f-f2c3e8ed3234": {
+    "disposition": "skipped",
+    "reason": "PricingConfig.vaultFeeHuf has been INTEGER NOT NULL DEFAULT 2000 since migration 20260604085357_add_vault_storage (default backfills on add). No supported upgrade path can leave SQL NULL, so the checkout reader never sees it."
+  },
+  "b7d17ff3-dfec-4cc7-8c72-7be99de9d975": {
+    "disposition": "skipped",
+    "reason": "buildOffer calls assertDestinationWeight(destination, calculateWeight(...)) before pricing; destination.maxWeightGrams = min(service cap, tariff cap) and assertOfferPolicy re-asserts at acceptance. 11x100g=1100g against a 1000g cap throws ManualQuoteRequired at issuance; the 10-copy/1000g boundary stays valid (upper-inclusive)."
+  },
+  "23d4e2b6-fb73-46f4-af59-dff8d1b9a361": {
+    "disposition": "skipped",
+    "reason": "calculateOrder returns costPerBookHuf = Math.round(totalHuf / quantity), always an integer; the offer guard cannot reject a fractional average. 401/2 rounds to 201 and passes."
+  },
+  "6d135f50-49f9-492b-88cf-49ecc3bb854d": {
+    "disposition": "skipped",
+    "reason": "Same root as the two-copy case: the engine rounds the per-copy average before returning (Math.round), so 10000/3 becomes 3333 and the integer guard passes; persisted fields are integers by construction."
+  },
+  "f06f1035-b9c0-46a5-97e4-2f3f4f849c7c": {
+    "disposition": "skipped",
+    "reason": "calculateCharge calls assertChargeAmount before buildOffer returns/signs: 1000 HUF at EUR 0.0001 yields 10 cents < the 50-cent minimum and throws \"outside the chargeable range\", so an unpayable charge is never signed or accepted."
+  },
+  "7a6c976f-58c0-49e6-ac4a-ac85e2e9e940": {
+    "disposition": "skipped",
+    "reason": "acceptOrderQuote performs the userId/requestKey replay lookup + digest check under an advisory lock before verifyOffer, so an identical retry after expiry returns the existing order (integration-tested); a new request key with an expired token still throws OfferReviewRequired."
+  },
+  "f4670d90-3f7e-4457-9ce6-6e083242c613": {
+    "disposition": "skipped",
+    "reason": "applyOrderLifecycle locks the order FOR UPDATE and compares expectedUpdatedAt before any write; a stale timestamp returns conflict with neither PAID nor notes committed - the whole update is one transaction."
+  },
+  "fd01ab02-8583-4e4c-8d18-48cd1d496d65": {
+    "disposition": "skipped",
+    "reason": "The supported legacy convention pads unavailable rates with null (shipping.ts normaliseLadder comment; pricing-offer unit fixture [100,200,null]); strictShippingTable row.length === caps.length enforces that convention. Omitted-trailing-rate rows are malformed and fail-closed rejection at checkout is intentional until an admin re-saves."
+  },
+  "dc324911-7b74-4c36-b1be-332c4396399e": {
+    "disposition": "skipped",
+    "reason": "Refuted by status guard: saveTitle (src/lib/editor/submission-store.ts) calls requireEditable, which rejects any non-template submission whose status is not DRAFT with 409. An APPROVED book therefore cannot advance its revision through a title update, so the manifest-revision comparison in submissionPdfResponse can never be broken by saveTitle. Templates are editable but are never rendered or published with artifact manifests (enqueueInTransaction rejects isTemplate), so they have no downloadable masters to invalidate."
+  },
+  "ecd91c8f-3794-4615-971a-137f5336aac9": {
+    "disposition": "skipped",
+    "reason": "Refuted by both approval paths: manual moderation (src/app/api/admin/submissions/[id]/route.ts PATCH) locks the row, gates on PENDING + pdfS3Key and updates only status/rejectionReason; AI auto-approval (runQaStage in src/lib/ai/pipeline.ts) takes FOR UPDATE, fences on the exact revision inspected by QA and updates only status/qaSampled. Neither path increments submission.revision or touches the artifact keys/manifest, so a revision-7 manifest stays valid after approval."
+  },
+  "7d58c380-7fda-4ddd-842b-adb4002b39ca": {
+    "disposition": "fixed",
+    "reason": "Confirmed against pinned next 16.4.5: auto-implement-methods.js assigns methods.HEAD = handlers.GET and no app-route layer cancels the body, so every HEAD probe opened the S3 object and streamed the entire PDF just to discard it. Added explicit HEAD exports on both download routes and a metadata-only HEAD branch in submissionPdfResponse that verifies size via headS3Object against the published descriptor and never opens the object body (404 missing, 502 unverifiable length). Regression: unit HEAD metadata/missing/length tests plus HEAD route delegation for both routes, and an integration HEAD test asserting openS3Object is never called."
+  },
+  "56ff4c41-a4df-49e0-b287-4684bd85fc2f": {
+    "disposition": "fixed",
+    "reason": "Confirmed: s3Client was constructed with no requestHandler, and the installed @smithy/node-http-handler defaults connectionTimeout/socketTimeout to 0 (disabled), so a storage socket that stalls after the first chunk left iterator.next() awaiting forever. Configured NodeHttpHandler with connectionTimeout 5000ms and socketTimeout 30000ms; socketTimeout is inactivity-based, so it rejects a stalled mid-stream socket without cutting off large PDFs that keep delivering bytes. Regression: unit test asserting the resolved client requestHandler carries positive connect and socket-inactivity timeouts."
+  },
+  "6a2adb63-3972-4b34-9532-da015c60a4d8": {
+    "disposition": "skipped",
+    "reason": "Refuted by caller audit: both captureSnapshot callers lock before reading. enqueueInTransaction (src/lib/pdf/render-job.ts) calls lockSubmission (asset fence + SELECT ... FOR UPDATE + fresh read) before captureSnapshot, and frozenInput calls fence() which takes lockSubmission before findUniqueOrThrow and captureSnapshot. mergedPages additionally locks the source template. A concurrent save cannot commit a newer revision between the locked read and the snapshot, so revision-7 metadata can never mix with revision-8 pages."
+  },
+  "1fb48905-e4d9-4ca4-8644-07a286732d2b": {
+    "disposition": "fixed",
+    "reason": "The submission-ownership guard already exists (submissionPdfResponse re-checks submission.userId for the AI delegation), but the fixture gave one user both records so the cross-owner linkage was untested. Added regressions: integration test where user B owns a COMPLETED job pointing at user A's approved book and the AI URL returns 403 with openS3Object never called, plus a unit test with a caller-owned job over a foreign submission row."
+  },
+  "0b202b0f-5dfc-43f9-8b13-e04e8ce3dac4": {
+    "disposition": "fixed",
+    "reason": "CI already provisions the browser: .github/workflows/ci.yml runs npx playwright install --with-deps chromium before npm run test:integration, so clean runners never launch unprovisioned. The gap was documented local setup: README now states that integration and browser suites launch Chromium and to install it once with npx playwright install chromium. The launch-failure cleanup fix (d8bc9b14) additionally guarantees the HTTP server is released if a local launch fails."
+  },
+  "45e86060-b461-4da3-8d2f-ad40e9d345fe": {
+    "disposition": "fixed",
+    "reason": "Confirmed: the AI downloads route looked up the job before the shared service validated kind, so ?kind=cover on an unfinished job returned 409 instead of 400. Exported pdfQueryErrorResponse from src/lib/pdf/download.ts and call it in the AI route immediately after authentication, before the job lookup; valid requests keep the same ownership/completion checks. Regression: unit it.each (PROCESSING job and missing job) asserting 400 with the job lookup never called, plus an integration PROCESSING-job invalid-kind test."
+  },
+  "e360d631-1fb4-4abf-ac2f-168a4a72a14e": {
+    "disposition": "fixed",
+    "reason": "Added the requested assertion to tests/browser/pdf-download.spec.ts: after the visible alert and retry-link checks, expect(await page.content()).not.toContain(the retained fixture storage key from the setup), so a sanitized-looking error page that still leaks the S3 key fails the suite."
+  },
+  "0427a623-6f63-453c-b426-79e42b977040": {
+    "disposition": "fixed",
+    "reason": "Replaced the all-zero checksum body with a different VALID PDF of exactly the original length: the fixture originals now carry a document title, and sameLengthPdfVariant builds an untitled PDF with identical page geometry, pads it with a trailing PDF comment to the identical byte count, and proves it still parses via PDFDocument.load. The checksum case now fails purely on the digest mismatch, not on format or length. Applied to both print and reading fixtures; the Chromium checksum transfer still expects a failed download."
+  },
+  "2814085d-c75f-4b70-ad09-fb4e052ffc7a": {
+    "disposition": "fixed",
+    "reason": "The admin leg of the ownership/moderation recheck test now asserts status 200 and compares the downloaded body byte-for-byte with the stored print fixture before the submission is flipped to PENDING, so a readable 403 body can no longer masquerade as a successful admin transfer."
+  },
+  "d8bc9b14-3b60-4221-bb52-c86817ec5185": {
+    "disposition": "fixed",
+    "reason": "Moved chromium.launch() inside the guarded try block in the Chromium transfer test: a rejected launch now reaches the finally, which closes the browser only if it started and always closes the listening HTTP server (closeAllConnections + close)."
+  },
+  "e7f8e8b0-a132-4d12-893f-d612f7fdbc9d": {
+    "disposition": "fixed",
+    "reason": "Same root cause as d8bc9b14, covered by the same restructure plus its extra requirement: browser close is wrapped in its own try/finally so server cleanup (closeAllConnections + close) still runs even if browser cleanup itself fails."
+  },
+  "a5b898cf-5fcc-482c-a0db-9d49d612b1af": {
+    "disposition": "skipped",
+    "reason": "Migration is applied history (committed 718f1e9; recorded in _prisma_migrations on PG16/17), so its lock order cannot be rewritten. The cycle is detectable: PostgreSQL aborts one side, the migration is a single BEGIN/COMMIT with no partial state, settlement writers recover via webhook redelivery, and the runbook requires separate production preflight/approval before any migration deploy."
+  },
+  "7bf3cbf0-f1be-439b-8641-ca540aa86920": {
+    "disposition": "skipped",
+    "reason": "VaultEntry.orderId has been NOT NULL since table creation (20260604085357_add_vault_storage) and remains required in schema.prisma; unlinked entries are impossible, so the duplicate preflight can never reject valid NULL links."
+  },
+  "43eee517-1763-4e04-b2bc-2d4169e2f83b": {
+    "disposition": "skipped",
+    "reason": "importLegacyPaymentAttempt locks the order FOR UPDATE and rechecks every proof field (stripeSessionId, currency, expectedMinorAmount) before filling, throwing ProviderSnapshotChanged into a retry loop on drift. No writer updates price or destination columns after creation: acceptance is one atomic order.create, and lifecycle/admin/reconciliation writers touch only status/notes/payment fields."
+  },
+  "114facfc-fd44-4c62-a22a-f4549c15fcbc": {
+    "disposition": "skipped",
+    "reason": "cleanupFixtures deletes paymentEvent rows, then paymentAttempt rows, then orders inside one transaction, so the ON DELETE RESTRICT foreign key never fires during teardown; the production retention constraint stays intact."
+  },
+  "84dd9bb9-99a6-4cff-a761-22c84976773d": {
+    "disposition": "skipped",
+    "reason": "Every writer that sets both links derives them from the same matched attempt (resolveEventOrder returns orderId = attempt.orderId); admin reconciliation/review writers set orderId only and leave attemptId NULL. No path can persist an event linked to order A and an attempt of order B."
+  },
+  "fa10b437-eebb-42b6-8243-2a61b960b070": {
+    "disposition": "skipped",
+    "reason": "Same evidence as the migration-level finding: webhook linking derives orderId and attemptId from one matched attempt, admin writers set orderId only, and UNMATCHED/FAILED/review updates never touch the link columns, so conflicting persisted links are unreachable."
+  },
+  "9bcd6f75-7ad1-4a3d-b6be-cdb9df38509b": {
+    "disposition": "skipped",
+    "reason": "All three persistence paths store allowlisted projections: minimizedPaymentEvent (IDs, status, amounts only - no customer_details, address, email or raw payload), admin reconciliation {operatorId}, and review {operatorId, fingerprint, explanation}. Checkout customer data never reaches PaymentEvent.data."
+  },
+  "a189a2b2-a651-4072-a611-795adafb0b2b": {
+    "disposition": "skipped",
+    "reason": "The settlement migration preflight RAISEs on duplicate VaultEntry.orderId before creating the unique index, preserving both rows and aborting for an approved preservation/remediation decision; the rehearsal test proves the abort, row preservation, and (after this batch) that the preflight precedes the first schema change."
+  },
+  "02c3596b-eebc-4ac6-a086-99609e77ed29": {
+    "disposition": "fixed",
+    "reason": "Follow-up migration 20261121120000_quote_hold_backstops tightens Order_accepted_quote_complete: the legacy branch now requires fxRate and quoteAcceptedAt NULL, so acceptance facts always carry a replay key; legacy amount/snapshot backfill stays legal. Rehearsed in tests/integration/backstop-migration.test.ts and deployed to PG16/17."
+  },
+  "9e17e52e-b113-42ef-88b1-59f2edfc4e56": {
+    "disposition": "fixed",
+    "reason": "Same follow-up migration replaces protect_payment_fulfillment to check (NEW.paymentHold OR OLD.paymentHold): a single update clearing the hold while advancing to fulfillment is rejected, the authorized release remains a separate transition, and fulfilled history is still never blocked. Regression coverage in backstop-migration.test.ts."
+  },
+  "a6720d61-4f6b-41c5-97fe-3c1dc519a83b": {
+    "disposition": "fixed",
+    "reason": "Same follow-up migration bounds Order_fx_range to (0, 10], matching calculateCharge; numeric NaN sorts above every finite value and slipped past fxRate > 0, so the upper bound now rejects it before the quote trigger can freeze it (Infinity is already excluded by the numeric(24,18) typmod). Valid rates and legacy NULL remain legal; NaN/boundary regressions in backstop-migration.test.ts."
+  },
+  "3c8cfddc-4fa3-4a54-b722-3a4c6576d346": {
+    "disposition": "fixed",
+    "reason": "quote-migration rehearsal now asserts the parsed statements reconstruct the entire comment-stripped migration body (whitespace-insensitive), so any executable statement the regex cannot select - including a future top-level UPDATE/DELETE - fails the rehearsal instead of being silently skipped."
+  },
+  "caa659a9-2605-4fba-8fc3-5081e8f3f801": {
+    "disposition": "fixed",
+    "reason": "settlement-migration rehearsal gained the same completeness assertion: parsed statements must reconstruct the full comment-stripped migration body, so unparsed executable SQL (e.g. a standalone UPDATE clearing paidAt) fails the test rather than reporting false preservation."
+  },
+  "509efcd2-b0db-4140-9f10-5d5af6e6b2f5": {
+    "disposition": "fixed",
+    "reason": "payment-migration rehearsal now captures the public Order baseline before apply and compares Vault consent and submission artifact rows inside the transaction, so a mutating migration cannot pass by moving the reference or by rollback restoration; post-rollback checks remain as isolation verification."
+  },
+  "f2198e4f-ab64-4b86-8805-fe7de4fbb526": {
+    "disposition": "fixed",
+    "reason": "settlement duplicate test now proves preflight ordering independently of rollback: it asserts LOCK/DO/ALTER statement order and executes the landed statements sequentially, stopping at the failing DO block before any DDL runs, alongside the whole-migration abort and preservation checks."
+  },
+  "578f25e8-5318-42d4-9a9b-e12a439e5f6a": {
+    "disposition": "fixed",
+    "reason": "OrderPaymentHistory now distinguishes unconfirmed outcomes (lost response or 5xx) from definitive 4xx rejections: an unconfirmed action auto-reloads history and calls onChanged so the parent order list refreshes before moderation can resume (financial controls stay disabled until the reload marks facts fresh). Regressions: payment-ui unconfirmed-action tests for a 502 and a rejected fetch, plus the preserved 409 manual-reload test."
+  },
+  "d892b63f-ee36-4395-a7c2-0043f65a44be": {
+    "disposition": "fixed",
+    "reason": "PayNowButton accepts the server paymentState from the detail page and resets the optimistic confirmation only when a refreshed server state contradicts it (PROCESSING -> FAILED restores Pay now; PROCESSING -> PAID unmounts via canPay). An unchanged prop never resets mid-refresh, so the first refresh keeps the do-not-pay-again warning. Regression: payment-ui rerender test through UNPAID -> PROCESSING confirmation -> PROCESSING refresh -> FAILED refresh."
+  },
+  "09193a7b-72bb-4926-8fff-39197c072fcd": {
+    "disposition": "fixed",
+    "reason": "The detail page gates Pay Now on a recoverable charge (expectedMinorAmount or a stored stripeSessionId that reconciliation can prove). An unheld pending legacy order with neither now shows the Request payment review link instead of a Pay Now that always 409s at preparePaymentAttempt. Regression: payment-ui legacy test covers both the unproven (review link, no button) and stored-session (button retained) cases."
+  },
+  "15b9d655-a3a3-4e9c-abac-5775855d51e4": {
+    "disposition": "fixed",
+    "reason": "POST /api/orders consumes a separate durable order-request:user budget (60/hour) before JSON parsing and the replay lookup, so invalid bodies and over-cap users are rejected with 429 without order-lookup work. Exact replays remain exempt from the lower 10/hour new-order cap. Regression: orders-quote request-budget test (replay spends budget, exhausted budget rejects new-key and invalid bodies before acceptance); limiter cleanup lists updated in fixtures/database.ts, product-journey, payment-browser-evidence and both order-quote suites."
+  },
+  "d7e70cfe-8ca1-41ce-abda-9ea7e18ed0dd": {
+    "disposition": "fixed",
+    "reason": "A failed post-creation refresh no longer throws away the committed order and checkout URL: the route falls back to the authoritative acceptance row and still returns 201 with checkoutUrl (logging order-refresh-failed), never re-running acceptance or Checkout issuance. Regression: orders-quote test spies the single non-transactional findUniqueOrThrow to reject once and asserts the 201 body, published session, single provider call, and same-key replay recovery."
+  },
+  "eeab09e7-7afc-47ee-95f7-6678e96e33aa": {
+    "disposition": "fixed",
+    "reason": "Both settlement-race fixtures now commit the full facts real manual settlement leaves (status, paidAt, paymentState MANUAL_PAID, paymentRevision increment, manualSettlement evidence) — adminUpdateOrderSchema requires evidence for PAID, so the old status/paidAt-only writes were unfaithful. The open-session race test was restructured so reconciliation completes against the pre-settlement snapshot and settlement commits during the issuance-path provider read, keeping the 409 pinned to the pending-state recheck (now also asserting the PAYMENT_REVIEW_REQUIRED code and persisted MANUAL_PAID)."
+  },
+  "87d40d8f-f508-4f9b-8b62-6217f4f519b8": {
+    "disposition": "fixed",
+    "reason": "The lost-response browser intercept always settles the route: it captures the real creation status, aborts only on 201 to simulate the lost response, and fulfills any other status. The test body asserts the captured status via expect.poll immediately after the click, so an unexpected 500 is reported at the creation step instead of hanging on the retry-button wait. Browser-suite execution remains deferred to the final gate while the dev server holds the Prisma engine DLL."
+  },
+  "e1705837-50cb-4c71-9063-70a67983ae55": {
+    "disposition": "fixed",
+    "reason": "The ambiguous-recovery test now asserts the persisted attempt idempotencyKey is nonblank and that BOTH provider calls use exactly that stored key; the previous equality-only check would pass if both calls omitted the key."
+  },
+  "f3b672c3-9660-4cf3-b7ae-fd7e8e00ee2c": {
+    "disposition": "skipped",
+    "reason": "Independent reconciliation paths advance a stored PROCESSING state without the webhook: admin POST RECONCILE (recordAdminReconciliation -> reconcileOrderPayment -> applyOrderLifecycle) settles from canonical Stripe facts, the pay route reconciles before any issuance, Stripe retries deliveries, and durable payment alerts (stale-session, unpaid-completion) queue operator review. Hiding Pay Now during PROCESSING is the deliberate no-second-charge design pinned by the payment-ui tests; the page reloads persisted state because a return URL is not payment evidence."
+  },
+  "8bfd6cf4-3027-4253-859a-48075c26221e": {
+    "disposition": "skipped",
+    "reason": "No unit mismatch: calculateCharge stores HUF minor units as totalHuf x 100 (assertChargeAmount enforces HUF amountMinor % 100 === 0), matching Stripe's two-decimal HUF API convention, and formatCharge divides by 100 for every currency — Stripe 245000 huf displays as 2,450 HUF. Both order pages call the identical formatCharge(order.expectedMinorAmount, order.currency), so they cannot diverge."
+  },
+  "f5780efa-8b73-4f85-9301-fdc7e7796108": {
+    "disposition": "skipped",
+    "reason": "releasePaymentHold performs a fresh canonical reconciliation and then, under the Order FOR UPDATE lock, rejects unless paymentRevision still equals the reconciled revision AND the stored summary fingerprint equals the reviewed one. A refund/dispute committed between the read and the clear increments the revision and changes the fingerprint, so the release throws PaymentReviewRequired (route 409) and the hold survives. Existing regressions: payment-reconciliation stale-fingerprint release rejection and \"does not allow a concurrent new event to inherit a previous explicit review\"."
+  },
+  "87e68303-0d48-4ec5-bc0d-1ed3046e8440": {
+    "disposition": "skipped",
+    "reason": "applyOrderLifecycle returns { ok: false, reason: \"payment-review\" } BEFORE constructing or writing any data — the hold guard precedes every write, so the normally-returning callback commits an empty transaction. closeCheckoutSessionForManualSettlement is a no-op for held orders (early return, no provider writes). Covered by payment-reconciliation \"rejects held manual settlement and unstarted production in the lifecycle itself\"; the protect_payment_fulfillment DB trigger backstops held fulfillment transitions."
+  },
+  "efbc5ba1-fe43-4cb0-b033-b98bd7600aa4": {
+    "disposition": "skipped",
+    "reason": "auth() cannot return a stale ADMIN role: the NextAuth session callback reads the current database role on every call (session.user.role = currentUser?.role ?? \"USER\"), so a downgraded user reaches the PATCH as USER and gets 403 before any settlement work. The payment route's currentOperator re-check and the pay route's fresh-role check are defense-in-depth, not compensation for a cached role."
+  },
+  "0eaf556d-835f-4600-85a6-24d2eac0259d": {
+    "disposition": "skipped",
+    "reason": "A lost issuance response is recoverable from the order page: the attempt is marked AMBIGUOUS with requestStartedAt, and Pay Now re-issues the identical frozen request with the same idempotency key inside the 23h recovery window, so Stripe returns the original session (proven by orders-pay \"recovers an ambiguous provider call using the identical durable request and key\"). A created-but-unpublished session is captured via CheckoutSessionUnavailable and recovered by reconcile-first; past the window the order is explicitly held for review with retained history, and conditional publication under the order lock prevents two payable sessions."
+  },
+  "f47c86ee-2eef-46d6-a71e-e50bfd247644": {
+    "disposition": "skipped",
+    "reason": "No cross-worker race exists: playwright.config.ts sets workers: 1 and fullyParallel: false with a single chromium project, so every browser spec serializes against the one test database. order-quote.spec.ts additionally restores the original pricingConfig.default row in afterAll."
+  },
+  "c5271aa9-167d-41e1-b2eb-7c5fb81fea1b": {
+    "disposition": "skipped",
+    "reason": "Both concurrent retries reach createCheckoutSession by design: preparePaymentAttempt returns the same PREPARED attempt to both callers, issuePaymentAttempt's fenced transactions permit AMBIGUOUS re-entry with the identical frozen idempotency key (requestStartedAt preserved), and session publication is conditional under the order lock. The two-arrival gate tests exactly that contract — Stripe deduplicates on the shared key — and the suite passes; serializing the provider calls would instead break the idempotent-recovery design."
+  },
+  "cd277671-fa58-4b3d-91f2-e4e34f28382e": {
+    "disposition": "fixed",
+    "reason": "SubmissionList now handles non-OK statuses before parsing the body: a 401 with an empty or non-JSON body surfaces \"Sign in again to load your library.\" instead of a JSON parser error, and a successful response with an invalid shape still reports the generic refresh failure. Regression: dashboard-recovery \"reports the sign-in guidance for a 401 with a non-JSON body\"."
+  },
+  "65fd5b11-93b6-4a22-90e6-e9a17b189e32": {
+    "disposition": "fixed",
+    "reason": "fetchSubmissions is single-flight (a second retry or background refresh while one GET is in flight is dropped), and every successful deletion tombstones its id so any outstanding or later snapshot is filtered before display — a pre-deletion snapshot can no longer restore the card. Regression: dashboard-recovery \"allows one list refresh in flight and never restores a deleted draft from an older snapshot\" (double refresh dropped, delete committed mid-flight, stale snapshot filtered)."
+  },
+  "e464cafe-1ba8-42e3-93b8-7a3df986fc38": {
+    "disposition": "fixed",
+    "reason": "ContinueEditingButton renders a DraftCheck child keyed by draftId, so each pointer activation mounts fresh check state: A -> B -> A before B completes shows \"Checking saved draft…\" (recovery link retained) instead of A's earlier result, and the new check's outcome replaces it. Regression: dashboard-recovery \"does not reuse an earlier check result when the pointer returns to a previous draft\"."
+  },
+  "1914033e-d4da-4fca-86f4-3297ad16529d": {
+    "disposition": "fixed",
+    "reason": "UploadGrid no longer releases the submit lock and submitting state in a finally after success: the lock is held until the dashboard replaces the grid (button shows \"Opening dashboard…\" disabled), so a second click during the navigation gap cannot POST the same batch again. Only a caught failure releases the lock for retry. Regression: upload-grid \"holds the submit lock after success so a second click cannot duplicate the book\" (fetch stays at one call)."
+  },
+  "3acaee04-07da-4fac-86bb-feef9c3ed394": {
+    "disposition": "fixed",
+    "reason": "The retry guidance is now outcome-aware: any received HTTP error status is a definitive rejection of the atomic create+enqueue transaction (sources are never consumed — finalizeImageUpload only reads them), so the retry promise stays; a fetch that never received a response (TypeError) may already have committed the book, and the alert now says \"The book may already have been created — check your dashboard before retrying.\" Regressions: upload-grid definitive-rejection and lost-response tests."
+  },
+  "4e822f53-9dda-4c90-8c4e-9c061a0f40bc": {
+    "disposition": "fixed",
+    "reason": "The upload page types searchParams.replaces as string | string[] and calls notFound() for any present-but-non-single-nonempty value before Prisma is queried, so ?replaces=A&replaces=B returns the not-found response instead of a scalar-filter validation error; an absent parameter keeps the regular upload view. Regression: upload-page tests cover repeated, empty, valid, absent, and foreign-id parameters."
+  },
+  "8d750891-07bf-409f-8697-4bbbc329f04c": {
+    "disposition": "fixed",
+    "reason": "render-status now applies the download route's manifest rules before advertising artifacts: a non-null manifest that is malformed, names another submission, or carries a stale revision hides both links and ready; a per-kind s3Key mismatch hides only that artifact. Null manifests remain valid historical facts, so legacy print-only records stay downloadable and ready. Regression: pdf-download \"does not advertise artifacts the download manifest rules would reject\" (foreign id, stale revision, per-kind mismatch, each cross-checked against the transfer route's 409). The editor-queue lease-recovery fixture now publishes a manifest naming the real submission/job, as processRenderJob does, so its availability assertion matches the transfer contract."
+  },
+  "f87556a0-2615-43e3-8453-4361e1bc2afb": {
+    "disposition": "fixed",
+    "reason": "The moderation retry spec now tracks every matching PATCH with a test-wide page.on(\"request\") counter independent of the failure route, re-asserts the route count after the held response settles, and asserts totalPatches === 2 after the successful rejection — a late duplicate dispatched past the original count check can no longer slip through unseen. Browser-suite execution remains deferred to the final gate while the dev server holds the Prisma engine DLL."
+  },
+  "16af4001-c8d6-42b9-a78b-5536097e2bb4": {
+    "disposition": "fixed",
+    "reason": "The mobile-filter spec awaits the retry's own 200 response before entering the loop, and each iteration's waitForResponse matches the filter's exact query (?status=X, ?spotCheck=true, or empty for All) plus GET method, so the first filter can no longer pass on the retry response or on another filter's request. Browser-suite execution remains deferred to the final gate."
+  },
+  "ce6efc33-e207-4be7-8de2-d317018271f5": {
+    "disposition": "skipped",
+    "reason": "Refuted by the dashboard code: AdminDashboard.handleAction only assigns rejectionReason in the REJECT branch and spreads it conditionally, so an APPROVE request body is exactly { action: \"APPROVE\" } and passes the strict discriminated union. The browser moderation specs exercise real approvals against this schema."
+  },
+  "054104df-efae-4353-a22e-e723cac59292": {
+    "disposition": "skipped",
+    "reason": "The route reads the current database role on every request (prisma.user.findUnique before the transaction), matching the admin payment route's currentOperator contract; auth() itself also resolves the role fresh from the DB. A downgrade committing after that read is the standard in-flight authorization window — the finding's own check concedes requests authorized before the downgrade may finish. No contract in this codebase serializes role changes with moderation writes (the transaction locks the Submission row, not the user row)."
+  },
+  "5895e179-8cd7-44d0-a4e9-4448cd854715": {
+    "disposition": "skipped",
+    "reason": "requireNoTemplateDependents counts ALL submissions with templateId (no status filter, so draft instances count) plus linked AiBookJobs, and throws AssetReferenceError(409) which errorResponse maps to a 409 JSON response; both deletion routes call it under lockSubmission and the shared advisory fence, and a template without dependents deletes normally. Existing regression: asset-safety \"applies the same dependency guard to both template deletion routes\" covers a draft instance and an AI job against both handlers, asserting 409 and the retained template row."
+  },
+  "f9b85b02-32e0-41f1-9622-9ea76d9117ec": {
+    "disposition": "skipped",
+    "reason": "canAccessAssetViaTemplate's final branch scans the actor's own books' page scenes, so detachment's materialized image elements authorize reads independently of the template association or its publication status (\"Detachment materializes an authorized template image into owned scenes\"). Existing regression: asset-safety \"protects template artwork, frozen pins, and authorized reads after template edits and detachment\" detaches, unpublishes the source, deletes the pinned duplicate, and still reads the image 200 while a stranger gets 404."
+  },
+  "f40f698a-bcef-4963-aca8-bcb1389da854": {
+    "disposition": "skipped",
+    "reason": "The downloads route treats a null manifest as a historical fact: only a NON-null malformed or mismatched manifest is rejected (409). An approved submission with a valid pdfS3Key and no manifest streams in both attachment and inline modes, and the detail GET returns both URLs purely from key presence. Existing regression: pdf-download \"preserves historical print-only availability even with a historical completed job\" downloads the legacy print master and 409s only the absent reading kind."
+  },
+  "04f25492-bc67-479f-b87f-fd4a0650f68e": {
+    "disposition": "skipped",
+    "reason": "Both sides serialize on the template row: from-template takes lockSubmission(templateId) (advisory fence + SELECT ... FOR UPDATE) before creating the instance, and both deletion routes take the same lock before requireNoTemplateDependents. Creation-first makes the dependent count see the instance (409); deletion-first makes the creator's lock find no row (404). Existing regression: asset-safety \"serializes template instances with deletion\" proves both orderings with a held transaction and a fence waiter."
+  },
+  "1e7898df-83ae-4c83-8794-1ef502b3fe6e": {
+    "disposition": "skipped",
+    "reason": "canAccessAssetViaTemplate grants access through templates that are APPROVED OR already have an instance owned by the actor — the APPROVED disjunct alone authorizes the first instance of a published template using its author's active image, before any instance exists. Existing regression: asset-safety \"preserves authorized legacy scene-stored template artwork...\" creates the first instance (201) of an APPROVED admin-owned template as a fresh customer, and a stranger still gets 404."
+  },
+  "755cd78c-77ba-473e-861a-7db449b65c0e": {
+    "disposition": "skipped",
+    "reason": "No normalization gap exists: mergedPages — which from-template calls at line 41 before the line-47 copy — already raw-parses every stored template sceneJson with the identical editorSceneSchema.parse, and the editor's GET hydration uses parseEditorScene, which is the same raw parse with no legacy normalization. Any scene the editor can open therefore passes line 47; the second parse adds no rejection surface."
+  },
+  "a39f2c24-45e2-4641-96b0-e4362cf3047d": {
+    "disposition": "skipped",
+    "reason": "finalizeImageUpload only HEADs and downloads the source (never deletes or mutates it) and publishes to a deterministic key canonical/sha256(sourceKey)/sha256(bytes).ext, so the first seven upload keys stay readable for a retry and their canonical copies are reused byte-identically instead of accumulating (\"Repeating the same finalization writes identical bytes\"). Existing regression: asset-upload re-finalization test asserts the identical canonical key across repeated calls."
+  },
+  "967c3c3d-e7e9-4afa-b8bf-ec4ae96e3d52": {
+    "disposition": "skipped",
+    "reason": "Admitting the canonical subtree is deliberate retry support and is read-only: finalizeImageUpload never writes to or deletes the source key, and a canonical source hashes to a DIFFERENT derived key (sha256 of the canonical key as sourceDigest), so resubmitting the first submission's stored keys publishes copies while the original objects — and the first submission's images — stay intact. The prefix check still rejects other accounts' keys."
+  },
+  "b4af55d7-62f7-493e-b7a3-141f5285b7c4": {
+    "disposition": "skipped",
+    "reason": "GET /api/submissions returns full submission rows (findMany with includes, no field selection), so readingPdfS3Key is always present, and the card passes readingAvailable={Boolean(submission.readingPdfS3Key)} to PdfDownloads, which renders the reading download and preview controls (plus a print-unavailable note) when only the reading key exists. A reading-only approved book keeps its download control."
+  },
+  "924114cd-738d-4221-9c09-efcf3f7cf89e": {
+    "disposition": "fixed",
+    "reason": "Verified in @auth/core session action: any throw from callbacks.session pushes sessionStore.clean(), clearing the cookie of a still-valid JWT holder. The role lookup in src/auth.ts is now wrapped in try/catch and degrades to USER on failure (fail closed for privilege, session preserved). Regression: tests/unit/auth-role.test.ts now asserts the callback resolves with role USER and the token id intact when the lookup rejects."
+  },
+  "b75cbe5d-2fc5-48b6-a5c7-905b2b01c26a": {
+    "disposition": "fixed",
+    "reason": "The updateMany cutoff new Date() was evaluated before the write could wait on a concurrent row lock, so a token expiring during the wait could still redeem. Redemption now runs in a $transaction that takes SELECT ... FOR UPDATE on the User row first and stamps a fresh expiry cutoff after the lock is held. Regression: tests/integration/auth-reset.test.ts \"rechecks expiry after waiting on the row lock\" holds the lock with a concurrent writer, advances a fake Date past expiry while the route waits, and asserts 400 with password and token untouched."
+  },
+  "fe56dcfd-ab0f-456d-8b0c-e453126e793d": {
+    "disposition": "fixed",
+    "reason": "handleAction parsed res.json() before checking res.ok, so a committed review with an unreadable 2xx body surfaced an error and skipped the refresh. Status is now checked first; only failure responses parse the body (with a catch fallback reporting the HTTP status). Regressions: tests/unit/submission-moderation.test.tsx confirms success + list refresh on a non-JSON 200 and an HTTP 502 alert on an HTML failure body."
+  },
+  "482d62c4-48cf-4e5a-8b76-9d05074b3dfd": {
+    "disposition": "fixed",
+    "reason": "The actionError alert persisted after its own \"Reload submissions\" succeeded. The button now records the error it intends to clear in a ref; a successful list load clears the alert only if it still matches (newer action errors survive). Regressions: tests/unit/submission-moderation.test.tsx covers clearing after a successful reload and retention when the reload itself fails."
+  },
+  "77c62e9d-0fda-4468-ba3a-7286351d0f5e": {
+    "disposition": "fixed",
+    "reason": "The admin PDF cell offered downloads from raw pdfS3Key/readingPdfS3Key presence, advertising transfers the download route would 409 under a malformed/mismatched manifest. Added shared artifactAvailability() in src/lib/pdf/artifacts.ts (same rules as the download route; null manifest stays a valid historical fact), used by the admin submissions GET (new artifacts flags + gated pdfDownloadUrl) and refactored render-status onto it; the dashboard cell now consumes the server-verified flags. Regressions: unit props-marker tests for per-kind availability and full hiding, plus integration admin-list test mirroring foreign-id/stale-revision/per-kind/legacy manifest cases."
+  },
+  "64dcf29f-fe8b-4140-86be-80eded1c2c44": {
+    "disposition": "fixed",
+    "reason": "The success panel promised \"you'll receive a password reset link\" although the route returns success without sending when the account is rate-limited (3/hour suppression, verified in forgot-password route). Wording now asks the user to check inbox/spam and states the response does not confirm delivery or that a new link was sent, identical for known and unknown accounts. Regression: tests/unit/dashboard-recovery.test.tsx additionally asserts no link-arrival promise and the new-link disclaimer."
+  },
+  "c8c21f93-e005-42c9-8df9-426f5fc553fe": {
+    "disposition": "fixed",
+    "reason": "The bothLocated gate only opened when two hash calls arrived, so a contender settling before hash (rate limit, failed lookup) deadlocked the other until timeout. Each contender now releases the gate in a finally block; the arrivals === 2 assertion is kept so a missing contender is reported as a failure instead of a hang. Verified in tests/integration/auth-reset.test.ts concurrent redemption test."
+  },
+  "1ede191a-182c-4d70-aace-35d44ee14417": {
+    "disposition": "fixed",
+    "reason": "The epoch-expiry case could not distinguish a fresh post-lock cutoff from reuse of a stale pre-lock timestamp (both reject an already-expired token). Added a discriminating regression: a concurrent writer holds the User row lock while a fake Date (real timers kept for pg I/O) advances past expiry, then releases; the route must return 400 with password, token, and expiry untouched. This fails against the old pre-lock cutoff and passes with the FOR UPDATE + fresh-cutoff redemption."
+  },
+  "a7bb5d4d-4b3e-47fb-87be-162efb93119b": {
+    "disposition": "fixed",
+    "reason": "The print-only fixture now proves the transfer end to end: the advertised print link streams the manifest-verified bytes (200) through the submission download route, while the null reading key is refused with 409. The storage mock gained headS3Object so the route module loads."
+  },
+  "b906d7cc-80ee-45d1-a553-211e263c3b22": {
+    "disposition": "skipped",
+    "reason": "Refuted: expectedUpdatedAt is optional in the pricing schema and required only when notes are edited; manual-settlement PATCHes send status/manualSettlement without notes. The rollback test already proves the Vault upsert was reached via its 503 and vault-entry-failed alert assertions."
+  },
+  "8841b9dd-302c-402a-9648-e7babb5c985a": {
+    "disposition": "skipped",
+    "reason": "Refuted: cleanupFixtures deletes paymentAttempts by the order-to-userId relation before deleting orders, and service-created attempts belong to tracked users' orders, so no rows leak between tests."
+  },
+  "dcd4689d-234a-4333-873e-47853c1ceac9": {
+    "disposition": "skipped",
+    "reason": "Refuted: cleanupFixtures deletes paymentEvents by order relation or tracked ids before orders; recordAdminReconciliation and releasePaymentHold always set orderId, so admin-created events are cleaned by relation."
+  },
+  "2e7caa33-25ba-4131-91f1-bc20a00294eb": {
+    "disposition": "fixed",
+    "reason": "Added an optional olderThanId composite tie-breaker to the payment-alerts route (orderBy createdAt desc, id desc; 400 when olderThanId is sent without olderThan) and OrderModeration now sends both cursor params. Regression proves boundary paging between same-timestamp events and keeps the legacy timestamp-only cursor working."
+  },
+  "d6096b4d-9d1a-4909-a9e5-cca3cf8be3fd": {
+    "disposition": "fixed",
+    "reason": "Clamped container bounds to the viewport at all three assertion sites in order-settlement.spec.ts (settlement region, queue review button, history panel) while keeping the minimum-width checks. Browser execution deferred until the dev server releases the Prisma engine DLL; spec validated by tsc/eslint."
+  },
+  "edd870e8-716c-43c3-84c8-3211e7f89912": {
+    "disposition": "fixed",
+    "reason": "The admin proof download now asserts the transferred bytes equal the fixture PDF instead of discarding the body, so a corrupt or substituted stream fails the test."
+  },
+  "5664c4b2-fa68-4fcc-baad-be54f57a60d8": {
+    "disposition": "fixed",
+    "reason": "The lock-wait observation captures the owner transaction's pg_backend_pid and requires ownerPid = ANY(pg_blocking_pids(pid)), so an unrelated session holding an Order lock cannot satisfy the poll."
+  },
+  "6c806ef6-0df4-4e8b-becb-63a9a7dd0daa": {
+    "disposition": "fixed",
+    "reason": "beforeEach now resets vaultFault.fail alongside reinstalling the synthetic webhook provider, so a failed fault injection cannot leak into later tests."
+  },
+  "cd9e8146-3432-48ea-ac19-50dd0cf1b81f": {
+    "disposition": "fixed",
+    "reason": "The orphan-event test registers the created event for cleanup before asserting on the response, so a failed assertion can no longer leave an untracked row behind."
+  },
+  "6f191e68-0d2e-40bb-8a1a-89ade511361f": {
+    "disposition": "fixed",
+    "reason": "The invalid-signature test holds the rejected event and asserts no PaymentEvent row exists for its providerEventId, catching a pre-verification write with a null order link that an orderId-scoped count would miss; the unmatched-event test remains the control."
+  }
+}

@@ -141,6 +141,15 @@ User assets (`uploads/`, `assets/`, `renders/`, `previews/`) are deliberately
 never expired: `renders/` contains the published PDF and page previews that
 submissions and orders reference.
 
+Upload finalization never deletes the staging source, and retries reuse the
+deterministic content-addressed canonical key, so a failed registration
+transaction leaves a reusable object rather than a broken retry. A canonical
+object whose registration never succeeded, or a staging object that was never
+finalized, is therefore retained indefinitely. If orphans become a concern,
+sweep `assets/<userId>/canonical/` keys with no matching `Asset.s3Key` row and
+staging keys past the upload retry window; this is a manual operator task, not
+an automatic lifecycle rule.
+
 ## Database backups and restore
 
 Two independent layers:
