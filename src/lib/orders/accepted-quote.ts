@@ -1,11 +1,12 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { createOrderInputSchema } from "@/lib/pricing/schema";
-import { assertOfferPolicy, digest, verifyOffer } from "@/lib/pricing/offer";
+import { assertOfferPolicy, digest, OfferReviewRequired, verifyOffer } from "@/lib/pricing/offer";
 import { loadShippingPolicy } from "@/lib/pricing/destination";
 
 export class OrderRequestConflict extends Error {
   readonly status = 409;
+  readonly code = "REQUEST_KEY_CONFLICT";
   constructor() { super("This request key was already used for different terms. Reload and review your existing order."); }
 }
 export class OrderEligibilityError extends Error {
@@ -43,6 +44,11 @@ export async function acceptOrderQuote(userId: string, request: AcceptedOrderReq
     if (submission.status !== "APPROVED" || !submission.pdfS3Key) {
       throw new OrderEligibilityError(400, "Only approved books with a print PDF can be ordered");
     }
+    // The preview may have expired while this request waited on the submission
+    // lock. Re-check against the acceptance timestamp we are about to freeze, so
+    // an expired offer can never be pinned as an immutable accepted charge.
+    const quoteAcceptedAt = new Date();
+    if (offer.expiresAt <= quoteAcceptedAt.getTime()) throw new OfferReviewRequired();
     const { currency: _baseCurrency, costPerBookHuf: _unitAverage, ...calculation } = offer.calculation;
     void _baseCurrency; void _unitAverage;
     const order = await tx.order.create({ data: {
@@ -52,7 +58,7 @@ export async function acceptOrderQuote(userId: string, request: AcceptedOrderReq
       ...inputs.shippingAddress,
       quoteSnapshot: offer as unknown as Prisma.InputJsonValue,
       expectedMinorAmount: offer.charge.amountMinor, fxRate: new Prisma.Decimal(offer.charge.fxRate),
-      quoteAcceptedAt: new Date(), requestKey, requestDigest,
+      quoteAcceptedAt, requestKey, requestDigest,
     } });
     return { order, created: true, title: submission.title ?? "TitchyBook" };
   });

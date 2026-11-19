@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, expect, it, type Mock, vi } from "vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -161,19 +162,25 @@ it("ignores slow out-of-order responses instead of showing an older input offer"
   await waitFor(() => expect(deferred).toHaveLength(1));
   fireEvent.change(screen.getByRole("spinbutton"), { target: { value: "41" } });
   await waitFor(() => expect(deferred).toHaveLength(2));
-  deferred[1].finish(Response.json(response(deferred[1].inputs)));
+  const newerOffer = response(deferred[1].inputs);
+  deferred[1].finish(Response.json(newerOffer));
   await screen.findByText(/Exact charge:/);
   accept();
   expect(place().disabled).toBe(false);
-  deferred[0].finish(Response.json(response(deferred[0].inputs)));
+  // Flush the late response and its React updates before interacting again.
+  await act(async () => {
+    deferred[0].finish(Response.json(response(deferred[0].inputs)));
+  });
   await waitFor(() =>
     expect((screen.getByRole("spinbutton") as HTMLInputElement).value).toBe(
       "41",
     )
   );
+  expect(screen.getByText(/Exact charge:/)).toBeDefined();
   fireEvent.click(place());
   await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
   expect(create.mock.calls[0][0].quantity).toBe(41);
+  expect(create.mock.calls[0][0].offerToken).toBe(newerOffer.offer.token);
 });
 it("rejects a response bound to different inputs and keeps checkout disabled after a calculation failure", async () => {
   calculate.mockImplementation(async (inputs) =>
@@ -323,3 +330,102 @@ it.each(["null", "{}", "not-json"])(
     expect(create).not.toHaveBeenCalled();
   },
 );
+it.each(["null", "{}", "not-json"])(
+  "offers an explicit discard recovery for corrupt pending storage %s",
+  async (value) => {
+    window.sessionStorage.setItem("titchybooks-pending-order:ui-book", value);
+    panel();
+    const discard = await screen.findByRole("button", {
+      name: "Discard saved request",
+    });
+    expect(
+      screen.queryByRole("button", { name: "Request fresh quote" }),
+    ).toBeNull();
+    fireEvent.click(discard);
+    expect(window.sessionStorage.getItem("titchybooks-pending-order:ui-book"))
+      .toBeNull();
+    await screen.findByRole("button", { name: "Request fresh quote" });
+    address();
+    await screen.findByText(/Exact charge:/);
+    accept();
+    await waitFor(() => expect(place().disabled).toBe(false));
+    expect(create).not.toHaveBeenCalled();
+  },
+);
+it.each(["OFFER_REVIEW_REQUIRED", "REQUEST_KEY_CONFLICT"])(
+  "clears the saved request on definitive rejection %s and unlocks a fresh order",
+  async (code) => {
+    await ready();
+    create.mockImplementation(async () =>
+      Response.json({ error: "Definitive rejection", code }, { status: 409 })
+    );
+    fireEvent.click(place());
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+    await screen.findByRole("button", { name: "Request fresh quote" });
+    expect(window.sessionStorage.getItem("titchybooks-pending-order:ui-book"))
+      .toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Retry same order request" }),
+    ).toBeNull();
+    await screen.findByText(/Exact charge:/);
+    accept();
+    await waitFor(() => expect(place().disabled).toBe(false));
+  },
+);
+it("keeps a fresh offer usable when the browser clock runs fast", async () => {
+  const realNow = Date.now();
+  const clock = vi.spyOn(Date, "now").mockReturnValue(realNow + 660000);
+  calculate.mockImplementation(async (inputs) =>
+    new Response(JSON.stringify(response(inputs, realNow + 600000)), {
+      headers: {
+        "content-type": "application/json",
+        date: new Date(realNow).toUTCString(),
+      },
+    })
+  );
+  await ready();
+  expect(screen.getByText(/Preview valid for about/)).toBeDefined();
+  fireEvent.click(place());
+  await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+  clock.mockRestore();
+});
+it("never replays another submission's saved request after a prop change", async () => {
+  const payload = {
+    ...syntheticQuoteInputs("book-a"),
+    offerToken: "synthetic-token",
+    requestKey: crypto.randomUUID(),
+    acceptTerms: true,
+  };
+  window.sessionStorage.setItem(
+    "titchybooks-pending-order:book-a",
+    JSON.stringify(payload),
+  );
+  const view = render(
+    <OrderPanel
+      submission={{ id: "book-a", status: "APPROVED", pdfReady: true }}
+      standalone
+    />,
+  );
+  const retry = await screen.findByRole("button", {
+    name: "Retry same order request",
+  }) as HTMLButtonElement;
+  expect(retry.disabled).toBe(false);
+  // Same mounted instance, different submission: recovery must not post A.
+  view.rerender(
+    <OrderPanel
+      submission={{ id: "book-b", status: "APPROVED", pdfReady: true }}
+      standalone
+    />,
+  );
+  fireEvent.click(
+    screen.getByRole("button", { name: "Retry same order request" }),
+  );
+  expect(create).not.toHaveBeenCalled();
+  await waitFor(() =>
+    expect(
+      (screen.getByRole("button", {
+        name: "Retry same order request",
+      }) as HTMLButtonElement).disabled,
+    ).toBe(true)
+  );
+});

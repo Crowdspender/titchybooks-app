@@ -53,9 +53,14 @@ export default async function OrderDetailPage({
     } | null;
 
     // A return URL is not payment evidence; persisted reconciliation is authoritative.
-    const canPay = order.status === "PENDING_PAYMENT" && !order.paymentHold &&
+    // An unproven legacy charge (no accepted amount and no stored session) always
+    // 409s at the payment endpoint: offer review instead of a dead Pay Now. A
+    // stored session can still prove the missing charge, so retry stays available.
+    const hasRecoverableCharge = order.expectedMinorAmount !== null || order.stripeSessionId !== null;
+    const canPay = order.status === "PENDING_PAYMENT" && !order.paymentHold && hasRecoverableCharge &&
         (order.paymentState === null ||
             ["UNPAID", "FAILED"].includes(order.paymentState));
+    const unprovenPending = order.status === "PENDING_PAYMENT" && !order.paymentHold && !hasRecoverableCharge;
     const banner = checkout === "success" || checkout === "canceled"
         ? {
             text: `${
@@ -92,7 +97,15 @@ export default async function OrderDetailPage({
                 </div>
                 <div className="flex items-center gap-3">
                     {canPay && isStripeConfigured() && (
-                        <PayNowButton orderId={order.id} />
+                        <PayNowButton orderId={order.id} paymentState={order.paymentState} />
+                    )}
+                    {unprovenPending && (
+                        <Link
+                            href="/contact?topic=other"
+                            className="btn btn-ghost btn-sm"
+                        >
+                            Request payment review
+                        </Link>
                     )}
                     <Link
                         href="/dashboard/orders"

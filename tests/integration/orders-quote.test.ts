@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 import { db, createDraft, createUser, cleanupFixtures } from "../fixtures/database";
+import { prisma } from "@/lib/prisma";
 import { createOrderForUser } from "../fixtures/orders";
 import { SYNTHETIC_SHIPPING_POLICY as policy, syntheticQuoteInputs } from "../fixtures/pricing";
 import { DEFAULT_RESOLVED_CONFIG } from "@/lib/pricing/constants";
@@ -26,10 +27,13 @@ vi.mock("@/lib/stripe", async original => ({
     const sessionId = `cs_test_quote_${++stripe.sequence}`;
     return { sessionId, url: `https://checkout.stripe.com/c/${sessionId}` };
   }),
-  retrieveOrderCheckoutSession: vi.fn(async (id: string, orderId: string, currency: string) => ({
-    id, mode: "payment", client_reference_id: orderId, metadata: { orderId }, livemode: false,
-    status: "expired", payment_status: "unpaid", currency: currency.toLowerCase(), amount_total: 400000, url: null,
-  })),
+  retrieveOrderCheckoutSession: vi.fn(async (id: string, orderId: string, currency: string) => {
+    const order = await db.order.findUniqueOrThrow({ where: { id: orderId } });
+    return {
+      id, mode: "payment", client_reference_id: orderId, metadata: { orderId }, livemode: false,
+      status: "expired", payment_status: "unpaid", currency: currency.toLowerCase(), amount_total: order.expectedMinorAmount ?? 4000, url: null,
+    };
+  }),
 }));
 vi.mock('@/lib/orders/payment-provider', async original => ({ ...await original<typeof import('@/lib/orders/payment-provider')>(),
   readCanonicalAttempt: async (attempt: import('@prisma/client').PaymentAttempt) => syntheticCanonicalProof(attempt,
@@ -56,10 +60,15 @@ beforeEach(async () => {
     const sessionId = `cs_test_quote_${++stripe.sequence}`;
     return { sessionId, url: `https://checkout.stripe.com/c/${sessionId}` };
   });
-  vi.mocked(retrieveOrderCheckoutSession).mockReset().mockImplementation(async (id, orderId, currency) => ({
-    id, mode: "payment", client_reference_id: orderId, metadata: { orderId }, livemode: false,
-    status: "expired", payment_status: "unpaid", currency: currency.toLowerCase(), amount_total: 400000, url: null,
-  }) as unknown as Awaited<ReturnType<typeof retrieveOrderCheckoutSession>>);
+  vi.mocked(retrieveOrderCheckoutSession).mockReset().mockImplementation(async (id, orderId, currency) => {
+    // Match the order's frozen charge so canonical reconciliation projects a
+    // clean expired/unpaid session; amount-mismatch cases patch this explicitly.
+    const order = await db.order.findUniqueOrThrow({ where: { id: orderId } });
+    return {
+      id, mode: "payment", client_reference_id: orderId, metadata: { orderId }, livemode: false,
+      status: "expired", payment_status: "unpaid", currency: currency.toLowerCase(), amount_total: order.expectedMinorAmount ?? 4000, url: null,
+    } as unknown as Awaited<ReturnType<typeof retrieveOrderCheckoutSession>>;
+  });
   await db.pricingConfig.upsert({ where: { id: "default" }, create: { id: "default", ...pricingData }, update: pricingData });
   invalidatePricingConfigCache();
 });
@@ -76,7 +85,7 @@ afterAll(async () => {
 async function approvedBook() {
   const user = await createUser();
   session.user = { id: user.id, role: "USER", email: user.email };
-  limiterKeys.push(`quote:user:${user.id}`, `order:user:${user.id}`, `pay:user:${user.id}`);
+  limiterKeys.push(`quote:user:${user.id}`, `order:user:${user.id}`, `order-request:user:${user.id}`, `pay:user:${user.id}`);
   const draft = await createDraft(user.id);
   const submission = await db.submission.update({ where: { id: draft.id }, data: { status: "APPROVED", title: "Synthetic quoted book", pdfS3Key: `synthetic/${draft.id}/approved.pdf` } });
   return { user, submission, inputs: syntheticQuoteInputs(submission.id) };
@@ -173,6 +182,37 @@ describe("signed matching preview and immutable accepted Order", () => {
     } finally { dateSpy.mockRestore(); }
     expect(createCheckoutSession).toHaveBeenCalledTimes(1);
   });
+  it("replays an uppercase request-key spelling as the same accepted order", async () => {
+    const { user, inputs } = await approvedBook();
+    const payload = await quotedRequest(inputs);
+    const first = await create(request(payload)); expect(first.status).toBe(201);
+    const firstBody = await first.json();
+    const replay = await create(request({ ...payload, requestKey: payload.requestKey.toUpperCase() }));
+    expect(replay.status).toBe(200);
+    const replayBody = await replay.json();
+    expect(replayBody.replayed).toBe(true);
+    expect(replayBody.order.id).toBe(firstBody.order.id);
+    expect(await db.order.count({ where: { userId: user.id } })).toBe(1);
+    expect((await db.order.findUniqueOrThrow({ where: { id: firstBody.order.id } })).requestKey).toBe(payload.requestKey);
+    expect(createCheckoutSession).toHaveBeenCalledTimes(1);
+  });
+  it("keeps canonical ladders checkoutable when the legacy shared-band column is malformed", async () => {
+    const { inputs } = await approvedBook();
+    await db.pricingConfig.update({ where: { id: "default" }, data: { weightBands: "not-json" } });
+    invalidatePricingConfigCache();
+    expect((await calculate(request(inputs))).status).toBe(200);
+    // Legacy matrix rows still fail closed without valid shared bands, and
+    // recover once the shared column is repaired.
+    const legacy = Object.fromEntries(DEFAULT_RESOLVED_CONFIG.enabledZones.map(zone => [zone, [270, 305, 365, 540, 845, 1630]]));
+    await db.pricingConfig.update({ where: { id: "default" }, data: { shippingTable: JSON.stringify(legacy) } });
+    invalidatePricingConfigCache();
+    const rejected = await calculate(request(inputs));
+    expect(rejected.status).toBe(400);
+    expect((await rejected.json()).error).toMatch(/needs review/i);
+    await db.pricingConfig.update({ where: { id: "default" }, data: { weightBands: JSON.stringify([50, 100, 250, 500, 1000, 2000]) } });
+    invalidatePricingConfigCache();
+    expect((await calculate(request(inputs))).status).toBe(200);
+  });
   it("freezes full HUF/config/address/terms/FX and retries the original minor charge despite current config changes", async () => {
     const { inputs, submission } = await approvedBook();
     const payload = await quotedRequest(inputs);
@@ -207,6 +247,40 @@ describe("signed matching preview and immutable accepted Order", () => {
     expect((await create(request(payload))).status).toBe(200);
     expect(createCheckoutSession).toHaveBeenCalledTimes(1);
   });
+  it("returns the confirmed order and checkout URL when the post-creation refresh fails", async () => {
+    const { user, inputs } = await approvedBook();
+    const payload = await quotedRequest(inputs);
+    // The only non-transactional findUniqueOrThrow in a fresh creation is the
+    // final refresh; acceptance and issuance use the transaction client.
+    const refresh = vi.spyOn(prisma.order, "findUniqueOrThrow").mockRejectedValueOnce(new Error("Synthetic refresh failure"));
+    try {
+      const response = await create(request(payload)); expect(response.status).toBe(201);
+      const body = await response.json();
+      expect(body.checkoutUrl).toContain("cs_test_quote_1");
+      const stored = await db.order.findUniqueOrThrow({ where: { id: body.order.id } });
+      expect(stored.userId).toBe(user.id); expect(stored.stripeSessionId).toBe("cs_test_quote_1");
+      expect(createCheckoutSession).toHaveBeenCalledTimes(1);
+      // The same-key replay still recovers the order without another charge.
+      expect((await create(request(payload))).status).toBe(200);
+      expect(createCheckoutSession).toHaveBeenCalledTimes(1);
+    } finally { refresh.mockRestore(); }
+  });
+  it("bounds parsing and lookups with a separate request budget while exact replays stay exempt from the new-order cap", async () => {
+    const { user, inputs } = await approvedBook();
+    const payload = await quotedRequest(inputs);
+    expect((await create(request(payload))).status).toBe(201);
+    await db.rateLimitBucket.updateMany({ where: { bucketKey: `order:user:${user.id}` }, data: { count: 100 } });
+    // An exact replay survives the new-order cap but still spends the request budget.
+    expect((await create(request(payload))).status).toBe(200);
+    const budget = await db.rateLimitBucket.findUniqueOrThrow({ where: { bucketKey: `order-request:user:${user.id}` } });
+    expect(budget.count).toBe(2);
+    await db.rateLimitBucket.update({ where: { bucketKey: `order-request:user:${user.id}` }, data: { count: 60 } });
+    // New-key and invalid requests are rejected before parsing/acceptance work.
+    expect((await create(request({ ...payload, requestKey: randomUUID() }))).status).toBe(429);
+    expect((await create(request({ notAnOrder: true }))).status).toBe(429);
+    expect(createCheckoutSession).toHaveBeenCalledTimes(1);
+    expect(await db.order.count({ where: { userId: user.id } })).toBe(1);
+  });
   it("preserves legacy null provenance and blocks unprovable retry rather than inventing FX", async () => {
     const { user } = await approvedBook();
     const { order } = await createOrderForUser(user.id, { currency: "EUR" });
@@ -230,6 +304,9 @@ describe("signed matching preview and immutable accepted Order", () => {
   it("proves a legacy provider amount once without fabricating FX or acceptance", async () => {
     const { user } = await approvedBook();
     const { order } = await createOrderForUser(user.id, { stripeSessionId: `cs_test_legacy_${randomUUID()}` });
+    // Legacy orders carry no frozen charge: the provider read must supply the
+    // amount that gets proven and frozen, not echo the (null) order expectation.
+    vi.mocked(retrieveOrderCheckoutSession).mockResolvedValueOnce(providerSession({ ...order, expectedMinorAmount: 400000 }));
     expect((await retry(order.id)).status).toBe(200);
     const frozen = await db.order.findUniqueOrThrow({ where: { id: order.id } });
     expect(frozen.expectedMinorAmount).toBe(400000); expect(frozen.fxRate).toBeNull(); expect(frozen.quoteAcceptedAt).toBeNull();
@@ -272,11 +349,24 @@ describe("signed matching preview and immutable accepted Order", () => {
   it("rechecks pending state when an open-session provider read races settlement", async () => {
     const { inputs } = await approvedBook();
     const { order } = await (await create(request(await quotedRequest(inputs)))).json();
-    vi.mocked(retrieveOrderCheckoutSession).mockImplementationOnce(async () => {
-      await db.order.update({ where: { id: order.id }, data: { status: "PAID", paidAt: new Date() } });
-      return providerSession(await db.order.findUniqueOrThrow({ where: { id: order.id } }), { status: "open", url: "https://checkout.stripe.com/synthetic-existing" });
-    });
-    expect((await retry(order.id)).status).toBe(409); expect(createCheckoutSession).toHaveBeenCalledTimes(1);
+    const open = providerSession(await db.order.findUniqueOrThrow({ where: { id: order.id } }), { status: "open", url: "https://checkout.stripe.com/synthetic-existing" });
+    // Reconciliation completes against the pre-settlement snapshot; real manual
+    // settlement then commits its full facts (state, revision, evidence) while
+    // the issuance-path open-session read is in flight.
+    vi.mocked(retrieveOrderCheckoutSession)
+      .mockResolvedValueOnce(open)
+      .mockImplementationOnce(async () => {
+        await db.order.update({ where: { id: order.id }, data: { status: "PAID", paidAt: new Date(),
+          paymentState: "MANUAL_PAID", paymentRevision: { increment: 1 },
+          manualSettlement: { source: "manual", operatorId: "synthetic-operator", recordedAt: new Date().toISOString(),
+            method: "BANK_TRANSFER", reference: "Synthetic race receipt", confirmed: true } } });
+        return open;
+      });
+    const response = await retry(order.id);
+    expect(response.status).toBe(409);
+    expect((await response.json()).code).toBe("PAYMENT_REVIEW_REQUIRED");
+    expect(createCheckoutSession).toHaveBeenCalledTimes(1);
+    expect((await db.order.findUniqueOrThrow({ where: { id: order.id } })).paymentState).toBe("MANUAL_PAID");
   });
   it("blocks retries after increased packaging or Vault parcel-copy assumptions without repricing", async () => {
     const { inputs } = await approvedBook();
@@ -285,7 +375,10 @@ describe("signed matching preview and immutable accepted Order", () => {
     expect((await retry(order.id)).status).toBe(422);
     const retained = await db.order.findUniqueOrThrow({ where: { id: order.id } });
     expect(retained.expectedMinorAmount).toBe(order.expectedMinorAmount); expect(retained.totalHuf).toBe(order.totalHuf);
-    expect(createCheckoutSession).toHaveBeenCalledTimes(1); expect(retrieveOrderCheckoutSession).not.toHaveBeenCalled();
+    expect(createCheckoutSession).toHaveBeenCalledTimes(1);
+    // Reconcile-first performs one canonical read before shipping eligibility;
+    // it must not issue a new charge when the weight assumptions changed.
+    expect(retrieveOrderCheckoutSession).toHaveBeenCalledTimes(1);
   });
   it("concurrent retries use the identical provider idempotency key and conditional publication", async () => {
     const { inputs } = await approvedBook(); stripe.configured = false;
@@ -306,12 +399,45 @@ describe("signed matching preview and immutable accepted Order", () => {
     const { inputs } = await approvedBook(); stripe.configured = false;
     const { order } = await (await create(request(await quotedRequest(inputs)))).json(); stripe.configured = true;
     vi.mocked(createCheckoutSession).mockImplementationOnce(async () => {
-      // This succeeds while the provider call is in flight: no open DB transaction spans it.
-      await db.order.update({ where: { id: order.id }, data: { status: "PAID", paidAt: new Date() } });
+      // Real manual settlement commits its full facts while the provider call
+      // is in flight: no open DB transaction spans it.
+      await db.order.update({ where: { id: order.id }, data: { status: "PAID", paidAt: new Date(),
+        paymentState: "MANUAL_PAID", paymentRevision: { increment: 1 },
+        manualSettlement: { source: "manual", operatorId: "synthetic-operator", recordedAt: new Date().toISOString(),
+          method: "BANK_TRANSFER", reference: "Synthetic latency receipt", confirmed: true } } });
       return { sessionId: "cs_test_not_published", url: "https://checkout.stripe.com/synthetic-late" };
     });
     expect((await retry(order.id)).status).toBe(409);
     expect((await db.order.findUniqueOrThrow({ where: { id: order.id } })).stripeSessionId).toBeNull();
+  });
+  it("rechecks offer expiry after the submission lock before freezing acceptance", async () => {
+    const { user, inputs, submission } = await approvedBook();
+    const cfg = await loadCheckoutPricingConfig();
+    // Only the clock is faked so provider/DB timers keep running normally.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const offer = buildOffer(user.id, inputs, cfg, policy);
+      const payload = { ...inputs, requestKey: randomUUID(), acceptTerms: true as const, offerToken: signOffer(offer) };
+      let unlock!: () => void; let ready!: () => void;
+      const gate = new Promise<void>(resolve => { unlock = resolve; });
+      const locked = new Promise<void>(resolve => { ready = resolve; });
+      const holder = db.$transaction(async tx => {
+        await tx.$queryRaw`SELECT "id" FROM "Submission" WHERE "id" = ${submission.id} FOR UPDATE`;
+        ready(); await gate;
+      }, { timeout: 15000 });
+      await locked;
+      const pending = create(request(payload));
+      // Wait until acceptance has verified the still-valid offer and blocked on
+      // the submission FOR SHARE lock, then let the preview expire underneath it.
+      await vi.waitFor(async () => {
+        const rows = await db.$queryRaw<Array<{ count: bigint }>>`SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND query LIKE '%FOR SHARE%'`;
+        expect(Number(rows[0].count)).toBeGreaterThan(0);
+      }, { timeout: 3000 });
+      vi.setSystemTime(offer.expiresAt + 1000);
+      unlock(); await holder;
+      expect((await pending).status).toBe(409);
+      expect(await db.order.count({ where: { userId: user.id } })).toBe(0);
+    } finally { vi.useRealTimers(); }
   });
 });
 function providerSession(order: { id: string; stripeSessionId: string | null; currency: string; expectedMinorAmount: number | null }, patch: Record<string, unknown> = {}) {

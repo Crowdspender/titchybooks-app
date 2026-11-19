@@ -110,7 +110,9 @@ export type QuoteInputs = z.infer<typeof calculateOrderInputSchema>;
 
 export const createOrderInputSchema = calculateOrderInputSchema.extend({
   offerToken: z.string().min(1).max(80000),
-  requestKey: z.string().uuid(),
+  // UUID text is case-insensitive (RFC 9562); normalize so an uppercase retry
+  // replays the original order instead of inserting a second one.
+  requestKey: z.string().uuid().transform(key => key.toLowerCase()),
   acceptTerms: z.literal(true, { message: "Accept the displayed charge and terms before ordering" }),
 });
 

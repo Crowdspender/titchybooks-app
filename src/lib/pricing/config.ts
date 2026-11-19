@@ -131,7 +131,11 @@ export async function loadCheckoutPricingConfig(): Promise<ResolvedPricingConfig
   const row = await prisma.pricingConfig.findUnique({ where: { id: PRICING_CONFIG_ID } });
   if (!row || !Number.isSafeInteger(row.version) || row.version < 1) throw new Error("Pricing needs review before online ordering");
   try {
-    const shippingTable = strictShippingTable(JSON.parse(row.shippingTable), JSON.parse(row.weightBands));
+    // Malformed shared bands must only condemn legacy ladders: canonical
+    // per-zone rows carry their own ceilings and never read weightBands.
+    let sharedBands: unknown = null;
+    try { sharedBands = JSON.parse(row.weightBands); } catch { /* keep null so legacy rows fail below */ }
+    const shippingTable = strictShippingTable(JSON.parse(row.shippingTable), sharedBands);
     const input = pricingConfigInputSchema.parse({
       weightPerBookGrams: row.weightPerBookGrams,
       handlingFixedHuf: row.handlingFixedHuf,

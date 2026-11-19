@@ -35,6 +35,12 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  // A separate request budget bounds parsing and replay lookups even for
+  // invalid bodies or users already at the new-order cap. Exact replays stay
+  // exempt from the lower new-order limit below.
+  const budget = await consumeRateLimit(`order-request:user:${session.user.id}`, { limit: 60, windowMs: 60 * 60_000 });
+  if (!budget.allowed) return tooManyRequests(budget, "Too many order requests - please try again later.");
+
   let body: unknown;
   try {
     body = await request.json();
@@ -59,7 +65,11 @@ export async function POST(request: Request) {
     if (!rl.allowed) return tooManyRequests(rl, "Too many order attempts - please try again later.");
     accepted = await acceptOrderQuote(session.user.id, parsed.data);
   } catch (error) {
-    if (error instanceof OrderEligibilityError || error instanceof OrderRequestConflict) {
+    if (error instanceof OrderRequestConflict) {
+      // Definitive rejection: the client must discard the saved request.
+      return NextResponse.json({ error: error.message, code: error.code }, { status: error.status });
+    }
+    if (error instanceof OrderEligibilityError) {
       return NextResponse.json({ error: error.message }, { status: error.status });
     }
     if (error instanceof ManualQuoteRequired || error instanceof OfferReviewRequired) {
@@ -90,8 +100,18 @@ export async function POST(request: Request) {
     }
   }
 
+  // A failed refresh must not discard the committed order or its checkout URL:
+  // the acceptance row is authoritative, and an unstructured throw here would
+  // leave a same-key replay unable to recover the URL. Never re-run acceptance
+  // or Checkout issuance.
+  let confirmed = order;
+  try {
+    confirmed = await prisma.order.findUniqueOrThrow({ where: { id: order.id } });
+  } catch {
+    console.error(JSON.stringify({ event: "order-refresh-failed", orderId: order.id }));
+  }
   return NextResponse.json(
-    { order: await prisma.order.findUniqueOrThrow({ where: { id: order.id } }), checkoutUrl, ...(paymentError ? { paymentError } : {}) },
+    { order: confirmed, checkoutUrl, ...(paymentError ? { paymentError } : {}) },
     { status: 201, headers: { "Cache-Control": "private, no-store" } },
   );
 }

@@ -86,7 +86,7 @@ export async function cleanupFixtures() {
   await db.$transaction(async tx => {
     // Exact identities registered by this process only; shared/unknown buckets survive.
     const ownedKeys = [...rateLimitKeys,
-      ...users.flatMap(id => ['submission:user', 'quote:user', 'order:user', 'pay:user', 'ai-book:user', 'payment-review:admin'].map(prefix => `${prefix}:${id}`)),
+      ...users.flatMap(id => ['submission:user', 'quote:user', 'order:user', 'order-request:user', 'pay:user', 'ai-book:user', 'payment-review:admin'].map(prefix => `${prefix}:${id}`)),
       ...fixtureEmails.flatMap(email => [`login:${email}`, `forgot:email:${email}`])];
     await tx.rateLimitBucket.deleteMany({ where: { bucketKey: { in: ownedKeys } } });
     await tx.aiBookJob.deleteMany({ where: { userId: { in: users } } });

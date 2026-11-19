@@ -121,6 +121,9 @@ export default function OrderPanel({
     const [pendingReady, setPendingReady] = useState(false);
     const pendingRequest = useRef<Record<string, unknown> | null>(null);
     const submitLock = useRef(false);
+    // Offer expiry is decided against server time: the response Date header
+    // anchors the offset so a skewed browser clock cannot expire fresh offers.
+    const [serverOffset, setServerOffset] = useState(0);
     const pendingStorageKey = `titchybooks-pending-order:${submission.id}`;
     const [serverMessages, setServerMessages] = useState<UxMessage[]>([]);
     const [serverSuggestion, setServerSuggestion] = useState<
@@ -247,7 +250,8 @@ export default function OrderPanel({
         ? JSON.stringify(parsedInputs.data)
         : null;
     const currentOffer =
-        quote && quote.key === inputKey && quote.offer.expiresAt > clock
+        quote && quote.key === inputKey &&
+            quote.offer.expiresAt > clock + serverOffset
             ? quote.offer
             : null;
     const quoteHref = contactHref({
@@ -305,6 +309,13 @@ export default function OrderPanel({
                         return;
                     }
                     const payload = data as ServerCalcResponse;
+                    const serverNow = Date.parse(res.headers.get("date") ?? "");
+                    if (Number.isFinite(serverNow)) {
+                        // The Date header has second granularity; only correct
+                        // genuine clock skew, not sub-second truncation noise.
+                        const drift = serverNow - Date.now();
+                        setServerOffset(Math.abs(drift) > 30000 ? drift : 0);
+                    }
                     if (
                         !payload.offer?.token ||
                         JSON.stringify(payload.offer.inputs) !== inputKey
@@ -371,10 +382,20 @@ export default function OrderPanel({
 
     async function handlePlaceOrder() {
         if (submitLock.current) return;
+        // A recovered request must belong to this submission; never replay
+        // another book's saved payload from this panel.
+        if (
+            pendingRequest.current &&
+            pendingRequest.current.submissionId !== submission.id
+        ) {
+            pendingRequest.current = null;
+            setPendingReady(false);
+            return;
+        }
         if (!pendingRequest.current) {
             if (
                 uncertain || !canPlaceOrder || !currentOffer ||
-                currentOffer.expiresAt <= Date.now()
+                currentOffer.expiresAt <= Date.now() + serverOffset
             ) return;
             const payload = {
                 ...currentOffer.inputs,
@@ -413,7 +434,8 @@ export default function OrderPanel({
             if (!res.ok) {
                 if (
                     data.code === "OFFER_REVIEW_REQUIRED" ||
-                    data.code === "MANUAL_QUOTE_REQUIRED" || res.status === 400
+                    data.code === "MANUAL_QUOTE_REQUIRED" ||
+                    data.code === "REQUEST_KEY_CONFLICT" || res.status === 400
                 ) {
                     window.sessionStorage.removeItem(pendingStorageKey);
                     pendingRequest.current = null;
@@ -460,6 +482,20 @@ export default function OrderPanel({
             submitLock.current = false;
             setSubmitting(false);
         }
+    }
+
+    function discardUnreadableRequest() {
+        // Only offered when no readable payload exists to retry: fail-closed
+        // recovery, never an automatic discard of a replayable request.
+        try {
+            window.sessionStorage.removeItem(pendingStorageKey);
+        } catch { /* Storage may be unavailable; the UI still recovers. */ }
+        pendingRequest.current = null;
+        setPendingReady(false);
+        setUncertain(false);
+        toast.success(
+            "Saved request discarded. Check your orders before placing a new one.",
+        );
     }
 
     return (
@@ -621,7 +657,7 @@ export default function OrderPanel({
                             Country and postal code determine the approved
                             service{currentOffer
                                 ? `: ${currentOffer.service} (${
-                                    ZONE_LABELS[zone]
+                                    ZONE_LABELS[serverCalc?.zone ?? zone]
                                 })`
                                 : "."}
                         </p>
@@ -932,7 +968,9 @@ export default function OrderPanel({
                                     Shipment weight {breakdown.weightGrams}{" "}
                                     g · band {breakdown.shippingBand + 1} of
                                     {" "}
-                                    {config.shippingTable[zone]?.length ?? 0}
+                                    {config.shippingTable[
+                                        breakdown.zone ?? zone
+                                    ]?.length ?? 0}
                                 </p>
                             </dl>
                         )
@@ -969,9 +1007,16 @@ export default function OrderPanel({
                                 units; payment retries retain this charge.
                             </p>
                             <p className="text-xs">
-                                Preview valid until{" "}
-                                {new Date(currentOffer.expiresAt)
-                                    .toLocaleTimeString()}. An accepted pending
+                                Preview valid for about{" "}
+                                {Math.max(
+                                    0,
+                                    Math.ceil(
+                                        (currentOffer.expiresAt -
+                                            (clock + serverOffset)) /
+                                            60000,
+                                    ),
+                                )}{" "}
+                                more minutes. An accepted pending
                                 order does not expire or reprice.
                             </p>
                             <p className="text-xs whitespace-pre-wrap break-words">
@@ -1025,6 +1070,16 @@ export default function OrderPanel({
                         >
                             Check existing orders
                         </Link>
+                    )}
+                    {uncertain && !pendingReady && (
+                        <button
+                            type="button"
+                            className="btn btn-ghost w-full mt-3"
+                            disabled={submitting}
+                            onClick={discardUnreadableRequest}
+                        >
+                            Discard saved request
+                        </button>
                     )}
 
                     {placeOrderDisabledReason && (

@@ -339,8 +339,11 @@ export function buildUxMessages(
     return messages;
   }
 
-  // Highlight canonical sweet spots from the product spec.
-  if (PRICE_BREAK_QUANTITIES.includes(quantity)) {
+  // Highlight canonical sweet spots from the product spec. Packaging or Vault
+  // parcel copies can push the same quantity into a heavier band, so the tip
+  // only stands while the packed weight still fits the bare quantity's band.
+  if (PRICE_BREAK_QUANTITIES.includes(quantity) &&
+      current.shippingBand === getShippingBand(zone, calculateWeight(quantity, cfg), cfg)) {
     messages.push({
       level: "tip",
       text: `You hit a sweet spot: ${quantity} copies fit perfectly in a single shipping band.`,
@@ -352,6 +355,9 @@ export function buildUxMessages(
     if (breakQty > quantity && breakQty - quantity <= NEAR_BREAK_WINDOW) {
       try {
         const better = calculateOrder(zone, breakQty, cfg, options);
+        // Never recommend a break the approved service cap would reject;
+        // quantities at the exact cap stay eligible.
+        if (better.weightGrams > (options.maxWeightGrams ?? Infinity)) continue;
         if (better.costPerBookHuf < current.costPerBookHuf) {
           messages.push({
             level: "info",

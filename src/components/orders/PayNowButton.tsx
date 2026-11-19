@@ -9,12 +9,28 @@ import { toast } from "sonner";
  * (Re)starts Stripe Checkout for a pending order via POST /api/orders/[id]/pay.
  * Rendered only when the deployment has Stripe configured.
  */
-export default function PayNowButton({ orderId }: { orderId: string }) {
+export default function PayNowButton({ orderId, paymentState }: {
+    orderId: string;
+    paymentState?: string | null;
+}) {
     const [busy, setBusy] = useState(false);
     const [reviewRequired, setReviewRequired] = useState(false);
     const lock = useRef(false);
     const router = useRouter();
-    const [confirmedState, setConfirmedState] = useState<string | null>(null);
+    const [confirmation, setConfirmation] = useState<{
+        state: string;
+        serverState: string | null | undefined;
+    } | null>(null);
+    // router.refresh() keeps this component mounted. The optimistic
+    // confirmation survives only while the server prop is unchanged (refresh
+    // in flight) or agrees with it; a refreshed state that contradicts it
+    // (PROCESSING → FAILED) restores the retry action instead of freezing
+    // "do not pay again".
+    const confirmedState = confirmation &&
+        (paymentState === confirmation.state ||
+            paymentState === confirmation.serverState)
+        ? confirmation.state
+        : null;
 
     async function payNow() {
         if (lock.current) return;
@@ -38,7 +54,11 @@ export default function PayNowButton({ orderId }: { orderId: string }) {
                     data.paymentState,
                 )
             ) {
-                setConfirmedState(data.paymentState);
+                setConfirmation({ state: data.paymentState, serverState: paymentState });
+                // The confirmation replaces the button; release the busy lock
+                // so a later contradicted state restores an enabled retry.
+                lock.current = false;
+                setBusy(false);
                 router.refresh();
                 return;
             }

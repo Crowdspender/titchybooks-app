@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_RESOLVED_CONFIG, ZONES } from "@/lib/pricing/constants";
-import { calculateOrder, calculateWeight, getShippingBand, bandCeilingQuantity, suggestOptimalQuantity } from "@/lib/pricing/engine";
+import { calculateOrder, calculateWeight, getShippingBand, bandCeilingQuantity, suggestOptimalQuantity, buildUxMessages } from "@/lib/pricing/engine";
 import { calculateCharge } from "@/lib/pricing/charge";
 import { assertDestinationWeight, loadShippingPolicy, resolveDestination, shippingPolicySchema } from "@/lib/pricing/destination";
 import { countryCodeSchema } from "@/lib/pricing/country";
@@ -189,6 +189,35 @@ describe("signed complete-input short-lived preview offers", () => {
     expect(() => assertOfferPolicy(offer, policy)).not.toThrow();
     expect(createOrderInputSchema.safeParse({ ...syntheticQuoteInputs(), offerToken: token,
       requestKey: "b5719d7f-58bd-4a2e-8b7d-a35072b55d63", acceptTerms: false }).success).toBe(false);
+  });
+  it("normalizes request-key case so an uppercase retry replays the same key", () => {
+    const key = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const parsed = createOrderInputSchema.parse({ ...syntheticQuoteInputs(), offerToken: "synthetic-token",
+      requestKey: key.toUpperCase(), acceptTerms: true });
+    expect(parsed.requestKey).toBe(key);
+    expect(createOrderInputSchema.safeParse({ ...syntheticQuoteInputs(), offerToken: "synthetic-token",
+      requestKey: "not-a-uuid", acceptTerms: true }).success).toBe(false);
+  });
+});
+
+describe("weight-aware UX hints", () => {
+  it("keeps the sweet-spot tip only while packed weight fits the intended band", () => {
+    // 160 copies × 6 g = 960 g sits in the 1000 g band; +50 g packaging
+    // crosses into the 2000 g band, so the "fit perfectly" claim must drop.
+    const bare = buildUxMessages("hungary", 160, cfg);
+    expect(bare.some(message => message.text.includes("sweet spot"))).toBe(true);
+    const packed = buildUxMessages("hungary", 160, cfg, { packagingWeightGrams: 50 });
+    expect(packed.some(message => message.text.includes("sweet spot"))).toBe(false);
+  });
+  it("does not recommend a price break above the approved shipment cap", () => {
+    // (5 + 2 vault copies) × 6 g + 20 g = 62 g fits a 70 g cap; the 8-copy
+    // break weighs (8 + 2) × 6 + 20 = 80 g and must not be recommended.
+    const options = { packagingWeightGrams: 20, shippedExtraCopies: 2, maxWeightGrams: 70 };
+    const capped = buildUxMessages("hungary", 5, cfg, options);
+    expect(capped.some(message => message.text.includes("next price break"))).toBe(false);
+    // The exact-cap quantity stays eligible: 80 g weight at an 80 g cap.
+    const atCap = buildUxMessages("hungary", 5, cfg, { ...options, maxWeightGrams: 80 });
+    expect(atCap.some(message => message.text.includes("next price break at 8 copies"))).toBe(true);
   });
 });
 

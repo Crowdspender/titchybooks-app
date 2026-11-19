@@ -77,6 +77,7 @@ export default async function NewOrderPage({
             )}
 
             <OrderPanel
+                key={submission.id}
                 submission={{
                     id: submission.id,
                     status: submission.status,

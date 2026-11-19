@@ -28,7 +28,7 @@ test.afterAll(async () => {
 });
 async function fixture(page: Page) {
   const user = await createUser('USER', await hash(password, 10));
-  limiterKeys.push(`quote:user:${user.id}`, `order:user:${user.id}`, `pay:user:${user.id}`);
+  limiterKeys.push(`quote:user:${user.id}`, `order:user:${user.id}`, `order-request:user:${user.id}`, `pay:user:${user.id}`);
   const draft = await createDraft(user.id);
   const submission = await db.submission.update({ where: { id: draft.id }, data: { status: 'APPROVED', title: 'Batch 4 synthetic approved book', pdfS3Key: `synthetic/${draft.id}/approved.pdf` } });
   await page.goto('/login');
@@ -128,13 +128,19 @@ test('browser storage write failure sends zero creation requests', async ({ page
 test('lost response after real commit recovers the identical request after reload without a second order', async ({ page }, info) => {
   const { user } = await fixture(page); await fillAddress(page); await accept(page);
   const payloads: unknown[] = [];
+  let creationStatus = 0;
   page.on('request', r => { if (r.method() === 'POST' && r.url().endsWith('/api/orders')) payloads.push(r.postDataJSON()); });
   await page.route('**/api/orders', async route => {
     if (route.request().method() !== 'POST') return route.continue();
-    const response = await route.fetch(); expect(response.status()).toBe(201);
-    await route.abort('connectionfailed');
+    const response = await route.fetch();
+    creationStatus = response.status();
+    // Always settle the interception: abort only a real 201 to simulate the
+    // lost response; an unexpected status is fulfilled and asserted below.
+    if (creationStatus === 201) await route.abort('connectionfailed');
+    else await route.fulfill({ response });
   });
   await page.getByRole('button', { name: 'Place order', exact: true }).click();
+  await expect.poll(() => creationStatus).toBe(201);
   await expect(page.getByRole('button', { name: 'Retry same order request' })).toBeEnabled();
   await expect(page.getByRole('spinbutton')).toBeDisabled();
   expect(await db.order.count({ where: { userId: user.id } })).toBe(1);

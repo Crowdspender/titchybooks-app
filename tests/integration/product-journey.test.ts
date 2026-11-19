@@ -236,7 +236,7 @@ it('executes one registered-owner book from validated upload through correction,
   expect(owner.role).toBe('USER'); expect(await compare('synthetic-local-password', owner.passwordHash)).toBe(true);
   const admin = await createUser('ADMIN'); const stranger = await createUser(); expect(owner.id).not.toBe(admin.id);
   fixtureUserIds.push(owner.id, admin.id, stranger.id);
-  for (const user of [owner, admin, stranger]) for (const prefix of ['submission:user', 'quote:user', 'order:user', 'pay:user', 'payment-review:admin']) keys.push(`${prefix}:${user.id}`);
+  for (const user of [owner, admin, stranger]) for (const prefix of ['submission:user', 'quote:user', 'order:user', 'order-request:user', 'pay:user', 'payment-review:admin']) keys.push(`${prefix}:${user.id}`);
   state.user = owner;
   const created = await createBook(req({ mode: 'EDITOR', title: 'Émilie café — original' })); expect(created.status).toBe(201);
   const originalId: string = (await created.json()).submission.id;
