@@ -6,6 +6,7 @@ import { PATCH as adminPatch } from '@/app/api/admin/orders/[id]/route';
 import { POST as webhook } from '@/app/api/stripe/webhook/route';
 import { applyOrderLifecycle } from '@/lib/orders/lifecycle';
 import { ORDER_STATUS_TRANSITIONS, ORDER_STATUSES } from '@/lib/pricing/constants';
+import * as stripeService from '@/lib/stripe';
 
 const session = vi.hoisted(() => ({ user: null as null | { id: string; role: string } }));
 const fault = vi.hoisted(() => ({ fail: false }));
@@ -38,6 +39,10 @@ async function asAdmin() {
 }
 async function orderState(id: string) {
   return db.order.findUniqueOrThrow({ where: { id }, include: { vaultEntries: true } });
+}
+function checkoutSession(patch: Record<string, unknown>) {
+  return { id: 'cs_test_manual_open', mode: 'payment', client_reference_id: 'order', metadata: {}, livemode: false,
+    currency: 'huf', amount_total: 4000, url: null, ...patch } as unknown as Awaited<ReturnType<typeof stripeService.retrieveOrderCheckoutSession>>;
 }
 beforeAll(() => {
   vi.stubEnv('STRIPE_SECRET_KEY', 'sk_test_integration_only');
@@ -187,9 +192,12 @@ describe('atomic order settlement', () => {
     const { order } = await createPendingOrderWithUser({ status: 'PAID' });
     let unlock!: () => void;
     let ready!: () => void;
+    let ownerPid!: number;
     const gate = new Promise<void>(resolve => { unlock = resolve; });
     const locked = new Promise<void>(resolve => { ready = resolve; });
     const owner = db.$transaction(async tx => {
+      const [{ pid }] = await tx.$queryRaw<Array<{ pid: number }>>`SELECT pg_backend_pid() AS pid`;
+      ownerPid = pid;
       await tx.$queryRaw`SELECT "id" FROM "Order" WHERE "id" = ${order.id} FOR UPDATE`;
       ready();
       await gate;
@@ -199,7 +207,9 @@ describe('atomic order settlement', () => {
     const waiter = patch(order.id, { status: 'CANCELLED', expectedUpdatedAt: order.updatedAt.toISOString() });
     try {
       await vi.waitFor(async () => {
-        const rows = await db.$queryRaw<Array<{ count: bigint }>>`SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND query LIKE '%SELECT "id" FROM "Order"%'`;
+        // Only a waiter blocked by this test's own lock owner counts: another
+        // session holding an Order lock must not satisfy the observation.
+        const rows = await db.$queryRaw<Array<{ count: bigint }>>`SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND query LIKE '%SELECT "id" FROM "Order"%' AND ${ownerPid} = ANY(pg_blocking_pids(pid))`;
         expect(Number(rows[0].count)).toBeGreaterThan(0);
       }, { timeout: 3000 });
     } finally { unlock(); }
@@ -242,5 +252,37 @@ describe('atomic order settlement', () => {
     expect((await patch(order.id, paidBody)).status).toBe(403);
     await asAdmin();
     expect((await patch('absent-order', paidBody)).status).toBe(404);
+  });
+
+  it('expires an open unpaid checkout session before recording a manual settlement', async () => {
+    await asAdmin();
+    const { order } = await createPendingOrderWithUser({ vaultAddOn: true, stripeSessionId: 'cs_test_manual_open' });
+    vi.spyOn(stripeService, 'retrieveOrderCheckoutSession').mockResolvedValueOnce(checkoutSession({ status: 'open', payment_status: 'unpaid' }));
+    const expire = vi.spyOn(stripeService, 'expireCheckoutSession').mockResolvedValue(undefined);
+    expect((await patch(order.id, paidBody)).status).toBe(200);
+    expect(expire).toHaveBeenCalledWith('cs_test_manual_open');
+    expect(await orderState(order.id)).toMatchObject({ status: 'PAID', manualSettlement: { source: 'manual' } });
+  });
+
+  it('refuses manual settlement while a Stripe payment is already in progress', async () => {
+    await asAdmin();
+    const { order } = await createPendingOrderWithUser({ vaultAddOn: true, stripeSessionId: 'cs_test_manual_paid' });
+    vi.spyOn(stripeService, 'retrieveOrderCheckoutSession').mockResolvedValueOnce(checkoutSession({ id: 'cs_test_manual_paid', status: 'complete', payment_status: 'paid' }));
+    const expire = vi.spyOn(stripeService, 'expireCheckoutSession').mockResolvedValue(undefined);
+    const res = await patch(order.id, paidBody);
+    expect(res.status).toBe(409);
+    expect((await res.json()).code).toBe('PAYMENT_REVIEW_REQUIRED');
+    expect(expire).not.toHaveBeenCalled();
+    expect(await orderState(order.id)).toMatchObject({ status: 'PENDING_PAYMENT', paidAt: null, manualSettlement: null, vaultEntries: [] });
+  });
+
+  it('refuses manual settlement when the open session cannot be closed', async () => {
+    await asAdmin();
+    const { order } = await createPendingOrderWithUser({ vaultAddOn: true, stripeSessionId: 'cs_test_manual_race' });
+    vi.spyOn(stripeService, 'retrieveOrderCheckoutSession').mockResolvedValueOnce(checkoutSession({ id: 'cs_test_manual_race', status: 'open', payment_status: 'unpaid' }));
+    vi.spyOn(stripeService, 'expireCheckoutSession').mockRejectedValueOnce(new Error('Session already completed'));
+    const res = await patch(order.id, paidBody);
+    expect(res.status).toBe(409);
+    expect(await orderState(order.id)).toMatchObject({ status: 'PENDING_PAYMENT', paidAt: null, manualSettlement: null, vaultEntries: [] });
   });
 });

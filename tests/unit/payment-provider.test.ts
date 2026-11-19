@@ -80,6 +80,16 @@ it('retains canonical pending, failed and completed refunds across every page', 
     summary: { refundedMinor: 1000, pendingRefundMinor: 100, failedRefundMinor: 200, netReceivedMinor: 1740 } });
   expect(sdk.refunds.list).toHaveBeenCalledWith({ charge: 'ch_one', limit: 100, starting_after: 're_one' });
 });
+it('accepts an amount_refunded aggregate that includes in-flight refunds', async () => {
+  const succeeded = { id: 're_one', charge: 'ch_one', payment_intent: 'pi_one', currency: 'eur', amount: 1000, status: 'succeeded' };
+  const pending = { ...succeeded, id: 're_pending', amount: 100, status: 'pending' };
+  sdk.refunds.list.mockResolvedValue({ data: [succeeded, pending], has_more: false });
+  // Stripe may report amount_refunded including pending refunds; the succeeded+pending
+  // aggregate must reconcile without a false snapshot-changed rejection.
+  charge.amount_refunded = 1100;
+  expect(await projection()).toMatchObject({ state: 'PARTIALLY_REFUNDED', hold: true,
+    summary: { refundedMinor: 1000, pendingRefundMinor: 100, netReceivedMinor: 1740 } });
+});
 it('validates refund and dispute provider references rather than trusting delivered amounts', async () => {
   sdk.refunds.list.mockResolvedValue({ data: [{ id: 're_one', charge: 'ch_other', payment_intent: 'pi_other', currency: 'eur', amount: 1000, status: 'failed' }], has_more: false });
   sdk.disputes.list.mockResolvedValue({ data: [{ id: 'dp_one', charge: 'ch_other', payment_intent: 'pi_other', livemode: true, currency: 'eur', amount: 2740, status: 'won' }], has_more: false });

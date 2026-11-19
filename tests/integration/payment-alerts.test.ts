@@ -43,7 +43,12 @@ beforeAll(() => {
   vi.stubEnv('STRIPE_SECRET_KEY', 'sk_test_integration_only');
   vi.stubEnv('STRIPE_WEBHOOK_SECRET', WEBHOOK_SECRET);
 });
-beforeEach(installSyntheticWebhookProvider);
+beforeEach(() => {
+  // A fault armed by a previous test must not leak into this one's Vault upsert
+  // if that test's PATCH exited before consuming it.
+  vaultFault.fail = false;
+  installSyntheticWebhookProvider();
+});
 afterEach(cleanupFixtures);
 
 /** Sign the mocked session in as a fresh administrator. */
@@ -146,9 +151,12 @@ describe('payment reconciliation alerts', () => {
     // orderId is a foreign key, so the alert has to be raised without one
     // rather than failing the write the handler is relying on.
     const event = completedEvent('nonexistent-order-id', 'cs_test_orphan', { paymentStatus: 'unpaid' });
-    expect((await deliver(event)).status).toBe(200);
-    const orphan = await db.paymentEvent.findUniqueOrThrow({ where: { providerEventId: event.id } });
-    trackPaymentEvent(orphan.id);
+    const res = await deliver(event);
+    // Register before asserting: a non-200 delivery that still persisted the
+    // unmatched event must not leak a row no order cleanup can reach.
+    const orphan = await db.paymentEvent.findUnique({ where: { providerEventId: event.id } });
+    if (orphan) trackPaymentEvent(orphan.id);
+    expect(res.status).toBe(200);
     expect(orphan).toMatchObject({ orderId: null, status: 'UNMATCHED', data: { orderId: 'nonexistent-order-id' } });
   });
 
@@ -254,5 +262,69 @@ describe('payment reconciliation alerts', () => {
     const [alert] = await alertsFor(order.id);
     expect((await patchAlert(alert.id)).status).toBe(403);
     expect((await alertsFor(order.id))[0].resolvedAt).toBeNull();
+  });
+
+  it('pages the unresolved event queue so the oldest unmatched event stays reachable', async () => {
+    await asAdmin();
+    const base = new Date('2026-01-01T00:00:00.000Z');
+    const created = [];
+    for (let i = 0; i < 3; i++) {
+      const row = await db.paymentEvent.create({ data: {
+        providerEventId: `evt_page_${i}`, source: 'SIGNED_WEBHOOK', type: 'charge.refunded',
+        data: {}, dataDigest: `page-${i}`, status: 'UNMATCHED', objectId: `ch_page_${i}`,
+        createdAt: new Date(base.getTime() + i * 1000),
+      } });
+      trackPaymentEvent(row.id);
+      created.push(row);
+    }
+    const first = await (await listAlerts()).json();
+    expect(first.eventCount).toBe(3);
+    expect(first.events.map((event: { id: string }) => event.id)).toEqual([
+      created[2].id, created[1].id, created[0].id,
+    ]);
+
+    // Page past the newest slice using the oldest returned createdAt.
+    const cursor = encodeURIComponent(created[1].createdAt.toISOString());
+    const older = await (await listAlerts(new Request(`http://localhost/api/admin/payment-alerts?olderThan=${cursor}`))).json();
+    expect(older.events.map((event: { id: string }) => event.id)).toEqual([created[0].id]);
+    expect(older.eventCount).toBe(1);
+
+    const invalid = await listAlerts(new Request('http://localhost/api/admin/payment-alerts?olderThan=not-a-date'));
+    expect(invalid.status).toBe(400);
+  });
+
+  it('keeps same-timestamp events reachable through the id tie-breaker', async () => {
+    await asAdmin();
+    // Both rows share one createdAt, exactly as a single transaction would
+    // stamp them; only the id secondary sort keeps the page boundary from
+    // skipping a tied sibling.
+    const same = new Date('2026-01-02T00:00:00.000Z');
+    const tied = [];
+    for (const suffix of ['a', 'b']) {
+      const row = await db.paymentEvent.create({ data: {
+        providerEventId: `evt_tie_${suffix}`, source: 'SIGNED_WEBHOOK', type: 'charge.refunded',
+        data: {}, dataDigest: `tie-${suffix}`, status: 'UNMATCHED', objectId: `ch_tie_${suffix}`,
+        createdAt: same,
+      } });
+      trackPaymentEvent(row.id);
+      tied.push(row);
+    }
+    const [newerTied, olderTied] = tied.map(row => row.id).sort().reverse();
+    const first = await (await listAlerts()).json();
+    expect(first.events.map((event: { id: string }) => event.id)).toEqual([newerTied, olderTied]);
+
+    // The composite cursor pages past the newer tied row to its sibling.
+    const query = `olderThan=${encodeURIComponent(same.toISOString())}&olderThanId=${encodeURIComponent(newerTied)}`;
+    const older = await (await listAlerts(new Request(`http://localhost/api/admin/payment-alerts?${query}`))).json();
+    expect(older.events.map((event: { id: string }) => event.id)).toEqual([olderTied]);
+    expect(older.eventCount).toBe(1);
+
+    // The legacy timestamp-only cursor still excludes the whole tie group.
+    const legacy = await (await listAlerts(new Request(`http://localhost/api/admin/payment-alerts?olderThan=${encodeURIComponent(same.toISOString())}`))).json();
+    expect(legacy.events).toEqual([]);
+    expect(legacy.eventCount).toBe(0);
+
+    const orphanId = await listAlerts(new Request(`http://localhost/api/admin/payment-alerts?olderThanId=${encodeURIComponent(newerTied)}`));
+    expect(orphanId.status).toBe(400);
   });
 });

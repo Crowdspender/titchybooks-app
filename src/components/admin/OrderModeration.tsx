@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import type { OrderPaymentState } from "@prisma/client";
 import OrderPaymentHistory from "./OrderPaymentHistory";
 import { paymentStateLabel } from "@/components/orders/PaymentStatus";
+import { formatCharge, isCurrency } from "@/lib/pricing/currency";
 import {
     ORDER_STATUS_TRANSITIONS,
     ORDER_STATUSES,
@@ -19,6 +20,8 @@ interface AdminOrderRow {
     quantity: number;
     zone: string;
     totalHuf: number;
+    currency: string;
+    expectedMinorAmount: number | null;
     vaultAddOn: boolean;
     vaultFeeHuf: number;
     createdAt: string;
@@ -58,6 +61,7 @@ interface PaymentEventRow {
     source: string;
     objectId: string | null;
     outcome: string | null;
+    createdAt: string;
 }
 
 const ALERT_KIND_LABELS: Record<string, string> = {
@@ -86,6 +90,15 @@ export default function OrderModeration() {
     const [saving, setSaving] = useState(false);
     const savingRef = useRef(false);
     const [editError, setEditError] = useState("");
+    // The edit baseline is captured when editing starts and never follows queue
+    // reloads: a refreshed row must not lend its newer revision to an old draft.
+    const editBaseline = useRef<{
+        id: string;
+        status: OrderStatus;
+        notes: string;
+        updatedAt: string;
+    } | null>(null);
+    const [loadingOlder, setLoadingOlder] = useState(false);
 
     useEffect(() => {
         let cancelled = false;
@@ -152,6 +165,12 @@ export default function OrderModeration() {
     }, [refreshKey]);
 
     function startEdit(order: AdminOrderRow) {
+        editBaseline.current = {
+            id: order.id,
+            status: order.status,
+            notes: order.notes ?? "",
+            updatedAt: order.updatedAt,
+        };
         setEditingId(order.id);
         setPendingStatus(order.status);
         setPendingNotes(order.notes ?? "");
@@ -161,10 +180,23 @@ export default function OrderModeration() {
         setEditError("");
     }
 
+    function endEdit() {
+        editBaseline.current = null;
+        setEditingId(null);
+    }
+
     async function saveEdit(order: AdminOrderRow) {
         if (savingRef.current) return;
+        const baseline = editBaseline.current;
+        if (!baseline || baseline.id !== order.id) return;
+        if (order.updatedAt !== baseline.updatedAt) {
+            setEditError(
+                "This order changed since you started editing. Reload and review it before saving.",
+            );
+            return;
+        }
         const manual = pendingStatus === "PAID" &&
-            order.status === "PENDING_PAYMENT";
+            baseline.status === "PENDING_PAYMENT";
         if (manual && (!manualConfirmed || !manualReference.trim())) {
             setEditError(
                 "Payment evidence and explicit confirmation are required.",
@@ -172,17 +204,17 @@ export default function OrderModeration() {
             return;
         }
         const body: Record<string, unknown> = {};
-        if (pendingStatus && pendingStatus !== order.status) {
+        if (pendingStatus && pendingStatus !== baseline.status) {
             body.status = pendingStatus;
         }
-        if ((pendingNotes || "") !== (order.notes ?? "")) {
+        if ((pendingNotes || "") !== baseline.notes) {
             body.notes = pendingNotes || null;
         }
         if (Object.keys(body).length === 0) {
-            setEditingId(null);
+            endEdit();
             return;
         }
-        body.expectedUpdatedAt = order.updatedAt;
+        body.expectedUpdatedAt = baseline.updatedAt;
         if (manual) {
             body.manualSettlement = {
                 method: manualMethod,
@@ -206,7 +238,7 @@ export default function OrderModeration() {
                     ? "Manual settlement recorded; this does not confirm a Stripe payment."
                     : "Order updated",
             );
-            setEditingId(null);
+            endEdit();
             setRefreshKey((k) => k + 1);
         } catch (error) {
             const message = error instanceof Error
@@ -227,6 +259,9 @@ export default function OrderModeration() {
             });
             if (!res.ok) throw new Error("Could not dismiss the alert");
             setAlerts((current) => current.filter((alert) => alert.id !== id));
+            // Cancel any in-flight queue snapshot and refetch: a GET captured
+            // before this dismissal must not restore the dismissed alert.
+            setRefreshKey((k) => k + 1);
             toast.success(
                 "Historical alert dismissed. Financial holds are unchanged.",
             );
@@ -235,6 +270,34 @@ export default function OrderModeration() {
                 "Alert dismissal could not be confirmed. Reload the queue.",
             );
             setRefreshKey((k) => k + 1);
+        }
+    }
+
+    async function loadOlderEvents() {
+        const oldest = events.at(-1);
+        if (!oldest?.createdAt || loadingOlder) return;
+        setLoadingOlder(true);
+        try {
+            // The id breaks createdAt ties so a same-timestamp sibling at the
+            // page boundary is not skipped.
+            const res = await fetch(
+                `/api/admin/payment-alerts?olderThan=${encodeURIComponent(oldest.createdAt)}&olderThanId=${encodeURIComponent(oldest.id)}`,
+                { cache: "no-store" },
+            );
+            const data = await res.json();
+            if (!res.ok) throw new Error("Queue unavailable");
+            setEvents((current) => {
+                const seen = new Set(current.map((event) => event.id));
+                const older = (data.events || []).filter(
+                    (event: PaymentEventRow) => !seen.has(event.id),
+                );
+                return [...current, ...older];
+            });
+            setEventCount(data.eventCount ?? eventCount);
+        } catch {
+            toast.error("Older events could not be loaded. Reload the queue.");
+        } finally {
+            setLoadingOlder(false);
         }
     }
 
@@ -286,6 +349,17 @@ export default function OrderModeration() {
                         discarded. Unmatched references require operator
                         comparison with Stripe Dashboard; no order is inferred.
                     </p>
+                    {events.length < eventCount && (
+                        <button
+                            className="btn btn-ghost btn-sm"
+                            disabled={loadingOlder || !events.at(-1)?.createdAt}
+                            onClick={loadOlderEvents}
+                        >
+                            {loadingOlder
+                                ? "Loading older events…"
+                                : "Show older events"}
+                        </button>
+                    )}
                     <ul className="space-y-3 text-sm">
                         {events.map((event) => (
                             <li key={event.id}>
@@ -316,7 +390,8 @@ export default function OrderModeration() {
                                             disabled={saving ||
                                                 historyId !== null}
                                             onClick={() => {
-                                                setEditingId(null);
+                                                // Keep any open draft: the edit
+                                                // baseline fences stale saves.
                                                 setHistoryId(event.orderId);
                                             }}
                                         >
@@ -440,7 +515,7 @@ export default function OrderModeration() {
                         className="btn btn-ghost btn-sm mt-2"
                         disabled={saving}
                         onClick={() => {
-                            setEditingId(null);
+                            endEdit();
                             setEditError("");
                             setRefreshKey((k) => k + 1);
                         }}
@@ -786,6 +861,25 @@ export default function OrderModeration() {
                                                                                 manual
                                                                                 settlement
                                                                             </legend>
+                                                                            {isCurrency(order.currency) &&
+                                                                                order.expectedMinorAmount !== null && (
+                                                                                <p className="text-xs font-medium">
+                                                                                    Accepted
+                                                                                    charge:{" "}
+                                                                                    {formatCharge(
+                                                                                        order.expectedMinorAmount,
+                                                                                        order.currency,
+                                                                                    )}
+                                                                                    {" "}
+                                                                                    —
+                                                                                    verify
+                                                                                    the
+                                                                                    evidence
+                                                                                    against
+                                                                                    this
+                                                                                    amount.
+                                                                                </p>
+                                                                            )}
                                                                             <p className="text-xs">
                                                                                 Verify
                                                                                 payment
@@ -921,10 +1015,7 @@ export default function OrderModeration() {
                                                                             : "Save"}
                                                                     </button>
                                                                     <button
-                                                                        onClick={() =>
-                                                                            setEditingId(
-                                                                                null,
-                                                                            )}
+                                                                        onClick={endEdit}
                                                                         disabled={saving}
                                                                         className="btn btn-ghost btn-sm text-xs"
                                                                     >
@@ -952,7 +1043,9 @@ export default function OrderModeration() {
                                                         disabled={saving ||
                                                             historyId !== null}
                                                         onClick={() => {
-                                                            setEditingId(null);
+                                                            // Preserve the draft;
+                                                            // closing history returns
+                                                            // to the same edit.
                                                             setHistoryId(
                                                                 order.id,
                                                             );

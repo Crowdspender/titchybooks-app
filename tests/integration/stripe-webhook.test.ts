@@ -61,7 +61,8 @@ describe('Stripe checkout webhook -> order PAID transition', () => {
 
   it('rejects unsigned or badly signed payloads', async () => {
     const { order } = await createPendingOrder(false);
-    const payload = JSON.stringify(completedEvent(order.id, order.stripeSessionId!));
+    const event = completedEvent(order.id, order.stripeSessionId!);
+    const payload = JSON.stringify(event);
 
     const noSig = await webhook(
       new NextRequest('http://localhost/api/stripe/webhook', { method: 'POST', body: payload }),
@@ -76,6 +77,10 @@ describe('Stripe checkout webhook -> order PAID transition', () => {
     expect(still.status).toBe('PENDING_PAYMENT');
     expect(still.paidAt).toBeNull();
     expect(await db.paymentEvent.count({ where: { orderId: order.id } })).toBe(0);
+    // A pre-verification write with a null order link would evade the count
+    // above; the invalid delivery's own event id must not exist at all. The
+    // unmatched test below stays the control: a VALID signature may unlink.
+    expect(await db.paymentEvent.findUnique({ where: { providerEventId: event.id } })).toBeNull();
   });
 
   it('retains unmatched events for orders that do not exist', async () => {

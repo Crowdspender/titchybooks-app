@@ -20,6 +20,7 @@ it.each([{ currency: 'HUF' as const, amountMinor: 400000 }, { currency: 'EUR' as
   await createCheckoutSession({ ...input, orderId: 'original-order', submissionTitle: 'Synthetic Émilie', idempotencyKey: 'order:original-order:initial' });
   expect(sdk.create.mock.calls[0][0].line_items[0].price_data.unit_amount).toBe(input.amountMinor);
   expect(sdk.create.mock.calls[0][0].line_items[0].price_data.currency).toBe(input.currency.toLowerCase());
+  expect(sdk.create.mock.calls[0][0].adaptive_pricing).toEqual({ enabled: false });
   expect(sdk.create.mock.calls[0][1]).toEqual({ idempotencyKey: 'order:original-order:initial' });
 });
 it('retrieves the own-account context using the installed SDK null-ID signature', async () => {
@@ -38,14 +39,27 @@ it('accepts a complete canonical proof without loading current rates', async () 
   expect((await retrieveOrderCheckoutSession('cs_test_synthetic', 'original-order', 'EUR')).amount_total).toBe(2740);
   expect(sdk.retrieve).toHaveBeenCalledWith('cs_test_synthetic');
 });
+it('accepts omitted or shipping-less adjustment details when the subtotal proves the total', async () => {
+  const canonical = await sdk.retrieve();
+  const { retrieveOrderCheckoutSession } = await import('@/lib/stripe');
+  // The pinned API declares total_details and amount_shipping nullable; with
+  // subtotal === total and automatic tax off, omitted details prove zero
+  // adjustments for requests that never carry discounts, shipping or tax.
+  sdk.retrieve.mockResolvedValue({ ...canonical, total_details: null });
+  expect((await retrieveOrderCheckoutSession('cs_test_synthetic', 'original-order', 'EUR')).amount_total).toBe(2740);
+  sdk.retrieve.mockResolvedValue({ ...canonical, total_details: { amount_discount: 0, amount_tax: 0, amount_shipping: null } });
+  expect((await retrieveOrderCheckoutSession('cs_test_synthetic', 'original-order', 'EUR')).amount_total).toBe(2740);
+});
 it.each([
   ['session identity', { id: 'unrelated-session' }], ['mode', { mode: 'subscription' }], ['account mode', { livemode: true }],
   ['order reference', { client_reference_id: 'unrelated-order' }], ['metadata', { metadata: { orderId: 'unrelated-order' } }],
   ['currency', { currency: 'gbp' }], ['null amount', { amount_total: null }], ['invalid amount', { amount_total: -1 }],
   ['fractional amount', { amount_total: 2740.5 }], ['below minimum', { amount_total: 49 }],
   ['automatic tax', { automatic_tax: { enabled: true } }],
+  ['adaptive pricing', { adaptive_pricing: { enabled: true } }],
   ['subtotal mismatch', { amount_subtotal: 2500 }], ['missing subtotal', { amount_subtotal: undefined }],
-  ['missing adjustment proof', { total_details: null }],
+  ['null details with automatic tax', { total_details: null, automatic_tax: { enabled: true } }],
+  ['null details with subtotal mismatch', { total_details: null, amount_subtotal: 2500 }],
   ['discount', { total_details: { amount_discount: 100, amount_tax: 0, amount_shipping: 0 } }],
   ['tax', { total_details: { amount_discount: 0, amount_tax: 100, amount_shipping: 0 } }],
   ['shipping adjustment', { total_details: { amount_discount: 0, amount_tax: 0, amount_shipping: 100 } }],
@@ -56,8 +70,13 @@ it.each([
   await expect(retrieveOrderCheckoutSession('cs_test_synthetic', 'original-order', 'EUR')).rejects.toThrow();
 });
 it('requires HUF charge divisibility by 100 rather than reconstructing forint amounts', async () => {
-  const canonical = await sdk.retrieve(); sdk.retrieve.mockResolvedValue({ ...canonical, currency: 'huf', amount_total: 400001, amount_subtotal: 400001 });
+  const canonical = await sdk.retrieve();
   const { retrieveOrderCheckoutSession } = await import('@/lib/stripe');
+  // Positive control: a divisible HUF charge with identical proof fields is
+  // accepted, so the rejection below cannot be a blanket HUF refusal.
+  sdk.retrieve.mockResolvedValue({ ...canonical, currency: 'huf', amount_total: 400000, amount_subtotal: 400000 });
+  expect((await retrieveOrderCheckoutSession('cs_test_synthetic', 'original-order', 'HUF')).amount_total).toBe(400000);
+  sdk.retrieve.mockResolvedValue({ ...canonical, currency: 'huf', amount_total: 400001, amount_subtotal: 400001 });
   await expect(retrieveOrderCheckoutSession('cs_test_synthetic', 'original-order', 'HUF')).rejects.toThrow();
 });
 it('does not call the provider for an invalid frozen charge and rejects an incomplete response', async () => {

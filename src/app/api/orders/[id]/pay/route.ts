@@ -68,6 +68,21 @@ export async function POST(
   if (order.expectedMinorAmount === null && !order.stripeSessionId) return review();
 
   try {
+    const latest = await prisma.paymentAttempt.findFirst({ where: { orderId: order.id }, orderBy: { sequence: "desc" } });
+    // An unpublished ambiguous call must recover its recorded key directly, not
+    // turn an absent session into a review hold or issue a successor request.
+    const recoverable = latest && !latest.sessionId && ["PREPARED", "AMBIGUOUS"].includes(latest.status);
+    // Reconcile collected payment before shipping eligibility: a missing policy
+    // must not strand an already-paid order behind a 422 shipping review.
+    if (!recoverable && (latest || order.stripeSessionId)) {
+      const result = await reconcileOrderPayment(order.id);
+      if (result.hold) return review();
+      if (result.state === "PAID" || result.state === "MANUAL_PAID" || result.state === "PROCESSING") {
+        return NextResponse.json({ paymentState: result.state, checkoutUrl: null },
+          { headers: { "Cache-Control": "private, no-store" } });
+      }
+      if (!["UNPAID", "FAILED"].includes(result.state ?? "")) return review();
+    }
     const policy = loadShippingPolicy();
     if (!policy) throw new ManualQuoteRequired();
     const snapshot = order.quoteSnapshot as unknown as PreviewOffer | null;
@@ -85,19 +100,6 @@ export async function POST(
     const currentRequiredWeight = (order.quantity + destination.shippedExtraCopies) * cfg.weightPerBookGrams + destination.packagingWeightGrams;
     if (currentRequiredWeight > order.weightGrams) throw new ManualQuoteRequired("Shipping weight assumptions changed. Contact us for review; your accepted price is retained.");
 
-    const latest = await prisma.paymentAttempt.findFirst({ where: { orderId: order.id }, orderBy: { sequence: "desc" } });
-    // An unpublished ambiguous call must recover its recorded key directly, not
-    // turn an absent session into a review hold or issue a successor request.
-    const recoverable = latest && !latest.sessionId && ["PREPARED", "AMBIGUOUS"].includes(latest.status);
-    if (!recoverable && (latest || order.stripeSessionId)) {
-      const result = await reconcileOrderPayment(order.id);
-      if (result.hold) return review();
-      if (result.state === "PAID" || result.state === "MANUAL_PAID" || result.state === "PROCESSING") {
-        return NextResponse.json({ paymentState: result.state, checkoutUrl: null },
-          { headers: { "Cache-Control": "private, no-store" } });
-      }
-      if (!["UNPAID", "FAILED"].includes(result.state ?? "")) return review();
-    }
     const attempt = await preparePaymentAttempt(order.id, order.submission?.title ?? "TitchyBook", order.user.email);
     assertChargeAmount(attempt.expectedMinorAmount, currency);
     const issued = await issuePaymentAttempt(attempt.id);

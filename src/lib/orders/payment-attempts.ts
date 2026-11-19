@@ -60,6 +60,9 @@ export async function issuePaymentAttempt(attemptId: string): Promise<CheckoutSe
     return { url: session.url, sessionId: session.id, attemptId: attempt.id };
   }
   try {
+    // Validate under the order lock without writing anything: an attempt whose
+    // provider request never started must survive a failed account lookup
+    // untouched, so a later retry can still issue the identical frozen request.
     attempt = await prisma.$transaction(async tx => {
       await tx.$queryRaw`SELECT "id" FROM "Order" WHERE "id" = ${attempt.orderId} FOR UPDATE`;
       const [order, current] = await Promise.all([
@@ -70,23 +73,33 @@ export async function issuePaymentAttempt(attemptId: string): Promise<CheckoutSe
           order.expectedMinorAmount !== current.expectedMinorAmount || order.currency !== current.currency) throw new PaymentReviewRequired();
       if (current.sessionId) return current;
       if (!['PREPARED', 'AMBIGUOUS'].includes(current.status) || (current.requestStartedAt && Date.now() - current.requestStartedAt.getTime() >= PAYMENT_RECOVERY_WINDOW_MS)) throw new PaymentReviewRequired();
+      return current;
+    });
+    if (attempt.sessionId) return issuePaymentAttempt(attempt.id);
+    const context = await retrieveStripeAccountContext();
+    if (context.livemode !== attempt.livemode || (attempt.providerAccountId && attempt.providerAccountId !== context.accountId)) throw new PaymentReviewRequired();
+    // Bind the account and mark the request started only after the lookup
+    // succeeded. Re-read under the lock so a competing writer's binding or
+    // published session is never overwritten; immutable fields pass through.
+    attempt = await prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT "id" FROM "Order" WHERE "id" = ${attempt.orderId} FOR UPDATE`;
+      const [order, current] = await Promise.all([
+        tx.order.findUniqueOrThrow({ where: { id: attempt.orderId } }),
+        tx.paymentAttempt.findUniqueOrThrow({ where: { id: attempt.id } }),
+      ]);
+      if (order.status !== 'PENDING_PAYMENT' || order.paymentHold) throw new PaymentReviewRequired();
+      if (current.sessionId) return current;
+      if ((current.providerAccountId && current.providerAccountId !== context.accountId) ||
+          !['PREPARED', 'AMBIGUOUS'].includes(current.status) ||
+          (current.requestStartedAt && Date.now() - current.requestStartedAt.getTime() >= PAYMENT_RECOVERY_WINDOW_MS)) throw new PaymentReviewRequired();
       const started = await tx.paymentAttempt.update({ where: { id: current.id }, data: {
+        providerAccountId: current.providerAccountId ?? context.accountId,
         requestStartedAt: current.requestStartedAt ?? new Date(), status: 'AMBIGUOUS', failureCode: null,
       } });
       await tx.order.update({ where: { id: order.id }, data: { paymentRevision: { increment: 1 } } });
       return started;
     });
     if (attempt.sessionId) return issuePaymentAttempt(attempt.id);
-    // The durable attempt already exists even if account lookup fails.
-    const context = await retrieveStripeAccountContext();
-    if (context.livemode !== attempt.livemode || (attempt.providerAccountId && attempt.providerAccountId !== context.accountId)) throw new PaymentReviewRequired();
-    await prisma.$transaction(async tx => {
-      await tx.$queryRaw`SELECT "id" FROM "Order" WHERE "id" = ${attempt.orderId} FOR UPDATE`;
-      const order = await tx.order.findUniqueOrThrow({ where: { id: attempt.orderId } });
-      if (order.status !== 'PENDING_PAYMENT' || order.paymentHold) throw new PaymentReviewRequired();
-      await tx.paymentAttempt.update({ where: { id: attempt.id }, data: { providerAccountId: context.accountId } });
-      await tx.order.update({ where: { id: order.id }, data: { paymentRevision: { increment: 1 } } });
-    });
     const result = await createCheckoutSession({ orderId: attempt.orderId, submissionTitle: 'TitchyBook',
       amountMinor: attempt.expectedMinorAmount, currency: attempt.currency as 'HUF' | 'EUR' | 'GBP',
       idempotencyKey: attempt.idempotencyKey, attemptId: attempt.id,
@@ -113,11 +126,14 @@ export async function issuePaymentAttempt(attemptId: string): Promise<CheckoutSe
     if (!published) throw new PaymentReviewRequired();
     return { ...result, attemptId: attempt.id };
   } catch (error) {
-    // Never overwrite a session/reconciliation another writer already committed.
+    // Never overwrite a session/reconciliation another writer already committed,
+    // and never condemn an attempt whose provider request never started: an
+    // unstarted PREPARED attempt stays retryable instead of being held for review.
     await prisma.$transaction(async tx => {
       await tx.$queryRaw`SELECT "id" FROM "Order" WHERE "id" = ${attempt.orderId} FOR UPDATE`;
       const review = error instanceof PaymentReviewRequired || error instanceof CheckoutSessionUnavailable;
-      const changed = await tx.paymentAttempt.updateMany({ where: { id: attempt.id, sessionId: null }, data: {
+      const changed = await tx.paymentAttempt.updateMany({ where: { id: attempt.id, sessionId: null,
+        requestStartedAt: { not: null }, status: { in: ['PREPARED', 'AMBIGUOUS'] } }, data: {
         ...(error instanceof CheckoutSessionUnavailable ? { sessionId: error.sessionId } : {}),
         status: review ? 'REVIEW' : 'AMBIGUOUS',
         failureCode: review ? 'REVIEW_REQUIRED' : 'PROVIDER_REQUEST_UNCONFIRMED',

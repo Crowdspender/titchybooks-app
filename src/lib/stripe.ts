@@ -108,6 +108,9 @@ export function buildCheckoutRequest(input: CheckoutSessionInput): Stripe.Checko
   const metadata = { orderId: input.orderId, ...(input.attemptId ? { attemptId: input.attemptId } : {}) };
   return {
     mode: "payment",
+    // The accepted quote fixes the buyer's charge currency; never let the
+    // account's Adaptive Pricing default present a different currency/amount.
+    adaptive_pricing: { enabled: false },
     client_reference_id: input.orderId,
     customer_email: input.customerEmail ?? undefined,
     metadata,
@@ -148,9 +151,21 @@ export async function retrieveOrderCheckoutSession(sessionId: string, orderId: s
       session.client_reference_id !== orderId || session.metadata?.orderId !== orderId ||
       session.currency !== currency.toLowerCase() || session.amount_total === null ||
       session.amount_subtotal !== session.amount_total || session.automatic_tax?.enabled ||
-      session.total_details?.amount_discount !== 0 || session.total_details?.amount_tax !== 0 ||
-      session.total_details?.amount_shipping !== 0) throw new Error("Provider session needs review");
+      session.adaptive_pricing?.enabled ||
+      // Omitted details are proven zero by subtotal === total with automatic tax
+      // off: our frozen requests never carry discounts, shipping or tax rates.
+      // A null amount_shipping likewise means no shipping rate was applied.
+      (session.total_details != null && (session.total_details.amount_discount !== 0 ||
+        session.total_details.amount_tax !== 0 || (session.total_details.amount_shipping ?? 0) !== 0))) throw new Error("Provider session needs review");
   try { assertChargeAmount(session.amount_total, currency); }
   catch { throw new Error("Provider session needs review"); }
   return session;
+}
+
+/** Expire an open Checkout session so a manually settled order can no longer be
+ * paid through it. Stripe rejects expiry once payment has started or completed;
+ * the caller treats that rejection as a reconcile-first conflict.
+ */
+export async function expireCheckoutSession(sessionId: string): Promise<void> {
+  await getStripeClient().checkout.sessions.expire(sessionId);
 }

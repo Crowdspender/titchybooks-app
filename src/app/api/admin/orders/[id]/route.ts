@@ -3,6 +3,8 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { ORDER_STATUS_TRANSITIONS } from "@/lib/pricing/constants";
 import { applyOrderLifecycle } from "@/lib/orders/lifecycle";
+import { PaymentReviewRequired } from "@/lib/orders/payment-attempts";
+import { closeCheckoutSessionForManualSettlement } from "@/lib/orders/payment-reconciliation";
 import { recordPaymentAlert } from "@/lib/orders/payment-alerts";
 import { adminUpdateOrderSchema } from "@/lib/pricing/schema";
 
@@ -60,6 +62,11 @@ export async function PATCH(
   }
 
   try {
+    // A manual settlement must not leave a still-payable Checkout session behind:
+    // close an open unpaid one first, or require reconciliation if payment started.
+    if (parsed.data.status === "PAID") {
+      await closeCheckoutSessionForManualSettlement(id);
+    }
     const result = await prisma.$transaction(tx => applyOrderLifecycle(tx, id, {
       source: "admin", operatorId: session.user.id, update: parsed.data,
     }));
@@ -78,6 +85,9 @@ export async function PATCH(
     }
     return NextResponse.json({ order: result.order });
   } catch (error) {
+    if (error instanceof PaymentReviewRequired) {
+      return NextResponse.json({ error: error.message, code: "PAYMENT_REVIEW_REQUIRED" }, { status: 409 });
+    }
     console.error("Order update transaction failed", error);
     // Vault failures roll back. A connection loss during commit can be
     // ambiguous: require a fresh read instead of claiming settlement succeeded.

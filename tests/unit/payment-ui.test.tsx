@@ -104,11 +104,19 @@ beforeEach(() => {
   close = vi.fn();
   vi.stubGlobal(
     "fetch",
-    vi.fn(async (_url: string, init?: RequestInit) =>
-      init?.method === "POST"
-        ? post(init.body ? JSON.parse(String(init.body)) : {})
-        : get()
-    ),
+    vi.fn(async (url: string, init?: RequestInit) => {
+      // Match method and full path so a request aimed at another order or
+      // endpoint cannot receive a successful payment response.
+      if (url === "/api/admin/orders/local-order/payment") {
+        return init?.method === "POST"
+          ? post(init.body ? JSON.parse(String(init.body)) : {})
+          : get();
+      }
+      if (url === "/api/orders/local-order/pay" && init?.method === "POST") {
+        return post(init.body ? JSON.parse(String(init.body)) : {});
+      }
+      throw new Error(`Unexpected local test URL ${url}`);
+    }),
   );
   effects.auth.mockResolvedValue({ user: { id: "owner", role: "USER" } });
   effects.order.mockResolvedValue({
@@ -118,6 +126,7 @@ beforeEach(() => {
     paymentState: "UNPAID",
     paymentHold: false,
     paymentSummary: null,
+    stripeSessionId: null,
     currency: "EUR",
     expectedMinorAmount: 2740,
     quoteSnapshot: null,
@@ -236,28 +245,57 @@ it("locks duplicate review requests and disables closure or reload during a slow
   finish(Response.json({ released: true }));
   await waitFor(() => expect(changed).toHaveBeenCalledTimes(1));
 });
-it.each([409, 502])(
-  "HTTP %s invalidates review until history reload and never claims success",
-  async (status) => {
-    post.mockResolvedValue(
-      Response.json({ error: "Facts changed; reload history." }, { status }),
-    );
+it("HTTP 409 invalidates review until a manual history reload and never claims success", async () => {
+  post.mockResolvedValue(
+    Response.json({ error: "Facts changed; reload history." }, { status: 409 }),
+  );
+  await openHistory();
+  review();
+  fireEvent.click(
+    screen.getByRole("button", { name: "Release reviewed hold" }),
+  );
+  expect((await screen.findByRole("alert")).textContent).toContain("reload");
+  expect(
+    screen.getByRole("button", { name: "Release reviewed hold" }).matches(
+      ":disabled",
+    ),
+  ).toBe(true);
+  // A definitive rejection keeps the manual reload path.
+  expect(changed).not.toHaveBeenCalled();
+  expect(screen.queryByText(/hold released/)).toBeNull();
+  fireEvent.click(
+    screen.getByRole("button", { name: "Reload payment history" }),
+  );
+  await waitFor(() => expect(get).toHaveBeenCalledTimes(2));
+  await waitFor(() =>
+    expect(
+      screen.getByRole("button", { name: "Reconcile with Stripe" }).matches(
+        ":disabled",
+      ),
+    ).toBe(false)
+  );
+});
+it.each(["5xx response", "lost response"])(
+  "an unconfirmed action (%s) reloads history and refreshes the parent list before moderation resumes",
+  async (kind) => {
+    if (kind === "5xx response") {
+      post.mockResolvedValue(
+        Response.json(
+          { error: "Canonical payment state could not be confirmed." },
+          { status: 502 },
+        ),
+      );
+    } else {
+      post.mockRejectedValue(new Error("Synthetic lost response"));
+    }
     await openHistory();
     review();
     fireEvent.click(
       screen.getByRole("button", { name: "Release reviewed hold" }),
     );
-    expect((await screen.findByRole("alert")).textContent).toContain("reload");
-    expect(
-      screen.getByRole("button", { name: "Release reviewed hold" }).matches(
-        ":disabled",
-      ),
-    ).toBe(true);
-    expect(changed).not.toHaveBeenCalled();
-    expect(screen.queryByText(/hold released/)).toBeNull();
-    fireEvent.click(
-      screen.getByRole("button", { name: "Reload payment history" }),
-    );
+    // The hold may already be recorded server-side: the parent list refreshes
+    // and history reloads without waiting for a manual click.
+    await waitFor(() => expect(changed).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(get).toHaveBeenCalledTimes(2));
     await waitFor(() =>
       expect(
@@ -266,6 +304,13 @@ it.each([409, 502])(
         ),
       ).toBe(false)
     );
+    expect(screen.queryByText(/hold released/)).toBeNull();
+    // Explicit confirmation was reset: release stays disabled after the reload.
+    expect(
+      screen.getByRole("button", { name: "Release reviewed hold" }).matches(
+        ":disabled",
+      ),
+    ).toBe(true);
   },
 );
 it("handles failed history load without empty-success or active financial controls", async () => {
@@ -320,6 +365,67 @@ it("held retry exposes contact review without automatic retry", async () => {
   await screen.findByRole("link", { name: "Request payment review" });
   expect(post).toHaveBeenCalledTimes(1);
 });
+it("a refreshed FAILED state restores retry after an optimistic PROCESSING confirmation", async () => {
+  post.mockResolvedValue(
+    Response.json({ checkoutUrl: null, paymentState: "PROCESSING" }),
+  );
+  const view = render(
+    <PayNowButton orderId="local-order" paymentState="UNPAID" />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Pay now" }));
+  await screen.findByText("Payment is processing. Do not pay again.");
+  // The first refresh confirms PROCESSING: the warning must survive it.
+  view.rerender(
+    <PayNowButton orderId="local-order" paymentState="PROCESSING" />,
+  );
+  expect(
+    screen.getByText("Payment is processing. Do not pay again."),
+  ).toBeDefined();
+  expect(screen.queryByRole("button", { name: "Pay now" })).toBeNull();
+  // A later refresh proves FAILED while the component stays mounted: the
+  // retry action returns instead of freezing "do not pay again".
+  view.rerender(
+    <PayNowButton orderId="local-order" paymentState="FAILED" />,
+  );
+  expect(screen.getByRole("button", { name: "Pay now" })).toBeDefined();
+  expect(screen.queryByText(/Do not pay again/)).toBeNull();
+});
+it("an unproven legacy charge offers review instead of a Pay now that always 409s", async () => {
+  const order = await effects.order();
+  effects.order.mockResolvedValue({
+    ...order,
+    expectedMinorAmount: null,
+    stripeSessionId: null,
+    paymentState: null,
+    quoteAcceptedAt: null,
+  });
+  render(
+    await OrderDetailPage({
+      params: Promise.resolve({ id: "local-order" }),
+      searchParams: Promise.resolve({}),
+    }),
+  );
+  expect(screen.queryByRole("button", { name: "Pay now" })).toBeNull();
+  expect(
+    screen.getByRole("link", { name: "Request payment review" }),
+  ).toBeDefined();
+  cleanup();
+  // A stored session can still prove the missing charge: retry stays available.
+  effects.order.mockResolvedValue({
+    ...order,
+    expectedMinorAmount: null,
+    stripeSessionId: "cs_test_legacy",
+    paymentState: null,
+    quoteAcceptedAt: null,
+  });
+  render(
+    await OrderDetailPage({
+      params: Promise.resolve({ id: "local-order" }),
+      searchParams: Promise.resolve({}),
+    }),
+  );
+  expect(screen.getByRole("button", { name: "Pay now" })).toBeDefined();
+});
 it.each(["UNPAID", "PROCESSING", "REFUNDED", "DISPUTED", null])(
   "checkout success cannot turn persisted %s into payment confirmation",
   async (paymentState) => {
@@ -347,6 +453,34 @@ it("held and processing orders cannot present Pay now; known paid state confirms
     }),
   );
   expect(screen.queryByRole("button", { name: "Pay now" })).toBeNull();
+  cleanup();
+  // An unheld PROCESSING order is still mid-transfer: no second charge offer.
+  effects.order.mockResolvedValue({
+    ...order,
+    paymentState: "PROCESSING",
+    paymentHold: false,
+  });
+  render(
+    await OrderDetailPage({
+      params: Promise.resolve({ id: "local-order" }),
+      searchParams: Promise.resolve({}),
+    }),
+  );
+  expect(screen.queryByRole("button", { name: "Pay now" })).toBeNull();
+  cleanup();
+  // Otherwise identical payable UNPAID control isolates the restriction.
+  effects.order.mockResolvedValue({
+    ...order,
+    paymentState: "UNPAID",
+    paymentHold: false,
+  });
+  render(
+    await OrderDetailPage({
+      params: Promise.resolve({ id: "local-order" }),
+      searchParams: Promise.resolve({}),
+    }),
+  );
+  expect(screen.getByRole("button", { name: "Pay now" })).toBeDefined();
   cleanup();
   effects.order.mockResolvedValue({
     ...order,

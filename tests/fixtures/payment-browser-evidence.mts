@@ -8,10 +8,12 @@ import { projectPayment, type CanonicalPaymentProof } from '../../src/lib/orders
 const action = process.argv[2];
 try {
   if (action === 'seed') {
-    const password = 'Local-payment-evidence-42!';
-    const admin = await createUser('ADMIN', await hash(password, 10));
-    const customer = await createUser('USER', await hash(password, 10));
     try {
+      // Both identities are created inside the cleanup scope: if the customer
+      // insert fails, the tracked admin is removed instead of leaking.
+      const password = 'Local-payment-evidence-42!';
+      const admin = await createUser('ADMIN', await hash(password, 10));
+      const customer = await createUser('USER', await hash(password, 10));
       const { order } = await createOrderForUser(customer.id, { currency: 'EUR', status: 'SHIPPED', vaultAddOn: true, title: 'Batch 5 isolated financial evidence' });
       await db.order.update({ where: { id: order.id }, data: { expectedMinorAmount: 2740 } });
       const attempt = await db.paymentAttempt.create({ data: { orderId: order.id, sequence: 1,
@@ -74,7 +76,7 @@ try {
       await tx.asset.deleteMany({ where: { userId: { in: ids } } });
       await tx.rateLimitBucket.deleteMany({ where: { bucketKey: { in: users.flatMap(user => [
         `login:${user.email}`, `forgot:email:${user.email}`,
-        ...['submission:user', 'quote:user', 'order:user', 'pay:user', 'ai-book:user', 'payment-review:admin'].map(prefix => `${prefix}:${user.id}`),
+        ...['submission:user', 'quote:user', 'order:user', 'order-request:user', 'pay:user', 'ai-book:user', 'payment-review:admin'].map(prefix => `${prefix}:${user.id}`),
       ]) } } });
       await tx.user.deleteMany({ where: { id: { in: ids } } });
     });

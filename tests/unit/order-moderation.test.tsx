@@ -17,6 +17,8 @@ const order = {
   quantity: 1,
   zone: "HU",
   totalHuf: 6000,
+  currency: "EUR",
+  expectedMinorAmount: 3260,
   vaultAddOn: true,
   vaultFeeHuf: 2000,
   notes: null,
@@ -87,6 +89,7 @@ it("submits trimmed evidence and revision, but never sends an operator or Stripe
   confirm();
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
   await waitFor(() => expect(patch).toHaveBeenCalledTimes(1));
+  expect(patch.mock.calls[0][0]).toBe("/api/admin/orders/controlled-order");
   const body = JSON.parse(String(patch.mock.calls[0][1]?.body));
   expect(body).toEqual({
     status: "PAID",
@@ -204,12 +207,20 @@ it("keeps unmatched and held events visible across fulfillment filters and opens
           ],
         });
       }
-      return Response.json({ orders: [order] });
+      // Honor the fulfillment filter so a dead SHIPPED button cannot pass:
+      // the pending order must leave the list while events stay visible.
+      const status = new URL(input, "http://localhost").searchParams.get("status");
+      return Response.json({
+        orders: status ? [order].filter(row => row.status === status) : [order],
+      });
     }),
   );
   render(<OrderModeration />);
   await screen.findByText("Unresolved payment events (104)");
   fireEvent.click(screen.getByRole("button", { name: "SHIPPED" }));
+  await waitFor(() =>
+    expect(screen.queryByRole("button", { name: "Update" })).toBeNull()
+  );
   expect(screen.getByText(/Showing 2 of 104/)).toBeDefined();
   expect(screen.getByText(/Unmatched — retained/)).toBeDefined();
   fireEvent.click(
@@ -239,4 +250,190 @@ it("failed order/financial queue loads do not invent empty-success states and ex
   expect(
     screen.getByRole("button", { name: "Reload orders and payment queue" }),
   ).toBeDefined();
+});
+it("shows the accepted charge before manual settlement confirmation", async () => {
+  await editPaid();
+  expect(screen.getByText(/Accepted charge:/).textContent)
+    .toContain("32.60 EUR");
+});
+it("fences a stale edit when a queue reload replaces the row mid-edit", async () => {
+  let finishReload!: (response: Response) => void;
+  let reloadPending = false;
+  const newer = {
+    ...order,
+    notes: "newer operator notes",
+    updatedAt: "2026-01-02T00:00:00.000Z",
+  };
+  const fetchMock = vi.fn(async (input: string, init?: RequestInit) => {
+    if (init?.method === "PATCH") return patch(input, init);
+    if (input.includes("payment-alerts")) return Response.json({ alerts: [] });
+    if (reloadPending) {
+      // The post-save reload stays in flight until another operator's newer
+      // row is ready to replace the one the next edit starts from.
+      return new Promise<Response>((resolve) => {
+        finishReload = resolve;
+      });
+    }
+    return Response.json({ orders: [order] });
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  render(<OrderModeration />);
+  fireEvent.click(await screen.findByRole("button", { name: "Update" }));
+  fireEvent.change(screen.getByLabelText("Internal notes"), {
+    target: { value: "first save" },
+  });
+  reloadPending = true;
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(patch).toHaveBeenCalledTimes(1));
+  // Start a new edit from the still-current row, then let the reload land
+  // with a newer revision while the draft is open.
+  fireEvent.click(await screen.findByRole("button", { name: "Update" }));
+  finishReload(Response.json({ orders: [newer] }));
+  await waitFor(() =>
+    expect(
+      fetchMock.mock.calls.filter((call) =>
+        String(call[0]).startsWith("/api/admin/orders") &&
+        !(call[1] as RequestInit | undefined)?.method
+      ).length,
+    ).toBeGreaterThanOrEqual(2)
+  );
+  fireEvent.change(screen.getByLabelText("Internal notes"), {
+    target: { value: "stale draft" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  expect((await screen.findByRole("alert")).textContent)
+    .toContain("changed since you started editing");
+  expect(patch).toHaveBeenCalledTimes(1);
+});
+it("keeps the edit draft when payment history is opened and closed", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: string, init?: RequestInit) => {
+      if (init?.method === "PATCH") return patch(input, init);
+      if (input.endsWith("/payment")) {
+        return Response.json({
+          order: {
+            ...order,
+            paymentState: null,
+            paymentHold: false,
+            paymentSummary: null,
+            paymentAttempts: [],
+            paymentEvents: [],
+          },
+        });
+      }
+      return Response.json(
+        input.includes("payment-alerts") ? { alerts: [] } : { orders: [order] },
+      );
+    }),
+  );
+  render(<OrderModeration />);
+  fireEvent.click(await screen.findByRole("button", { name: "Update" }));
+  fireEvent.change(screen.getByLabelText("Internal notes"), {
+    target: { value: "unsaved draft" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Payment history" }));
+  await screen.findByRole("region", { name: "Payment history" });
+  fireEvent.click(screen.getByRole("button", { name: "Close history" }));
+  expect(
+    (screen.getByLabelText("Internal notes") as HTMLTextAreaElement).value,
+  ).toBe("unsaved draft");
+  expect(screen.getByRole("button", { name: "Save" })).toBeDefined();
+});
+it("a dismissed alert is not restored by an in-flight queue snapshot", async () => {
+  const alert = {
+    id: "alert-1",
+    orderId: order.id,
+    kind: "stale-session",
+    message: "Superseded session retained",
+    occurrences: 1,
+    firstSeenAt: "2026-01-01T00:00:00.000Z",
+    lastSeenAt: "2026-01-01T00:00:00.000Z",
+  };
+  let releaseStale!: (response: Response) => void;
+  let queueCalls = 0;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: string, init?: RequestInit) => {
+      if (init?.method === "PATCH") {
+        return Response.json(
+          input.includes("payment-alerts") ? { resolved: true } : { order },
+        );
+      }
+      if (input.includes("payment-alerts")) {
+        queueCalls += 1;
+        if (queueCalls === 2) {
+          // Snapshot captured before the dismissal; resolves after it.
+          return new Promise<Response>((resolve) => {
+            releaseStale = resolve;
+          });
+        }
+        return Response.json(
+          queueCalls === 1
+            ? { alerts: [alert], events: [], eventCount: 0 }
+            : { alerts: [], events: [], eventCount: 0 },
+        );
+      }
+      return Response.json({ orders: [order] });
+    }),
+  );
+  render(<OrderModeration />);
+  await screen.findByRole("button", { name: "Dismiss" });
+  // A successful order save starts a queue reload that stays in flight.
+  fireEvent.click(screen.getByRole("button", { name: "Update" }));
+  fireEvent.change(screen.getByLabelText("Internal notes"), {
+    target: { value: "operator note" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(queueCalls).toBe(2));
+  fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+  // The dismissal must cancel the stale snapshot and refetch the queue.
+  await waitFor(() => expect(queueCalls).toBeGreaterThanOrEqual(3));
+  releaseStale(Response.json({ alerts: [alert], events: [], eventCount: 0 }));
+  await waitFor(() =>
+    expect(screen.queryByText("Superseded session retained")).toBeNull()
+  );
+});
+it("pages older unresolved events so the oldest unmatched event stays reachable", async () => {
+  const newest = {
+    id: "evt-new",
+    orderId: null,
+    providerEventId: "evt_new",
+    type: "charge.refunded",
+    status: "UNMATCHED",
+    source: "SIGNED_WEBHOOK",
+    objectId: "ch_new",
+    createdAt: "2026-01-02T00:00:00.000Z",
+  };
+  const oldest = {
+    ...newest,
+    id: "evt-old",
+    providerEventId: "evt_old",
+    objectId: "ch_old",
+    createdAt: "2026-01-01T00:00:00.000Z",
+  };
+  const urls: string[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: string) => {
+      urls.push(input);
+      if (input.includes("payment-alerts")) {
+        return Response.json(
+          input.includes("olderThan")
+            ? { alerts: [], events: [oldest], eventCount: 104 }
+            : { alerts: [], events: [newest], eventCount: 104 },
+        );
+      }
+      return Response.json({ orders: [order] });
+    }),
+  );
+  render(<OrderModeration />);
+  await screen.findByText("Unresolved payment events (104)");
+  fireEvent.click(screen.getByRole("button", { name: "Show older events" }));
+  await screen.findByText(/Showing 2 of 104/);
+  expect(screen.getAllByText(/Unmatched — retained/)).toHaveLength(2);
+  const paging = urls.find((url) => url.includes("olderThan"));
+  expect(paging).toContain(
+    `olderThan=${encodeURIComponent(newest.createdAt)}`,
+  );
 });

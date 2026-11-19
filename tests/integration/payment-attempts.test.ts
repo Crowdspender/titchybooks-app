@@ -126,10 +126,39 @@ it('does not reissue an unknown pre-migration request even when its amount is kn
   await expect(preparePaymentAttempt(created.order.id, 'Émilie')).rejects.toMatchObject({ code: 'PAYMENT_REVIEW_REQUIRED' });
   expect(provider.create).not.toHaveBeenCalled();
 });
-it('increments the reconciliation revision on an ambiguous failure', async () => {
+it('leaves an unstarted attempt intact when account lookup fails, then retries cleanly', async () => {
   const { order } = await fixture(); const attempt = await preparePaymentAttempt(order.id, 'Émilie');
   const revision = (await db.order.findUniqueOrThrow({ where: { id: order.id } })).paymentRevision;
   provider.account.mockRejectedValueOnce(new Error('Synthetic account timeout'));
-  await expect(issuePaymentAttempt(attempt.id)).rejects.toThrow();
-  expect((await db.order.findUniqueOrThrow({ where: { id: order.id } })).paymentRevision).toBeGreaterThan(revision + 1);
+  await expect(issuePaymentAttempt(attempt.id)).rejects.toThrow('Synthetic account timeout');
+  // No provider request started: the attempt must stay PREPARED and retryable,
+  // not be condemned to REVIEW/AMBIGUOUS or bump the reconciliation revision.
+  expect(await db.paymentAttempt.findUniqueOrThrow({ where: { id: attempt.id } })).toMatchObject({
+    status: 'PREPARED', requestStartedAt: null, sessionId: null, providerAccountId: null });
+  expect(await db.order.findUniqueOrThrow({ where: { id: order.id } })).toMatchObject({ paymentRevision: revision, paymentHold: false });
+  expect(provider.create).not.toHaveBeenCalled();
+  await issuePaymentAttempt(attempt.id);
+  expect(provider.create).toHaveBeenCalledTimes(1);
+});
+it('never rebinds a competing account committed during the account lookup', async () => {
+  const { order } = await fixture(); const attempt = await preparePaymentAttempt(order.id, 'Émilie');
+  provider.account.mockImplementationOnce(async () => {
+    // A competing writer binds a different account while our lookup is in flight.
+    await db.paymentAttempt.update({ where: { id: attempt.id }, data: { providerAccountId: 'acct_competitor' } });
+    return { accountId: 'acct_synthetic', livemode: false };
+  });
+  await expect(issuePaymentAttempt(attempt.id)).rejects.toMatchObject({ code: 'PAYMENT_REVIEW_REQUIRED' });
+  expect(provider.create).not.toHaveBeenCalled();
+  expect(await db.paymentAttempt.findUniqueOrThrow({ where: { id: attempt.id } })).toMatchObject({
+    providerAccountId: 'acct_competitor', sessionId: null, requestStartedAt: null });
+});
+it('rejects a hold placed after preparation without condemning the unstarted attempt', async () => {
+  const { order } = await fixture(); const attempt = await preparePaymentAttempt(order.id, 'Émilie');
+  await db.order.update({ where: { id: order.id }, data: { paymentHold: true } });
+  await expect(issuePaymentAttempt(attempt.id)).rejects.toMatchObject({ code: 'PAYMENT_REVIEW_REQUIRED' });
+  expect(provider.account).not.toHaveBeenCalled(); expect(provider.create).not.toHaveBeenCalled();
+  expect(await db.paymentAttempt.findUniqueOrThrow({ where: { id: attempt.id } })).toMatchObject({ status: 'PREPARED', requestStartedAt: null });
+  await db.order.update({ where: { id: order.id }, data: { paymentHold: false } });
+  await issuePaymentAttempt(attempt.id);
+  expect(provider.create).toHaveBeenCalledTimes(1);
 });

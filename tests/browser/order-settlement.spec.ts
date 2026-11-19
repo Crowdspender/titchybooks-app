@@ -112,11 +112,16 @@ test('settlement controls retain usable widths and stay reachable in the desktop
     await region.evaluate(element => { element.scrollLeft = element.scrollWidth; });
     const bounds = await region.boundingBox();
     expect(bounds).not.toBeNull();
+    // The scroll container can extend past the viewport edge on mobile; the
+    // controls must fit inside the portion that is actually visible.
+    const viewport = page.viewportSize()!;
+    const visibleLeft = Math.max(bounds!.x, 0);
+    const visibleRight = Math.min(bounds!.x + bounds!.width, viewport.width);
     for (const control of [row.getByLabel('Payment evidence / reference'), row.getByRole('checkbox'), row.getByRole('button', { name: 'Save', exact: true }), row.getByRole('button', { name: 'Cancel', exact: true })]) {
       const box = await control.boundingBox();
       expect(box).not.toBeNull();
-      expect(box!.x).toBeGreaterThanOrEqual(bounds!.x);
-      expect(box!.x + box!.width).toBeLessThanOrEqual(bounds!.x + bounds!.width);
+      expect(box!.x).toBeGreaterThanOrEqual(visibleLeft);
+      expect(box!.x + box!.width).toBeLessThanOrEqual(visibleRight);
     }
     expect((await row.getByLabel('Payment evidence / reference').boundingBox())!.width).toBeGreaterThanOrEqual(250);
     await testInfo.attach(`Manual settlement ${width}px`, { body: await page.screenshot({ path: `test-results/batch3-manual-${width}.png`, fullPage: true }), contentType: 'image/png' });
@@ -163,16 +168,21 @@ test('payment history reads real minimized records, shows holds and surfaces una
   for (const width of [1600, 390]) {
     await page.setViewportSize({ width, height: 1000 });
     const queue = page.getByRole('region', { name: 'Unresolved payment events' });
+    const viewport = page.viewportSize()!;
     const queueBounds = (await queue.boundingBox())!;
+    const queueLeft = Math.max(queueBounds.x, 0);
+    const queueRight = Math.min(queueBounds.x + queueBounds.width, viewport.width);
     const reviewBounds = (await queue.getByRole('button', { name: `Review payment for order ${order.id}`, exact: true }).boundingBox())!;
-    expect(reviewBounds.x).toBeGreaterThanOrEqual(queueBounds.x);
-    expect(reviewBounds.x + reviewBounds.width).toBeLessThanOrEqual(queueBounds.x + queueBounds.width);
+    expect(reviewBounds.x).toBeGreaterThanOrEqual(queueLeft);
+    expect(reviewBounds.x + reviewBounds.width).toBeLessThanOrEqual(queueRight);
     await page.evaluate(() => window.scrollTo(0, 0));
     await testInfo.attach(`Payment history ${width}px`, { body: await page.screenshot({ path: `test-results/batch5-history-${width}.png`, fullPage: true }), contentType: 'image/png' });
     const bounds = await panel.boundingBox();
+    const panelLeft = Math.max(bounds!.x, 0);
+    const panelRight = Math.min(bounds!.x + bounds!.width, viewport.width);
     for (const control of [panel.getByLabel('Review explanation'), panel.getByRole('checkbox'), panel.getByRole('button', { name: 'Release reviewed hold' })]) {
       const box = await control.boundingBox(); expect(box).not.toBeNull();
-      expect(box!.x).toBeGreaterThanOrEqual(bounds!.x); expect(box!.x + box!.width).toBeLessThanOrEqual(bounds!.x + bounds!.width);
+      expect(box!.x).toBeGreaterThanOrEqual(panelLeft); expect(box!.x + box!.width).toBeLessThanOrEqual(panelRight);
     }
   }
   const failure = page.waitForResponse(res => res.url().endsWith(`/api/admin/orders/${order.id}/payment`) && res.request().method() === 'POST');

@@ -103,6 +103,9 @@ export default function OrderPaymentHistory({ orderId, onClose, onChanged }: {
     setError("");
     setNotice("");
     setFresh(false);
+    // A lost response or 5xx leaves the server outcome unknown; a 4xx is a
+    // definitive rejection that keeps the manual reload path.
+    let outcomeUnknown = true;
     try {
       const response = await fetch(`/api/admin/orders/${orderId}/payment`, {
         method: "POST",
@@ -119,6 +122,7 @@ export default function OrderPaymentHistory({ orderId, onClose, onChanged }: {
         ),
       });
       const data = await response.json().catch(() => ({}));
+      outcomeUnknown = response.status >= 500;
       if (!response.ok) {
         throw new Error(
           data.error ||
@@ -139,6 +143,14 @@ export default function OrderPaymentHistory({ orderId, onClose, onChanged }: {
           ? failure.message
           : "The action could not be confirmed. Reload history.",
       );
+      if (outcomeUnknown) {
+        // The action may already have committed (a recorded dispute hold whose
+        // response was lost): reload history and refresh the parent list now,
+        // so moderation never resumes on a stale row after history closes.
+        // Financial controls stay disabled until the reload marks facts fresh.
+        setReload((value) => value + 1);
+        onChanged();
+      }
     } finally {
       setConfirmed(false);
       lock.current = false;

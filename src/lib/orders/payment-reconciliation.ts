@@ -3,7 +3,7 @@ import { Prisma } from '@prisma/client';
 import type { PaymentAttempt, PaymentEvent } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { isCurrency } from '@/lib/pricing/currency';
-import { retrieveOrderCheckoutSession, retrieveStripeAccountContext } from '@/lib/stripe';
+import { expireCheckoutSession, retrieveOrderCheckoutSession, retrieveStripeAccountContext } from '@/lib/stripe';
 import { applyOrderLifecycle } from './lifecycle';
 import { readCanonicalAttempt, ProviderSnapshotChanged, type ProviderContext } from './payment-provider';
 import { projectPayment, type CanonicalPaymentProof } from './payment-state';
@@ -56,6 +56,25 @@ export async function importLegacyPaymentAttempt(orderId: string, context?: Prov
   });
 }
 
+/** Manual settlement must not leave a payable Checkout session behind. Close an
+ * open unpaid session first; a started/completed payment must be reconciled, and
+ * a held order is left for the lifecycle guard to reject without provider writes.
+ * All provider I/O happens here, outside the settlement transaction.
+ */
+export async function closeCheckoutSessionForManualSettlement(orderId: string): Promise<void> {
+  const order = await prisma.order.findUnique({ where: { id: orderId },
+    select: { id: true, status: true, paymentHold: true, stripeSessionId: true, currency: true } });
+  if (!order?.stripeSessionId || order.status !== 'PENDING_PAYMENT' || order.paymentHold || !isCurrency(order.currency)) return;
+  const session = await retrieveOrderCheckoutSession(order.stripeSessionId, order.id, order.currency);
+  if (session.payment_status === 'paid' || session.status === 'complete') {
+    throw new PaymentReviewRequired('A Stripe payment is already in progress. Reconcile it before recording a manual settlement.');
+  }
+  if (session.status === 'open') {
+    try { await expireCheckoutSession(session.id); }
+    catch { throw new PaymentReviewRequired('The checkout session changed while closing it. Reconcile the payment before recording a manual settlement.'); }
+  }
+}
+
 /** An event is a wake-up/reference hint, not a payment balance. Compare only
  * stable IDs/context to the fresh canonical snapshot, never old event totals.
  */
@@ -65,7 +84,10 @@ function eventReasons(event: PaymentEvent, proofs: CanonicalPaymentProof[], cont
   if (event.providerAccountId && event.providerAccountId !== context.accountId) reasons.push('event-account-mismatch');
   if (event.source !== 'SIGNED_WEBHOOK') return reasons;
   const data = event.data as Record<string, unknown>;
-  const matching = proofs.filter(p => p.attemptId === event.attemptId || p.sessionId === data.sessionId ||
+  // Two absent session IDs are not a reference: a standalone charge without a
+  // Checkout Session must never match a sessionless PREPARED attempt.
+  const matching = proofs.filter(p => p.attemptId === event.attemptId ||
+    (p.sessionId && data.sessionId && p.sessionId === data.sessionId) ||
     (p.paymentIntentId && p.paymentIntentId === data.paymentIntentId) ||
     p.refunds.some(r => r.id === event.objectId) || p.disputes.some(d => d.id === event.objectId));
   if (!matching.length) reasons.push('unknown-provider-reference');
@@ -89,7 +111,7 @@ function eventReasons(event: PaymentEvent, proofs: CanonicalPaymentProof[], cont
  * review or competing reconciliation changed the order revision in the meantime.
  * All known earlier attempts participate, not only Order.stripeSessionId.
  */
-export async function reconcileOrderPayment(orderId: string) {
+export async function reconcileOrderPayment(orderId: string, auditEventId?: string) {
   for (let retry = 0; retry < 4; retry++) {
     try {
       const context = await retrieveStripeAccountContext();
@@ -123,10 +145,14 @@ export async function reconcileOrderPayment(orderId: string) {
             status: proof.reviewReasons.length ? 'REVIEW' : proof.status, providerSnapshot: json(proof), failureCode: null,
           } });
         }
+        // A verified open session on the latest attempt becomes the current
+        // pointer; an expired predecessor must not block resuming its replacement.
+        const latestProof = proofs.at(-1);
+        const recoveredSession = latestProof?.sessionId && !latestProof.reviewReasons.length &&
+          (latestProof.status === 'OPEN' || !current.stripeSessionId) ? latestProof.sessionId : null;
         await tx.order.update({ where: { id: orderId }, data: { paymentState: projection.state, paymentHold: projection.hold,
           paymentSummary: json(projection.summary), paymentRevision: { increment: 1 },
-          // Recover an unpublished current session without superseding newer ones.
-          ...(!current.stripeSessionId && proofs.at(-1)?.sessionId ? { stripeSessionId: proofs.at(-1)!.sessionId } : {}),
+          ...(recoveredSession && current.stripeSessionId !== recoveredSession ? { stripeSessionId: recoveredSession } : {}),
         } });
         let settled = false;
         if (projection.canSettle || (projection.state === 'PAID' && !projection.hold &&
@@ -135,11 +161,22 @@ export async function reconcileOrderPayment(orderId: string) {
           if (!result.ok) throw new Error('Canonical settlement conflict');
           settled = result.settled;
         }
-        for (const { event, reasons } of reasonsByEvent) await tx.paymentEvent.update({ where: { id: event.id }, data: {
-          status: reasons.length || projection.hold ? 'REVIEW' : 'PROCESSED', processedAt: new Date(),
-          outcome: JSON.stringify({ fingerprint: projection.summary.fingerprint, state: projection.state, reasons, settled })
-        } });
-        return { ...projection, settled };
+        for (const { event, reasons } of reasonsByEvent) {
+          const status = reasons.length || projection.hold ? 'REVIEW' : 'PROCESSED';
+          // Keep the first completed outcome and timestamp: a later clean
+          // delivery must not rewrite the record of the delivery that settled.
+          if (event.status === 'PROCESSED' && status === 'PROCESSED') continue;
+          await tx.paymentEvent.update({ where: { id: event.id }, data: {
+            status, processedAt: new Date(),
+            outcome: JSON.stringify({ fingerprint: projection.summary.fingerprint, state: projection.state, reasons, settled })
+          } });
+        }
+        // The operator audit commits with the settlement it describes; a later
+        // separate update could report failure after settlement already committed.
+        if (auditEventId) await tx.paymentEvent.update({ where: { id: auditEventId }, data: {
+          status: projection.hold ? 'REVIEW' : 'PROCESSED', processedAt: new Date(),
+          outcome: JSON.stringify({ state: projection.state, fingerprint: projection.summary.fingerprint, settled }) } });
+        return { ...projection, settled, revision: current.paymentRevision + 1 };
       });
       if (published) return published;
     } catch (error) {
@@ -163,12 +200,14 @@ export async function recordAdminReconciliation(orderId: string, operatorId: str
     return recorded;
   });
   try {
-    const result = await reconcileOrderPayment(orderId);
-    await prisma.paymentEvent.update({ where: { id: event.id }, data: { status: result.hold ? 'REVIEW' : 'PROCESSED',
-      processedAt: new Date(), outcome: JSON.stringify({ state: result.state, fingerprint: result.summary.fingerprint, settled: result.settled }) } });
-    return result;
+    return await reconcileOrderPayment(orderId, event.id);
   } catch (error) {
-    await prisma.paymentEvent.update({ where: { id: event.id }, data: { status: 'FAILED', processedAt: new Date(), outcome: 'CANONICAL_RECONCILIATION_FAILED' } });
+    // An ambiguous commit may already have finalized the audit row inside the
+    // publish transaction; never overwrite a committed outcome with FAILED.
+    const stored = await prisma.paymentEvent.findUnique({ where: { id: event.id } });
+    if (!stored || stored.status === 'RECEIVED' || stored.status === 'FAILED') {
+      await prisma.paymentEvent.update({ where: { id: event.id }, data: { status: 'FAILED', processedAt: new Date(), outcome: 'CANONICAL_RECONCILIATION_FAILED' } });
+    }
     throw error;
   }
 }
@@ -179,13 +218,16 @@ export async function recordAdminReconciliation(orderId: string, operatorId: str
 export async function releasePaymentHold(orderId: string, operatorId: string, fingerprint: string, explanation: string) {
   if (!operatorId.trim() || !/^[a-f0-9]{64}$/.test(fingerprint) || explanation.trim().length < 10 || explanation.trim().length > 1000) throw new PaymentReviewRequired();
   // Fresh canonical fetch prevents releasing an already obsolete refund/dispute.
-  await reconcileOrderPayment(orderId);
+  const reconciled = await reconcileOrderPayment(orderId);
   return prisma.$transaction(async tx => {
     await tx.$queryRaw`SELECT "id" FROM "Order" WHERE "id" = ${orderId} FOR UPDATE`;
     const order = await tx.order.findUniqueOrThrow({ where: { id: orderId } });
     const summary = order.paymentSummary as Record<string, unknown> | null;
     const pendingEvents = await tx.paymentEvent.count({ where: { orderId, source: 'SIGNED_WEBHOOK', status: { in: ['RECEIVED', 'FAILED'] } } });
-    if (!order.paymentHold || pendingEvents || summary?.fingerprint !== fingerprint) throw new PaymentReviewRequired('Payment facts changed. Reconcile and review the current history.');
+    // A newer reconciliation hold committed after the canonical read must survive
+    // this release even when its failed fetch left the fingerprint unchanged.
+    if (!order.paymentHold || pendingEvents || order.paymentRevision !== reconciled.revision ||
+        summary?.fingerprint !== fingerprint) throw new PaymentReviewRequired('Payment facts changed. Reconcile and review the current history.');
     const data = { operatorId, fingerprint, explanation: explanation.trim() };
     await tx.paymentEvent.create({ data: { providerEventId: `review:${randomUUID()}`, source: 'ADMIN_REVIEW',
       type: 'fulfillment.hold_released', orderId, data, dataDigest: digest(data), status: 'PROCESSED', processedAt: new Date() } });

@@ -239,7 +239,11 @@ describe('POST /api/orders/[id]/pay', () => {
     expect((await pay(request(order.id), params(order.id))).status).toBe(200);
     const calls = vi.mocked(createCheckoutSession).mock.calls;
     expect(calls[0][0].providerRequest).toEqual(calls[1][0].providerRequest);
-    expect(calls[0][0].idempotencyKey).toBe(calls[1][0].idempotencyKey);
+    // Equality alone would pass if both calls omitted the key: pin both to the
+    // nonblank key persisted on the durable attempt.
+    expect(first.idempotencyKey).toBeTruthy();
+    expect(calls[0][0].idempotencyKey).toBe(first.idempotencyKey);
+    expect(calls[1][0].idempotencyKey).toBe(first.idempotencyKey);
     expect(await db.paymentAttempt.count({ where: { orderId: order.id } })).toBe(1);
     expect(retrieveOrderCheckoutSession).not.toHaveBeenCalled();
   });
@@ -265,6 +269,19 @@ describe('POST /api/orders/[id]/pay', () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ checkoutUrl: null, paymentState: patch.state });
     expect(createCheckoutSession).not.toHaveBeenCalled();
+  });
+  it('confirms collected payment before a missing shipping policy can block the retry', async () => {
+    const { user, order } = await createPendingOrder({ stripeSessionId: 'cs_test_existing' });
+    session.user = { id: user.id, role: 'USER', email: user.email };
+    vi.stubEnv('ORDER_SHIPPING_POLICY_JSON', '');
+    vi.mocked(retrieveOrderCheckoutSession).mockResolvedValue({ id: 'cs_test_existing', client_reference_id: order.id, metadata: { orderId: order.id },
+      mode: 'payment', livemode: false, currency: 'huf', amount_total: 400000, url: null, status: 'complete', payment_status: 'paid',
+    } as unknown as Awaited<ReturnType<typeof retrieveOrderCheckoutSession>>);
+    const response = await pay(request(order.id), params(order.id));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ checkoutUrl: null, paymentState: 'PAID' });
+    expect(createCheckoutSession).not.toHaveBeenCalled();
+    expect(await db.order.findUniqueOrThrow({ where: { id: order.id } })).toMatchObject({ status: 'PAID' });
   });
   it('does not redirect held orders or trust a downgraded administrator claim', async () => {
     const { order } = await createPendingOrder();

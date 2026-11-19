@@ -10,10 +10,10 @@ import { processSignedPaymentEvent, recordSignedPaymentEvent } from '@/lib/order
 import { applyOrderLifecycle } from '@/lib/orders/lifecycle';
 import { ProviderSnapshotChanged } from '@/lib/orders/payment-provider';
 import type { CanonicalPaymentProof } from '@/lib/orders/payment-state';
-const provider = vi.hoisted(() => ({ read: vi.fn(), legacy: vi.fn(), account: vi.fn(), intent: vi.fn(), charge: vi.fn(), fault: false }));
+const provider = vi.hoisted(() => ({ read: vi.fn(), legacy: vi.fn(), account: vi.fn(), intent: vi.fn(), charge: vi.fn(), sessions: vi.fn(), fault: false, holdRace: false, holdRaceDone: null as null | Promise<void> }));
 vi.mock('@/lib/stripe', async original => ({ ...await original<typeof import('@/lib/stripe')>(),
   retrieveStripeAccountContext: provider.account, retrieveOrderCheckoutSession: provider.legacy,
-  getStripeClient: () => ({ paymentIntents: { retrieve: provider.intent }, charges: { retrieve: provider.charge } }),
+  getStripeClient: () => ({ checkout: { sessions: { list: provider.sessions } }, paymentIntents: { retrieve: provider.intent }, charges: { retrieve: provider.charge } }),
 }));
 vi.mock('@/lib/orders/payment-provider', async original => ({ ...await original<typeof import('@/lib/orders/payment-provider')>(), readCanonicalAttempt: provider.read }));
 vi.mock('@/lib/prisma', async () => {
@@ -21,6 +21,22 @@ vi.mock('@/lib/prisma', async () => {
   return { prisma: db.$extends({ query: { vaultEntry: { async upsert({ args, query }) {
     const row = await query(args);
     if (provider.fault) { provider.fault = false; throw new Error('Injected post-Vault failure'); }
+    return row;
+  } }, order: { async update({ args, query }) {
+    const row = await query(args);
+    // Simulate a newer admin reconciliation hold committing right after this
+    // publish: its provider read fails, so the fingerprint stays unchanged.
+    if (provider.holdRace && args.data.paymentState !== undefined) {
+      provider.holdRace = false;
+      // Queue behind this publish's order lock without awaiting it: the separate
+      // connection commits right after the publish, ahead of the release lock.
+      provider.holdRaceDone = (async () => {
+        await db.order.update({ where: { id: args.where.id }, data: { paymentHold: true, paymentRevision: { increment: 1 } } });
+        await db.paymentEvent.create({ data: { providerEventId: `admin:holdrace:${Date.now()}`, source: 'ADMIN_RECONCILIATION',
+          type: 'canonical.reconciliation', orderId: args.where.id, data: { operatorId: 'race' }, dataDigest: 'holdrace',
+          status: 'FAILED', processedAt: new Date(), outcome: 'CANONICAL_RECONCILIATION_FAILED' } });
+      })();
+    }
     return row;
   } } } }) };
 });
@@ -46,8 +62,10 @@ beforeEach(() => {
       refunds: [], disputes: [], reviewReasons: [], ...facts.get(attempt.id) } satisfies CanonicalPaymentProof;
   });
   provider.legacy.mockImplementation(async (id: string, orderId: string) => ({ id, amount_total: 2740, livemode: false, metadata: { orderId } }));
+  provider.sessions.mockResolvedValue({ data: [], has_more: false });
+  provider.intent.mockResolvedValue({ metadata: {} });
 });
-afterEach(async () => { provider.fault = false; facts.clear(); await cleanupFixtures(); vi.unstubAllEnvs(); vi.resetAllMocks(); });
+afterEach(async () => { provider.fault = false; provider.holdRace = false; if (provider.holdRaceDone) { await provider.holdRaceDone; provider.holdRaceDone = null; } facts.clear(); await cleanupFixtures(); vi.unstubAllEnvs(); vi.resetAllMocks(); });
 async function fixture(vaultAddOn = true) {
   const created = await createPendingOrderWithUser({ currency: 'EUR', vaultAddOn });
   await db.order.update({ where: { id: created.order.id }, data: { expectedMinorAmount: 2740, paymentState: 'UNPAID' } });
@@ -180,6 +198,42 @@ it('retains unmatched and unrelated events with no invented order', async () => 
   const unrelated = event(attempt, { type: 'customer.created' }); await tracked(unrelated);
   expect((await processSignedPaymentEvent(unrelated)).status).toBe('IGNORED');
 });
+it.each(['refund.updated', 'charge.dispute.created'] as const)('associates a legacy %s through the provider intent→session link', async type => {
+  const sessionId = `cs_legacy_${++serial}`;
+  const { order } = await createPendingOrderWithUser({ currency: 'EUR', stripeSessionId: sessionId });
+  const intentId = `pi_legacy_${serial}`;
+  // A pre-migration intent carries no order metadata; only the provider's own
+  // intent→session list plus our recorded session→order reference can bind it.
+  provider.intent.mockResolvedValue({ metadata: {} });
+  provider.sessions.mockResolvedValue({ data: [{ id: sessionId }], has_more: false });
+  const object = type === 'refund.updated'
+    ? { object: 'refund', id: 're_legacy', charge: 'ch_legacy', payment_intent: intentId, amount: 100, currency: 'eur', status: 'succeeded' }
+    : { object: 'dispute', id: 'dp_legacy', charge: 'ch_legacy', payment_intent: intentId, amount: 2740, currency: 'eur', status: 'needs_response' };
+  const delivery = { id: `evt_${randomUUID()}`, type, created: Math.floor(Date.now() / 1000), livemode: false, data: { object } } as Stripe.Event;
+  await tracked(delivery);
+  const processed = await processSignedPaymentEvent(delivery);
+  expect(processed.orderId).toBe(order.id);
+  expect(processed.status).not.toBe('UNMATCHED');
+  expect(await state(order.id)).toMatchObject({ paymentHold: true });
+});
+it('does not clobber a concurrently matched delivery when a later lookup finds nothing', async () => {
+  const { order, attempt } = await fixture();
+  facts.set(attempt.id, { disputes: [{ id: 'dp_race', chargeId: 'ch_race', amountMinor: 2740, currency: 'EUR', status: 'won' }] });
+  const delivery = event(attempt, { type: 'charge.dispute.created' });
+  delivery.data.object = { object: 'dispute', id: 'dp_race', payment_intent: `pi_${attempt.id}`, charge: 'ch_race',
+    amount: 2740, currency: 'eur', status: 'won' } as Stripe.Dispute;
+  let aReady!: () => void; const aGated = new Promise<void>(resolve => { aReady = resolve; });
+  let release!: () => void; const gate = new Promise<void>(resolve => { release = resolve; });
+  provider.intent.mockImplementationOnce(async () => { aReady(); await gate; return { metadata: {} }; });
+  const a = processSignedPaymentEvent(delivery);
+  await aGated;
+  // A second delivery matches through the now-published intent reference and wins.
+  await db.paymentAttempt.update({ where: { id: attempt.id }, data: { paymentIntentId: `pi_${attempt.id}` } });
+  const b = await processSignedPaymentEvent(delivery);
+  expect(b.status).toBe('PROCESSED');
+  release();
+  expect(await a).toMatchObject({ status: 'PROCESSED', orderId: order.id });
+});
 it.each(['pending', 'failed', 'succeeded'] as const)('canonically projects %s refunds without event-delivery increments', async status => {
   const { order, attempt } = await fixture(); await reconcileOrderPayment(order.id); const before = await state(order.id);
   facts.set(attempt.id, { refunds: [{ ...refund, status }] });
@@ -288,6 +342,70 @@ it('rechecks cancellation/manual settlement committed during provider I/O', asyn
   expect(await reconcileOrderPayment(order.id)).toMatchObject({ state: 'REVIEW', hold: true, settled: false });
   expect((await state(order.id)).manualSettlement).toMatchObject({ operatorId: admin.id });
   expect((await state(order.id)).vaultEntries).toHaveLength(1);
+});
+it('does not match a sessionless signed charge to a sessionless prepared attempt', async () => {
+  const created = await createPendingOrderWithUser({ currency: 'EUR', vaultAddOn: true });
+  await db.order.update({ where: { id: created.order.id }, data: { expectedMinorAmount: 2740, paymentState: 'UNPAID' } });
+  const attempt = await preparePaymentAttempt(created.order.id, 'Émilie');
+  await db.paymentAttempt.update({ where: { id: attempt.id }, data: { providerAccountId: 'acct_one' } });
+  provider.charge.mockResolvedValue({ payment_intent: null });
+  const delivery = event(attempt, { type: 'charge.succeeded' });
+  delivery.data.object = { object: 'charge', id: 'ch_standalone', metadata: { orderId: created.order.id },
+    amount: 2740, currency: 'eur', paid: true, captured: true, status: 'succeeded' } as unknown as Stripe.Charge;
+  await tracked(delivery);
+  expect((await processSignedPaymentEvent(delivery)).status).toBe('REVIEW');
+  expect(await state(created.order.id)).toMatchObject({ status: 'PENDING_PAYMENT', paymentHold: true, vaultEntries: [] });
+});
+it('publishes a recovered replacement session as the current order session', async () => {
+  const created = await createPendingOrderWithUser({ currency: 'EUR', vaultAddOn: true });
+  await db.order.update({ where: { id: created.order.id }, data: { expectedMinorAmount: 2740, paymentState: 'UNPAID', stripeSessionId: 'cs_expired_a' } });
+  const legacy = await db.paymentAttempt.create({ data: { orderId: created.order.id, sequence: 1,
+    idempotencyKey: `legacy-unissued:${created.order.id}:cs_expired_a`, sessionId: 'cs_expired_a',
+    expectedMinorAmount: 2740, currency: 'EUR', livemode: false, providerAccountId: 'acct_one',
+    providerRequest: { origin: 'LEGACY_STRIPE_SESSION', request: null }, status: 'EXPIRED', providerSnapshot: { status: 'EXPIRED' } } });
+  const prepared = await preparePaymentAttempt(created.order.id, 'Émilie');
+  await db.paymentAttempt.update({ where: { id: prepared.id }, data: { providerAccountId: 'acct_one' } });
+  facts.set(legacy.id, { sessionId: 'cs_expired_a', status: 'EXPIRED', receivedMinor: 0, paymentIntentId: null });
+  facts.set(prepared.id, { sessionId: 'cs_recovered', status: 'OPEN', receivedMinor: 0, paymentIntentId: null });
+  expect(await reconcileOrderPayment(created.order.id)).toMatchObject({ state: 'UNPAID', hold: false });
+  expect(await state(created.order.id)).toMatchObject({ stripeSessionId: 'cs_recovered' });
+  expect(await db.paymentAttempt.findUniqueOrThrow({ where: { id: prepared.id } })).toMatchObject({ sessionId: 'cs_recovered', status: 'OPEN' });
+});
+it('finalizes the admin audit inside the settlement transaction', async () => {
+  const { order } = await fixture(); const admin = await createUser('ADMIN');
+  expect((await recordAdminReconciliation(order.id, admin.id)).settled).toBe(true);
+  const audit = await db.paymentEvent.findFirstOrThrow({ where: { orderId: order.id, source: 'ADMIN_RECONCILIATION' } });
+  expect(audit.status).toBe('PROCESSED');
+  expect(JSON.parse(audit.outcome!)).toMatchObject({ state: 'PAID', settled: true });
+});
+it('rolls the admin audit back with a failed settlement instead of reporting failure after commit', async () => {
+  const { order } = await fixture(); const admin = await createUser('ADMIN');
+  provider.fault = true;
+  await expect(recordAdminReconciliation(order.id, admin.id)).rejects.toThrow('Injected post-Vault failure');
+  expect(await state(order.id)).toMatchObject({ status: 'PENDING_PAYMENT', paidAt: null, vaultEntries: [] });
+  expect(await db.paymentEvent.findFirstOrThrow({ where: { orderId: order.id, source: 'ADMIN_RECONCILIATION' } }))
+    .toMatchObject({ status: 'FAILED', outcome: 'CANONICAL_RECONCILIATION_FAILED' });
+});
+it('preserves the first completed delivery outcome across later clean reconciliations', async () => {
+  const { order, attempt } = await fixture(); const delivery = event(attempt); await tracked(delivery);
+  await processSignedPaymentEvent(delivery);
+  const first = await db.paymentEvent.findUniqueOrThrow({ where: { providerEventId: delivery.id } });
+  expect(JSON.parse(first.outcome!)).toMatchObject({ settled: true });
+  await reconcileOrderPayment(order.id);
+  const second = await db.paymentEvent.findUniqueOrThrow({ where: { providerEventId: delivery.id } });
+  expect(second.outcome).toBe(first.outcome);
+  expect(second.processedAt).toEqual(first.processedAt);
+});
+it('rejects a hold release when a newer reconciliation hold landed after the canonical read', async () => {
+  const { order, attempt } = await fixture(); const admin = await createUser('ADMIN');
+  await reconcileOrderPayment(order.id);
+  facts.set(attempt.id, { refunds: [refund] });
+  const held = await reconcileOrderPayment(order.id);
+  provider.holdRace = true;
+  await expect(releasePaymentHold(order.id, admin.id, held.summary.fingerprint, 'Finance reviewed this partial refund.'))
+    .rejects.toMatchObject({ code: 'PAYMENT_REVIEW_REQUIRED' });
+  await provider.holdRaceDone;
+  expect((await state(order.id)).paymentHold).toBe(true);
 });
 
 const routeParams = (id: string) => ({ params: Promise.resolve({ id }) });

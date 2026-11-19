@@ -109,6 +109,7 @@ export async function readCanonicalAttempt(attempt: PaymentAttempt, context: Pro
     else if (charge.amount_captured > 0) reasons.push('unconfirmed-capture');
     const refunds = await providerPages(cursor => client.refunds.list({ charge: charge.id, limit: 100, starting_after: cursor }));
     let refunded = 0;
+    let pendingRefunded = 0;
     const refundIds = new Set<string>();
     for (const refund of refunds) {
       if (refundIds.has(refund.id)) { reasons.push('duplicate-provider-refund'); continue; }
@@ -116,6 +117,7 @@ export async function readCanonicalAttempt(attempt: PaymentAttempt, context: Pro
       if (providerId(refund.charge) !== charge.id || providerId(refund.payment_intent) !== intentId || refund.currency !== intent.currency) reasons.push('refund-reference-mismatch');
       proof.refunds.push({ id: refund.id, chargeId: charge.id, amountMinor: refund.amount, currency: refund.currency.toUpperCase(), status: refund.status ?? 'unknown' });
       if (refund.status === 'succeeded') refunded += refund.amount;
+      else if (refund.status === 'pending' || refund.status === 'requires_action') pendingRefunded += refund.amount;
     }
     const disputes = await providerPages(cursor => client.disputes.list({ charge: charge.id, limit: 100, starting_after: cursor }));
     if (charge.disputed && !disputes.length) throw new ProviderSnapshotChanged();
@@ -125,8 +127,12 @@ export async function readCanonicalAttempt(attempt: PaymentAttempt, context: Pro
     }
     // Detect refunds that arrived while traversing their pages; do not publish a
     // partial snapshot, even if a delivery is still on its way to this endpoint.
+    // Stripe does not document whether amount_refunded includes in-flight refunds,
+    // so accept either the succeeded-only or the succeeded+pending aggregate: a
+    // mid-pagination arrival is still detected under either interpretation.
     const current = await client.charges.retrieve(charge.id);
-    if (current.amount_refunded !== refunded || current.amount_captured !== charge.amount_captured || current.disputed !== charge.disputed) throw new ProviderSnapshotChanged();
+    if ((current.amount_refunded !== refunded && current.amount_refunded !== refunded + pendingRefunded) ||
+        current.amount_captured !== charge.amount_captured || current.disputed !== charge.disputed) throw new ProviderSnapshotChanged();
   }
   if (providerId(intent.latest_charge) && !chargeIds.has(providerId(intent.latest_charge)!)) reasons.push('missing-latest-charge');
   if (captured !== intent.amount_received) reasons.push('capture-total-mismatch');

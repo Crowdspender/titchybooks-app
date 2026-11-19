@@ -3,7 +3,7 @@ import { Prisma, type PaymentAttempt, type PaymentEvent } from '@prisma/client';
 import type Stripe from 'stripe';
 import { prisma } from '@/lib/prisma';
 import { getStripeClient } from '@/lib/stripe';
-import { providerId } from './payment-provider';
+import { providerId, providerPages } from './payment-provider';
 import { reconcileOrderPayment } from './payment-reconciliation';
 
 const relevant = (type: string) => type.startsWith('checkout.session.') || type.startsWith('payment_intent.') ||
@@ -83,6 +83,16 @@ async function resolveEventOrder(record: PaymentEvent): Promise<{ orderId: strin
       const known = await prisma.paymentAttempt.findUnique({ where: { id: attemptHint } });
       if (known) return { orderId: known.orderId, attempt: known };
     }
+    // Legacy intents carry no order metadata. Bind through the provider's own
+    // intent→session link and our recorded session→order reference, never hints,
+    // so a refund/dispute on a pre-migration payment still reaches its order.
+    const sessions = await providerPages(cursor => getStripeClient().checkout.sessions.list({
+      payment_intent: intentId!, limit: 100, starting_after: cursor,
+    }));
+    for (const session of sessions) {
+      const legacy = await prisma.order.findUnique({ where: { stripeSessionId: session.id }, select: { id: true } });
+      if (legacy) return { orderId: legacy.id, attempt: null };
+    }
     orderHint = orderHint ?? ref(intent.metadata?.orderId);
   }
   if (!orderHint) return null;
@@ -99,9 +109,15 @@ export async function processSignedPaymentEvent(event: Stripe.Event) {
   if (['IGNORED', 'PROCESSED', 'REVIEW'].includes(record.status)) return record;
   try {
     const match = await resolveEventOrder(record);
-    if (!match) return prisma.paymentEvent.update({ where: { id: record.id }, data: {
-      status: 'UNMATCHED', processedAt: new Date(), outcome: 'UNKNOWN_ORDER_OR_ATTEMPT',
-    } });
+    if (!match) {
+      // A concurrent delivery may have matched and reconciled this same event
+      // while our lookup found nothing. Never clobber its committed outcome.
+      await prisma.paymentEvent.updateMany({ where: { id: record.id, orderId: null, attemptId: null,
+        status: { in: ['RECEIVED', 'FAILED', 'UNMATCHED'] } }, data: {
+        status: 'UNMATCHED', processedAt: new Date(), outcome: 'UNKNOWN_ORDER_OR_ATTEMPT',
+      } });
+      return prisma.paymentEvent.findUniqueOrThrow({ where: { id: record.id } });
+    }
     await prisma.$transaction(async tx => {
       await tx.$queryRaw`SELECT "id" FROM "Order" WHERE "id" = ${match.orderId} FOR UPDATE`;
       const current = await tx.paymentEvent.findUniqueOrThrow({ where: { id: record.id } });
